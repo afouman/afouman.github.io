@@ -406,7 +406,7 @@
 
 .cc {
   			font-size: 17px;
-  			font-family:Chalkboard;
+  			font-family:Chalkboard.ttc;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
 			width:294px;
@@ -419,7 +419,7 @@
 }
 .cc1 {
   			font-size: 14px;
-  			font-family:Chalkboard;
+  			font-family:Chalkboard.ttc;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
 			width:400px;
