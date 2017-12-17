@@ -417,8 +417,17 @@
 			height:260px;
 			margin:0 10px;
 }
+
+.cc p{
+		 color:#00ff00;
+		 padding:0 30px 0 20px;
+		 margin:left:0;
+		
+		}
+
+
 .cc1 {
-  			font-size: 14px;
+  			font-size: 12px;
   			font-family:Chalkboard.ttc;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
@@ -431,13 +440,7 @@
 			margin:0 10px;
 }
 .cc1 p{
-		 color:#000000;
-		 padding:0 10px 0 20px;
-		 margin:left:0;
-		
-		}
-.cc p{
-		 color:#aaff00;
+		 color:#00ff00;
 		 padding:0 30px 0 20px;
 		 margin:left:0;
 		
