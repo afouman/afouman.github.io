@@ -1,4 +1,4 @@
 git add --all
-git commit -m "doodle1"
+git commit -m "doodle2"
 git push -u origin master
 
