@@ -212,7 +212,8 @@
 		#page .header .footer .body #content{
 		  width:739px;
 		  float:left;
-		  padding-bottom:50px;
+		  padding-bottom:10px;
+		  padding-top:20px;
 		  overflow:hidden;
 		}
 		
@@ -363,9 +364,9 @@
 /**----------------- Start Freatured Style  --------------------**/	
 		#page .header .footer .body #content .featured{
 		  width:296px;
-		  position:relative;
+		  position:absolute;
 		  z-index:20px;
-		  margin:-473px 0 25px 0px;
+		  margin:-560px 0 25px 0px;
 		  overflow:hidden;
 		  display:block;
 		  height:460px;
@@ -375,17 +376,17 @@
 		
 		#page .header .footer .body #content .featured  .body{
 		    background-image:url('../images/bg-slogan.jpg');  
-		    opacity: 0.5;
+		    opacity: 0.8;
 		    filter: alpha(opacity=50);
 			font-size: 15px;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
 			position:relative;
 			z-index:40;
-			top:155px;
-			
-			height:355px;
-			margin:0 10px;
+			top:-35px;
+			padding:10 0 0 40px;
+			height:110px;
+			margin: 0px;
 
 		}
 		.background-image {
@@ -405,29 +406,29 @@
 }
 
 .cc {
-  			font-size: 17px;
+  			font-size: 19px;
   			font-family:Chalkboard.ttc;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
-			width:294px;
-			position:relative;
+			width:300px;
+			position:absolute;
 			z-index:40;
-			top:-215px;
+			top:-10px;
 			
-			height:260px;
-			margin:0 10px;
+			height:160px;
+			margin:10 0px;
 }
 
 .cc p{
-		 color:#00ff00;
-		 padding:0 30px 0 20px;
-		 margin:left:0;
+		 color:#003355;
+		 padding:0 0 0 0px;
+		 margin:10px;
 		
 		}
 
 
 .cc1 {
-  			font-size: 12px;
+  			font-size: 13px;
   			font-family:Chalkboard.ttc;
 			/*text-shadow: 2px 2px 10px #00FF00;*/
 	        background-repeat:no-repeat;
@@ -440,9 +441,10 @@
 			margin:0 10px;
 }
 .cc1 p{
-		 color:#00ff00;
-		 padding:0 30px 0 20px;
-		 margin:left:0;
+		 color:#353535;
+		 padding:10 30px 10 10px;
+		 padding-top: 10px;
+		 margin:10px;
 		
 		}
 
