@@ -45,6 +45,25 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      position: relative;
+    }
+
+    .delete-btn {
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        background-color: transparent;
+        border: none;
+        color: #ff6a6a;
+        font-size: 14px;
+        cursor: pointer;
+        line-height: 1;
+        opacity: 0.7;
+        transition: opacity 0.2s;
+    }
+
+    .delete-btn:hover {
+        opacity: 1;
     }
 
     /* Main container */
@@ -94,6 +113,21 @@
       white-space: pre-wrap;
     }
 
+    #controls {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 10;
+        background-color: rgba(0, 0, 0, 0.75);
+        padding: 10px;
+        border-radius: 8px;
+        color: white;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        font-family: monospace;
+    }
+
     /* Modal overlay and content */
     #modal-overlay {
       display: none;
@@ -120,7 +154,8 @@
     }
 
     #close-btn,
-    #save-btn {
+    #save-btn,
+    #remove-btn {
       background: #444;
       border: none;
       color: white;
@@ -129,6 +164,10 @@
       border-radius: 5px;
       padding: 6px 14px;
       margin: 10px;
+    }
+
+    #remove-btn {
+        background: #ff6a6a;
     }
 
     #open-modal-btn {
@@ -239,6 +278,10 @@
   <button id="open-modal-btn">New DNA</button>
   <div id="extra-box">
     <div id="infoBox"></div>
+    <div id="controls">
+        <label for="dot-speed-slider">Dot Vibration Speed:</label>
+        <input type="range" id="dot-speed-slider" min="0" max="1" step="0.001" value="0.005">
+    </div>
   </div>
 
   <div id="modal-overlay">
@@ -247,7 +290,8 @@
         <div style="text-align: center; margin-bottom: 0px;">
           <input type="text" id="dna-name-input" placeholder="Enter DNA Name" style="font-size: 18px; padding: 6px 10px; border-radius: 5px; border: 1px solid #ccc;">
         </div>
-        <button id="save-btn">Save</button>
+        <button id="save-btn" style="display: none;">Save</button>
+        <button id="remove-btn" style="display: none;">Remove</button>
         <button id="close-btn">Close</button>
       </div>
       <div id="main-layout">
@@ -271,8 +315,18 @@
     let threeJSInitialized = false;
     let uranus, ring, ringParticles, flashingStars, controls, camera, renderer;
     let dotData = [];
+    let continents = [];
     const extraBox = document.getElementById('extra-box');
     const infoBox = document.getElementById('infoBox');
+    let currentDotForDNA = null;
+    let tempNewDot = null;
+    let selectableObjects = [];
+
+    // Dot vibration speed and radius
+    let dotVibrationSpeed = 0.005;
+    const dotRadius = 0.06;
+    let planetRadius;
+    const dotCreationCooldown = 30000;
 
     function initPlanetVisualization() {
       if (threeJSInitialized) return;
@@ -299,7 +353,7 @@
 
       const textureLoader = new THREE.TextureLoader();
       textureLoader.load('uranus1.jpg', function(texture) {
-        const planetRadius = 3;
+        planetRadius = 3;
 
         const geometry = new THREE.SphereGeometry(planetRadius, 128, 128);
         const material = new THREE.MeshPhongMaterial({ map: texture });
@@ -307,7 +361,7 @@
         uranus.rotation.x = 0.5;
         scene.add(uranus);
 
-        const continents = [];
+        selectableObjects = [uranus];
 
         function createRandomContinent(centerLat, centerLon, radius, latSize = 15, lonSize = 15, resolution = 1) {
           const positions = [];
@@ -414,6 +468,104 @@
 
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
+        let intersectedObject = null;
+
+        function createDot(point, insideContinent, continentIndex) {
+            let dotColor;
+            if (insideContinent) {
+                dotColor = 0xff0000;
+            } else {
+                dotColor = 0x8B4513;
+            }
+
+            const dotGeometry = new THREE.SphereGeometry(dotRadius, 16, 16);
+            const dotMaterial = new THREE.MeshBasicMaterial({ color: dotColor });
+            const newDot = new THREE.Mesh(dotGeometry, dotMaterial);
+            newDot.position.copy(point);
+            uranus.add(newDot);
+
+            const newDotData = {
+                id: THREE.MathUtils.generateUUID(),
+                mesh: newDot,
+                position: point.clone(),
+                insideContinent,
+                continentIndex,
+                cooldownUntil: 0,
+                dnaData: null
+            };
+
+            newDot.userData.dotId = newDotData.id;
+
+            dotData.push(newDotData);
+            selectableObjects.push(newDot);
+
+            return newDotData;
+        }
+
+        extraBox.addEventListener("mousemove", function(event) {
+          const rect = extraBox.getBoundingClientRect();
+          mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = - ((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+          raycaster.setFromCamera(mouse, camera);
+          const intersects = raycaster.intersectObjects(selectableObjects);
+
+          if (intersects.length > 0) {
+              const object = intersects[0].object;
+              if (object !== uranus && object !== intersectedObject) {
+                  intersectedObject = object;
+                  const dotId = object.userData.dotId;
+                  const dot = dotData.find(d => d.id === dotId);
+                  if (dot) {
+                      const dnaInfo = dot.dnaData ? 'DNA Defined:\n' + dot.dnaData.map(bp => bp.join('')).join('-') : 'No DNA defined.';
+                      infoBox.innerText = `Dot ID: ${dotId.substring(0,8)}...\nInside Continent: ${dot.insideContinent}\n` + dnaInfo;
+                      infoBox.style.display = "block";
+                  }
+              }
+          } else {
+              intersectedObject = null;
+              infoBox.style.display = "none";
+          }
+        });
+
+        extraBox.addEventListener("click", function(event) {
+          const rect = extraBox.getBoundingClientRect();
+          mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = - ((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+          raycaster.setFromCamera(mouse, camera);
+          const intersects = raycaster.intersectObjects(selectableObjects.filter(obj => obj !== uranus));
+
+          if (intersects.length > 0) {
+            const dotMesh = intersects[0].object;
+            const dotId = dotMesh.userData.dotId;
+            const dot = dotData.find(d => d.id === dotId);
+            const savedDNAEntry = savedDNAs.find(s => s.dotId === dotId);
+            if (dot) {
+                currentDotForDNA = dot.id;
+                tempNewDot = null;
+                if (dot.dnaData) {
+                    initializeDNA(dot.dnaData);
+                } else {
+                    initializeDNA();
+                }
+
+                if (savedDNAEntry) {
+                    document.getElementById('dna-name-input').value = savedDNAEntry.name;
+                } else {
+                    document.getElementById('dna-name-input').value = '';
+                }
+
+                document.getElementById('save-btn').style.display = 'none';
+                document.getElementById('remove-btn').style.display = 'inline-block';
+                modal.style.display = 'flex';
+                requestAnimationFrame(() => {
+                    positionNucleotides();
+                    drawConnectors();
+                });
+            }
+          }
+        });
 
         extraBox.addEventListener("dblclick", function(event) {
           const rect = extraBox.getBoundingClientRect();
@@ -429,12 +581,6 @@
             const r = localPoint.length();
             const lat = 90 - THREE.MathUtils.radToDeg(Math.acos(localPoint.y / r));
             const lon = THREE.MathUtils.radToDeg(Math.atan2(localPoint.z, localPoint.x));
-
-            const dotGeometry = new THREE.SphereGeometry(0.06, 16, 16);
-            const dotMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
-            const newDot = new THREE.Mesh(dotGeometry, dotMaterial);
-            newDot.position.copy(localPoint);
-            uranus.add(newDot);
 
             let insideContinent = false;
             let continentIndex = null;
@@ -466,19 +612,23 @@
                 }
               }
             }
-
-            dotData.push({
-              mesh: newDot,
-              position: localPoint.clone(),
-              lat,
-              lon,
-              insideContinent,
-              continentIndex
-            });
+            const newDotData = createDot(localPoint, insideContinent, continentIndex);
+            tempNewDot = newDotData;
+            currentDotForDNA = newDotData.id;
 
             infoBox.innerText = `Dot added at\nLat: ${lat.toFixed(2)}°, Lon: ${lon.toFixed(2)}°\nInside continent: ${insideContinent}` +
               (insideContinent ? ` (Index: ${continentIndex})` : '');
             infoBox.style.display = "block";
+
+            initializeDNA();
+            document.getElementById('dna-name-input').value = '';
+            document.getElementById('save-btn').style.display = 'inline-block';
+            document.getElementById('remove-btn').style.display = 'none';
+            modal.style.display = 'flex';
+             requestAnimationFrame(() => {
+                positionNucleotides();
+                drawConnectors();
+            });
           } else {
             infoBox.style.display = "none";
           }
@@ -606,6 +756,36 @@
         scene.add(flashingStars);
 
         let time = 0;
+
+        function isPointInContinent(point, continent) {
+            const tempVec = new THREE.Vector3().copy(point).normalize();
+            const lat = 90 - THREE.MathUtils.radToDeg(Math.acos(tempVec.y));
+            const lon = THREE.MathUtils.radToDeg(Math.atan2(tempVec.z, tempVec.x));
+
+            const lats = continent.latLonCoordinates.map(p => p.lat);
+            const lons = continent.latLonCoordinates.map(p => p.lon);
+            const minLat = Math.min(...lats);
+            const maxLat = Math.max(...lats);
+            const minLon = Math.min(...lons);
+            const maxLon = Math.max(...lons);
+
+            if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+                let minDist = Infinity;
+                let closestPoint = null;
+                for (const p of continent.latLonCoordinates) {
+                    const dLat = p.lat - lat;
+                    const dLon = p.lon - lon;
+                    const dist = dLat * dLat + dLon * dLon;
+                    if (dist < minDist) {
+                        minDist = dist;
+                        closestPoint = p;
+                    }
+                }
+                return closestPoint && closestPoint.isLand;
+            }
+            return false;
+        }
+
         function animate() {
           requestAnimationFrame(animate);
           time += 0.02;
@@ -616,6 +796,64 @@
 
           if (flashingMaterial) flashingMaterial.opacity = 0.5 + 0.5 * Math.sin(time * 2);
 
+          dotData.forEach(dot => {
+              let newPosition = dot.mesh.position.clone();
+              const vibration = new THREE.Vector3(
+                  (Math.random() - 0.5),
+                  (Math.random() - 0.5),
+                  (Math.random() - 0.5)
+              ).normalize().multiplyScalar(dotVibrationSpeed);
+
+              newPosition.add(vibration);
+
+              newPosition.normalize().multiplyScalar(planetRadius + 0.02);
+
+              if (dot.insideContinent) {
+                  if (Math.random() < 0.99) {
+                      const continent = continents[dot.continentIndex];
+                      if (isPointInContinent(newPosition, continent)) {
+                          dot.mesh.position.copy(newPosition);
+                      }
+                  } else {
+                      dot.mesh.position.copy(newPosition);
+                  }
+              } else {
+                  dot.mesh.position.copy(newPosition);
+              }
+          });
+
+          const now = Date.now();
+          const twoRadiiSquared = (dotRadius * 2) * (dotRadius * 2);
+
+          for (let i = 0; i < dotData.length; i++) {
+              for (let j = i + 1; j < dotData.length; j++) {
+                  const dotA = dotData[i];
+                  const dotB = dotData[j];
+
+                  const distanceSquared = dotA.mesh.position.distanceToSquared(dotB.mesh.position);
+
+                  if (distanceSquared < twoRadiiSquared) {
+                      if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
+                          dotA.cooldownUntil = now + dotCreationCooldown;
+                          dotB.cooldownUntil = now + dotCreationCooldown;
+
+                          let newColor;
+                          if (dotA.insideContinent && dotB.insideContinent) {
+                              newColor = 0xff8080;
+                          } else if (!dotA.insideContinent && !dotB.insideContinent) {
+                              newColor = 0xd2b48c;
+                          } else {
+                              newColor = 0xffd700;
+                          }
+
+                          const newPosition = dotA.mesh.position.clone().add(dotB.mesh.position).divideScalar(2);
+                          const newDotData = createDot(newPosition, dotA.insideContinent || dotB.insideContinent, dotA.continentIndex || dotB.continentIndex);
+                          newDotData.mesh.material.color.set(newColor);
+                          newDotData.cooldownUntil = now + dotCreationCooldown;
+                      }
+                  }
+              }
+          }
           if (controls) controls.update();
           if (renderer) renderer.render(scene, camera);
         }
@@ -624,6 +862,15 @@
       });
 
       threeJSInitialized = true;
+    }
+
+    const speedSlider = document.getElementById('dot-speed-slider');
+    if (speedSlider) {
+        dotVibrationSpeed = parseFloat(speedSlider.value);
+
+        speedSlider.addEventListener('input', (event) => {
+            dotVibrationSpeed = parseFloat(event.target.value);
+        });
     }
 
     const container = document.getElementById('dna-container');
@@ -750,15 +997,21 @@
     const openBtn = document.getElementById('open-modal-btn');
     const closeBtn = document.getElementById('close-btn');
     const saveBtn = document.getElementById('save-btn');
+    const removeBtn = document.getElementById('remove-btn');
 
     const savedDNAs = [];
+    let unnamedCounter = 1;
+    let unnamedPlanetCounter = 1;
 
     openBtn.addEventListener('click', () => {
+        currentDotForDNA = null;
         loadedIndex = null;
+        tempNewDot = null;
         initializeDNA();
         document.getElementById('dna-name-input').value = '';
+        saveBtn.style.display = 'inline-block';
+        removeBtn.style.display = 'none';
         modal.style.display = 'flex';
-
         requestAnimationFrame(() => {
             positionNucleotides();
             drawConnectors();
@@ -766,29 +1019,74 @@
     });
 
     closeBtn.addEventListener('click', () => {
+        if (tempNewDot) {
+            const dotToRemoveMesh = tempNewDot.mesh;
+            uranus.remove(dotToRemoveMesh);
+
+            dotData = dotData.filter(dot => dot.mesh !== dotToRemoveMesh);
+            selectableObjects = selectableObjects.filter(obj => obj !== dotToRemoveMesh);
+        }
+        currentDotForDNA = null;
+        tempNewDot = null;
+        loadedIndex = null;
         modal.style.display = 'none';
     });
-
-    let unnamedCounter = 1;
 
     saveBtn.addEventListener('click', () => {
         const nameField = document.getElementById('dna-name-input');
         let name = nameField.value.trim();
-
-        if (!name) {
-            name = `Undefined DNA ${unnamedCounter++}`;
-        }
-
         const dna = getCurrentDNA();
 
-        if (loadedIndex !== null) {
-            savedDNAs[loadedIndex] = { name, data: dna };
-            updateSavedList();
-        } else {
-            savedDNAs.push({ name, data: dna });
-            addToSavedList(savedDNAs.length - 1);
+        let dotId = null;
+        if (tempNewDot) {
+            tempNewDot.dnaData = dna;
+            dotId = tempNewDot.id;
+        } else if (currentDotForDNA !== null) {
+            const dotToUpdate = dotData.find(d => d.id === currentDotForDNA);
+            if (dotToUpdate) {
+                dotToUpdate.dnaData = dna;
+                dotId = dotToUpdate.id;
+            }
         }
 
+        if (!name) {
+          if (dotId) {
+            name = `Planet DNA ${unnamedPlanetCounter++}`;
+          } else {
+            name = `Undefined DNA ${unnamedCounter++}`;
+          }
+        }
+
+        if (loadedIndex !== null) {
+            savedDNAs[loadedIndex] = { name, data: dna, dotId };
+        } else {
+            savedDNAs.push({ name, data: dna, dotId });
+        }
+
+        updateSavedList();
+        currentDotForDNA = null;
+        loadedIndex = null;
+        tempNewDot = null;
+        modal.style.display = 'none';
+        document.getElementById('dna-name-input').value = '';
+    });
+
+    removeBtn.addEventListener('click', () => {
+        if (currentDotForDNA !== null) {
+            const dotToRemove = dotData.find(d => d.id === currentDotForDNA);
+            if (dotToRemove) {
+                uranus.remove(dotToRemove.mesh);
+                dotData = dotData.filter(d => d.id !== currentDotForDNA);
+                selectableObjects = selectableObjects.filter(obj => obj.userData.dotId !== currentDotForDNA);
+            }
+
+            const savedIndex = savedDNAs.findIndex(s => s.dotId === currentDotForDNA);
+            if (savedIndex !== -1) {
+                savedDNAs.splice(savedIndex, 1);
+            }
+        }
+        currentDotForDNA = null;
+        updateSavedList();
         modal.style.display = 'none';
     });
 
@@ -796,28 +1094,43 @@
         const dnaObj = savedDNAs[index];
         const item = document.createElement('div');
         item.className = 'saved-item';
-        item.textContent = dnaObj.name;
+        item.dataset.index = index;
+
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = dnaObj.name;
+        item.appendChild(nameSpan);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-btn';
+        deleteBtn.textContent = 'x';
+        item.appendChild(deleteBtn);
 
         let clickTimer = null;
         let dblClicked = false;
 
-        item.addEventListener('dblclick', () => {
+        nameSpan.addEventListener('dblclick', (event) => {
+            event.stopPropagation();
             dblClicked = true;
             clearTimeout(clickTimer);
 
             const input = document.createElement('input');
             input.type = 'text';
             input.value = dnaObj.name;
+            input.style.width = 'calc(100% - 20px)';
+            input.style.border = 'none';
+            input.style.background = '#333';
+            input.style.color = 'white';
+            input.style.fontFamily = 'monospace';
 
-            item.textContent = '';
-            item.appendChild(input);
+            item.replaceChild(input, nameSpan);
             input.focus();
             input.select();
 
             const saveName = () => {
                 const newName = input.value.trim();
                 savedDNAs[index].name = newName || `Undefined DNA ${unnamedCounter++}`;
-                item.textContent = savedDNAs[index].name;
+                nameSpan.textContent = savedDNAs[index].name;
+                item.replaceChild(nameSpan, input);
             };
 
             input.addEventListener('keydown', (e) => {
@@ -825,7 +1138,8 @@
                     saveName();
                     input.blur();
                 } else if (e.key === 'Escape') {
-                    item.textContent = savedDNAs[index].name;
+                    nameSpan.textContent = savedDNAs[index].name;
+                    item.replaceChild(nameSpan, input);
                     input.blur();
                 }
             });
@@ -833,13 +1147,17 @@
             input.addEventListener('blur', saveName);
         });
 
-        item.addEventListener('click', () => {
+        nameSpan.addEventListener('click', () => {
             dblClicked = false;
             clickTimer = setTimeout(() => {
                 if (!dblClicked) {
+                    currentDotForDNA = null;
+                    tempNewDot = null;
                     loadedIndex = index;
                     initializeDNA(savedDNAs[index].data);
                     document.getElementById('dna-name-input').value = savedDNAs[index].name;
+                    saveBtn.style.display = 'inline-block';
+                    removeBtn.style.display = 'none';
                     modal.style.display = 'flex';
                     requestAnimationFrame(() => {
                         positionNucleotides();
@@ -847,6 +1165,21 @@
                     });
                 }
             }, 250);
+        });
+
+        deleteBtn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const dotId = savedDNAs[index].dotId;
+            if (dotId) {
+                const dot = dotData.find(d => d.id === dotId);
+                if (dot) {
+                    uranus.remove(dot.mesh);
+                    dotData = dotData.filter(d => d.id !== dotId);
+                    selectableObjects = selectableObjects.filter(obj => obj.userData.dotId !== dotId);
+                }
+            }
+            savedDNAs.splice(index, 1);
+            updateSavedList();
         });
 
         savedList.appendChild(item);
