@@ -984,9 +984,9 @@
 function createChildDot(dotA, dotB) {
     const now = Date.now();
     const HABITAT_COOLDOWNS = {
-        'in-land': 20000, // Example: 20 seconds for in-land
-        'off-land': 10000, // Example: 10 seconds for off-land
-        'both': 15000, // Example: 15 seconds for both
+        'in-land': 25000, // Example: 20 seconds for in-land
+        'off-land': 13000, // Example: 10 seconds for off-land
+        'both': 17000, // Example: 15 seconds for both
         'None': 0 // Should not be needed, but safe to include
     };
 
@@ -1199,7 +1199,7 @@ function animate() {
                       dot.continentIndex = newState.index; // Update to the new continent index
                   } else {
                       // Case 2: Dot attempts to move to the ocean. Apply 95% snap-back rule.
-                      if (Math.random() >= 0.90) { // 10% chance to allow movement off-land
+                      if (Math.random() >= 0.95) { // 5% chance to allow movement off-land
                           // Move allowed. State updated to 'ocean'.
                           dot.mesh.position.copy(newPosition);
                           dot.position.copy(newPosition);
