@@ -114,6 +114,19 @@
         gap: 10px;
         font-family: monospace;
     }
+    /* START: NEW LEGEND STYLES */
+    #population-legend {
+        position: absolute;
+        bottom: 20px;
+        left: 15px;
+        background-color: rgba(0, 0, 0, 0.75);
+        padding: 10px;
+        border-radius: 8px;
+        z-index: 10;
+        font-size: 14px;
+        border: 1px solid #666;
+    }
+    /* END: NEW LEGEND STYLES */
     #modal-overlay {
       display: none;
       position: fixed;
@@ -318,8 +331,15 @@
 </div>
 <div id="main">
   <h1>Game of Life Simulator</h1>
+
   <button id="explain-btn">Explain This</button>
   <div id="extra-box">
+    <div id="population-legend">
+        <strong>Population:</strong>
+        <div id="count-inland">In-land: 0</div>
+        <div id="count-offland">Off-land: 0</div>
+        <div id="count-both">Both: 0</div>
+    </div>
     <div id="infoBox"></div>
     <div id="controls">
         <label for="dot-speed-slider">DNA Travel Speed:</label>
@@ -359,7 +379,7 @@
         Below are the instructions on how to design your DNA and was each nucleotide pairs do.
       </p>
       <h2>DNA Strand Information</h2>
-      <p>Each DNA strand has 19 base pairs, and certain pairs determine key properties of the dots on the planet. Here's a breakdown:</p>
+      <p>Each DNA strand has 19 base pairs, and certain pairs determine key properties of the dots. Here's a breakdown:</p>
       <ul>
         <li><b>Base pairs 0-11:</b> Determine the dot's color. The color is calculated based on the ratio of Adenine (<div class="nucleotide-inline A">A</div>), Cytosine (<div class="nucleotide-inline C">C</div>), and Guanine (<div class="nucleotide-inline G">G</div>) bases. Thymine (<div class="nucleotide-inline T">T</div>) is a wild-card, randomly becomes A, C, or G for mutation.</li>
         <li><b>Base pair 13:</b> Determines the dot's habitat. This is based on the base in the pair:
@@ -374,10 +394,10 @@
         <li><b>Base pairs 15-18:</b> Determine the dot's lifetime in seconds. This is calculated by converting the four bases into a 8-bit binary number and adding one. The mapping is:
           <li></li>
           <ul>
-            <li><b><div class="nucleotide-inline A">A</div>(Adenine):</b> 00</li>
-            <li><b><div class="nucleotide-inline T">T</div>(Thymine):</b> 01</li>
-            <li><b><div class="nucleotide-inline C">C</div>(Cytosine):</b> 10</li>
-            <li><b><div class="nucleotide-inline G">G</div>(Guanine):</b> 11</li>
+            <li><b><div class="nucleotide-inline A">A</div>(Adenine):</b> 2'b00</li>
+            <li><b><div class="nucleotide-inline T">T</div>(Thymine):</b> 2'b01</li>
+            <li><b><div class="nucleotide-inline C">C}</div>(Cytosine):</b> 2'b10</li>
+            <li><b><div class="nucleotide-inline G">G</div>(Guanine):</b> 2'b11</li>
           </ul>
         </li>
       </ul>
@@ -395,13 +415,124 @@
     const extraBox = document.getElementById('extra-box');
     const infoBox = document.getElementById('infoBox');
     let currentDotForDNA = null;
+    // tempNewDot now holds a data object, not a 3D mesh object, until saved.
     let tempNewDot = null;
     let selectableObjects = [];
     let savedDNAs = [];
+    const savedDNAs_KEY = 'savedDNAs';
     let dotVibrationSpeed = 0.005;
     const dotRadius = 0.06;
     let planetRadius;
     const dotCreationCooldown = 30000;
+
+    // --- START: GLOBAL UTILITY FUNCTIONS ---
+
+    function updateLegend() {
+        let countInland = 0;
+        let countOffland = 0;
+        let countBoth = 0;
+
+        dotData.forEach(dot => {
+            switch (dot.habitat) {
+                case 'in-land':
+                    countInland++;
+                    break;
+                case 'off-land':
+                    countOffland++;
+                    break;
+                case 'both':
+                    countBoth++;
+                    break;
+            }
+        });
+
+        const inlandEl = document.getElementById('count-inland');
+        const offlandEl = document.getElementById('count-offland');
+        const bothEl = document.getElementById('count-both');
+
+        if (inlandEl) inlandEl.innerText = `In-land: ${countInland}`;
+        if (offlandEl) offlandEl.innerText = `Off-land: ${countOffland}`;
+        if (bothEl) bothEl.innerText = `Both: ${countBoth}`;
+    }
+
+    // NEW: createDot moved to global scope so it can be accessed by saveBtn
+    function createDot(point, insideContinent, continentIndex, dnaData = null) {
+        let dotColor = 0x8B4513; // Default color if no DNA data
+
+        if (dnaData) {
+            let aCount = 0;
+            let cCount = 0;
+            let gCount = 0;
+            // Grab the first 12 bases and count A, C, and G
+            for (let i = 0; i < Math.min(12, dnaData.length); i++) {
+                const base = dnaData[i][0]; // We'll just read the first strand
+                switch (base) {
+                    case 'A':
+                        aCount++;
+                        break;
+                    case 'C':
+                        cCount++;
+                        break;
+                    case 'G':
+                        gCount++;
+                        break;
+                    case 'T':
+                        // T is a wildcard, so we'll randomly increment one of the counts
+                        const randomBase = ['A', 'C', 'G'][Math.floor(Math.random() * 3)];
+                        if (randomBase === 'A') aCount++;
+                        else if (randomBase === 'C') cCount++;
+                        else gCount++;
+                        break;
+                }
+            }
+            // Scale counts to a 0-1 range for RGB color values
+            const totalCount = aCount + cCount + gCount;
+            let r = 0, g = 0, b = 0;
+            if (totalCount > 0) {
+                r = cCount / totalCount; // C for red
+                g = aCount / totalCount; // A for green
+                b = gCount / totalCount; // G for blue
+            }
+            dotColor = new THREE.Color(r, g, b).getHex();
+        } else {
+            // Existing logic for inside/outside continent if no DNA data is provided
+            if (insideContinent) {
+                dotColor = 0xff0000;
+            } else {
+                dotColor = 0x8B4513;
+            }
+        }
+
+        const dotGeometry = new THREE.SphereGeometry(dotRadius, 16, 16);
+        const dotMaterial = new THREE.MeshBasicMaterial({ color: dotColor });
+        const newDot = new THREE.Mesh(dotGeometry, dotMaterial);
+        newDot.position.copy(point);
+
+        // **Requires uranus to be initialized**
+        if (uranus) uranus.add(newDot);
+
+        const newDotData = {
+            id: THREE.MathUtils.generateUUID(),
+            mesh: newDot,
+            position: point.clone(),
+            insideContinent,
+            continentIndex,
+            cooldownUntil: 0,
+            dnaData: dnaData,
+            lifetime: null,
+            creationTime: null,
+            habitat: null,
+        };
+        newDot.userData.dotId = newDotData.id;
+        dotData.push(newDotData);
+        selectableObjects.push(newDot);
+
+        updateLegend();
+
+        return newDotData;
+    }
+    // --- END: GLOBAL UTILITY FUNCTIONS ---
+
     function initPlanetVisualization() {
       if (threeJSInitialized) return;
       const scene = new THREE.Scene();
@@ -516,73 +647,9 @@
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         let intersectedObject = null;
-        function createDot(point, insideContinent, continentIndex, dnaData = null) {
-            let dotColor = 0x8B4513; // Default color if no DNA data
-            if (dnaData) {
-                let aCount = 0;
-                let cCount = 0;
-                let gCount = 0;
-                // Grab the first 12 bases and count A, C, and G
-                for (let i = 0; i < Math.min(12, dnaData.length); i++) {
-                    const base = dnaData[i][0]; // We'll just read the first strand
-                    switch (base) {
-                        case 'A':
-                            aCount++;
-                            break;
-                        case 'C':
-                            cCount++;
-                            break;
-                        case 'G':
-                            gCount++;
-                            break;
-                        case 'T':
-                            // T is a wildcard, so we'll randomly increment one of the counts
-                            const randomBase = ['A', 'C', 'G'][Math.floor(Math.random() * 3)];
-                            if (randomBase === 'A') aCount++;
-                            else if (randomBase === 'C') cCount++;
-                            else gCount++;
-                            break;
-                    }
-                }
-                // Scale counts to a 0-1 range for RGB color values
-                const totalCount = aCount + cCount + gCount;
-                let r = 0, g = 0, b = 0;
-                if (totalCount > 0) {
-                    r = cCount / totalCount; // C for red
-                    g = aCount / totalCount; // A for green
-                    b = gCount / totalCount; // G for blue
-                }
-                dotColor = new THREE.Color(r, g, b).getHex();
-            } else {
-                // Existing logic for inside/outside continent if no DNA data is provided
-                if (insideContinent) {
-                    dotColor = 0xff0000;
-                } else {
-                    dotColor = 0x8B4513;
-                }
-            }
-            const dotGeometry = new THREE.SphereGeometry(dotRadius, 16, 16);
-            const dotMaterial = new THREE.MeshBasicMaterial({ color: dotColor });
-            const newDot = new THREE.Mesh(dotGeometry, dotMaterial);
-            newDot.position.copy(point);
-            uranus.add(newDot);
-            const newDotData = {
-                id: THREE.MathUtils.generateUUID(),
-                mesh: newDot,
-                position: point.clone(),
-                insideContinent,
-                continentIndex,
-                cooldownUntil: 0,
-                dnaData: dnaData,
-                lifetime: null,
-                creationTime: null,
-                habitat: null,
-            };
-            newDot.userData.dotId = newDotData.id;
-            dotData.push(newDotData);
-            selectableObjects.push(newDot);
-            return newDotData;
-        }
+
+        // **createDot definition removed from here**
+
         extraBox.addEventListener("mousemove", function(event) {
           const rect = extraBox.getBoundingClientRect();
           mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -616,7 +683,7 @@
                       const g = Math.round(color.g * 255);
                       const b = Math.round(color.b * 255);
                       const colorInfo = `\nColor (RGB): (${r}, ${g}, ${b})`;
-                      infoBox.innerText = `Dot ID: ${dotId.substring(0,8)}...\nInside Continent: ${dot.insideContinent}${timerInfo}${habitatInfo}${colorInfo}\n` + dnaInfo;
+                      infoBox.innerText = `Life ID: ${dotId.substring(0,8)}...\nInside Continent: ${dot.insideContinent}${timerInfo}${habitatInfo}${colorInfo}\n` + dnaInfo;
                       infoBox.style.display = "block";
                   }
               }
@@ -649,7 +716,7 @@
                 } else {
                     document.getElementById('dna-name-input').value = '';
                 }
-                document.getElementById('save-btn').style.display = 'none';
+                document.getElementById('save-btn').style.display = 'none'; // FIX: Hide Save button for existing dots
                 document.getElementById('remove-btn').style.display = 'inline-block';
                 mainModal.style.display = 'flex';
                 requestAnimationFrame(() => {
@@ -659,6 +726,8 @@
             }
           }
         });
+
+        // --- START: MODIFIED DBLCLICK LOGIC ---
         extraBox.addEventListener("dblclick", function(event) {
           const rect = extraBox.getBoundingClientRect();
           mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -700,7 +769,7 @@
                 }
               }
             }
-            // START OF NEW CODE
+            // START OF DNA GENERATION FOR NEW DOT (TEMPORARY)
             const newDnaData = [];
             const bases = ['A', 'T', 'C', 'G'];
             const complement = { 'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C' };
@@ -733,8 +802,9 @@
                 }
                 newDnaData.push([base, complement[base]]);
             }
-            // END OF NEW CODE
+            // END OF DNA GENERATION
 
+            // Set habitat based on location
             if (insideContinent) {
               newDnaData[13][0] = 'A';
               newDnaData[13][1] = 'T';
@@ -742,14 +812,26 @@
               newDnaData[13][0] = 'T';
               newDnaData[13][1] = 'A';
             }
-            const newDotData = createDot(localPoint, insideContinent, continentIndex, newDnaData);
-            tempNewDot = newDotData;
-            currentDotForDNA = newDotData.id;
+
+            // **INSTEAD OF CALLING createDot, WE STORE TEMPORARY DATA**
+            tempNewDot = {
+                position: localPoint,
+                insideContinent: insideContinent,
+                continentIndex: continentIndex,
+                dnaData: newDnaData,
+                lifetime: calculateLifetimeFromDNA(newDnaData),
+                habitat: getHabitatFromDNA(newDnaData),
+                id: THREE.MathUtils.generateUUID() // Use a temp ID
+            };
+            currentDotForDNA = tempNewDot.id;
+
+            // Open Modal and display generated DNA
             initializeDNA(newDnaData);
             document.getElementById('dna-name-input').value = '';
             document.getElementById('save-btn').style.display = 'inline-block';
             document.getElementById('remove-btn').style.display = 'none';
             mainModal.style.display = 'flex';
+
             let habitatText = insideContinent ? 'in-land' : 'off-land';
             infoBox.innerText = `Dot added at\nLat: ${lat.toFixed(2)}°, Lon: ${lon.toFixed(2)}°\nDefault Habitat: ${habitatText}` +
               (insideContinent ? ` (Index: ${continentIndex})` : '');
@@ -762,6 +844,8 @@
             infoBox.style.display = "none";
           }
         });
+        // --- END: MODIFIED DBLCLICK LOGIC ---
+
         const ringGeometry = new THREE.RingGeometry(4, 6, 128);
         const ringMaterial = new THREE.MeshBasicMaterial({
           color: 0xaaaaaa,
@@ -899,11 +983,15 @@
 
 function createChildDot(dotA, dotB) {
     const now = Date.now();
-    const dotCreationCooldown = 30000;
+    const HABITAT_COOLDOWNS = {
+        'in-land': 20000, // Example: 20 seconds for in-land
+        'off-land': 10000, // Example: 10 seconds for off-land
+        'both': 15000, // Example: 15 seconds for both
+        'None': 0 // Should not be needed, but safe to include
+    };
+
 
     if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
-        dotA.cooldownUntil = now + dotCreationCooldown;
-        dotB.cooldownUntil = now + dotCreationCooldown;
 
         // Habitat Inheritance
         const habitatA = dotA.habitat;
@@ -1046,10 +1134,15 @@ function createChildDot(dotA, dotB) {
         newDotData.lifetime = newLifetime;
         newDotData.creationTime = now;
         newDotData.habitat = newHabitat;
-        newDotData.cooldownUntil = now + dotCreationCooldown;
+
+        const getCooldown = (habitat) => HABITAT_COOLDOWNS[habitat] || 15000; // Use a default if something goes wrong
+        dotA.cooldownUntil = now + getCooldown(dotA.habitat);
+        dotB.cooldownUntil = now + getCooldown(dotB.habitat);
+        newDotData.cooldownUntil = now + getCooldown(newHabitat);
     }
 }
-        function animate() {
+
+function animate() {
           requestAnimationFrame(animate);
           time += 0.02;
           if (uranus) uranus.rotation.y += 0.001;
@@ -1059,6 +1152,20 @@ function createChildDot(dotA, dotB) {
           const now = Date.now();
           const twoRadiiSquared = (dotRadius * 2) * (dotRadius * 2);
           let expiredDotIds = new Set();
+
+          // --- NEW HELPER FUNCTION TO CHECK ALL CONTINENTS ---
+          function getNewContinentState(position) {
+              for (let i = 0; i < continents.length; i++) {
+                  if (isPointInContinent(position, continents[i])) {
+                      // Found the continent the dot is currently on
+                      return { isLand: true, index: i };
+                  }
+              }
+              // Not on any continent (ocean)
+              return { isLand: false, index: -1 };
+          }
+          // --- END NEW HELPER FUNCTION ---
+
           dotData = dotData.filter(dot => {
               if (dot.lifetime !== null) {
                 const elapsed = (now - dot.creationTime) / 1000;
@@ -1077,23 +1184,48 @@ function createChildDot(dotA, dotB) {
               ).normalize().multiplyScalar(dotVibrationSpeed);
               newPosition.add(vibration);
               newPosition.normalize().multiplyScalar(planetRadius + 0.02);
-              if (dot.insideContinent) {
-                  if (Math.random() < 0.99) {
-                      const continent = continents[dot.continentIndex];
-                      if (isPointInContinent(newPosition, continent)) {
-                          dot.mesh.position.copy(newPosition);
-                      }
-                  } else {
+
+              // --- START OF MODIFIED MOVEMENT LOGIC ---
+
+              // Find the state of the new position
+              const newState = getNewContinentState(newPosition);
+
+              if (dot.habitat === 'in-land') {
+                  if (newState.isLand) {
+                      // Case 1: Dot moves to or stays on land (could be a new continent). Always allowed.
                       dot.mesh.position.copy(newPosition);
+                      dot.position.copy(newPosition);
+                      dot.insideContinent = true;
+                      dot.continentIndex = newState.index; // Update to the new continent index
+                  } else {
+                      // Case 2: Dot attempts to move to the ocean. Apply 95% snap-back rule.
+                      if (Math.random() >= 0.90) { // 10% chance to allow movement off-land
+                          // Move allowed. State updated to 'ocean'.
+                          dot.mesh.position.copy(newPosition);
+                          dot.position.copy(newPosition);
+                          dot.insideContinent = false;
+                          dot.continentIndex = -1;
+                      }
+                      // else (95% chance): Snap-back. Position remains the old land position.
                   }
               } else {
+                  // Unconditional movement for all other habitats ('off-land', 'both', or undefined)
                   dot.mesh.position.copy(newPosition);
+                  dot.position.copy(newPosition); // Keep dotData object synced
+                  // For these habitats, we still check the *new* state to keep the metadata correct.
+                  dot.insideContinent = newState.isLand;
+                  dot.continentIndex = newState.index;
               }
+
+              // --- END OF MODIFIED MOVEMENT LOGIC ---
+
               return true;
           });
           if (expiredDotIds.size > 0) {
               savedDNAs = savedDNAs.filter(dna => !expiredDotIds.has(dna.dotId));
               updateSavedList();
+              // Update legend after dots die
+              updateLegend();
           }
           for (let i = 0; i < dotData.length; i++) {
               for (let j = i + 1; j < dotData.length; j++) {
@@ -1102,12 +1234,15 @@ function createChildDot(dotA, dotB) {
                   const distanceSquared = dotA.mesh.position.distanceToSquared(dotB.mesh.position);
                   if (distanceSquared < twoRadiiSquared) {
                       if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
-                      console.log("hey?")
                       createChildDot(dotA, dotB);
                       }
                   }
               }
           }
+
+          // NEW: Update legend at the end of the frame
+          updateLegend();
+
           if (controls) controls.update();
           if (renderer) renderer.render(scene, camera);
         }
@@ -1279,31 +1414,36 @@ function createChildDot(dotA, dotB) {
     closeExplanationBtn.addEventListener('click', () => {
         explanationModal.style.display = 'none';
     });
-    closeBtn.addEventListener('click', () => {
-        if (tempNewDot) {
-            const dotToRemoveMesh = tempNewDot.mesh;
-            uranus.remove(dotToRemoveMesh);
-            dotData = dotData.filter(dot => dot.mesh !== dotToRemoveMesh);
-            selectableObjects = selectableObjects.filter(obj => obj !== dotToRemoveMesh);
-        }
+
+    // --- START: MODIFIED CLOSE BUTTON LOGIC (No longer removes mesh since it's not created on dblclick) ---
+    function closeDnaModal() {
+        // Only clear temporary state
         currentDotForDNA = null;
         tempNewDot = null;
         loadedIndex = null;
         mainModal.style.display = 'none';
         document.getElementById('dna-name-input').value = '';
-    });
+    }
+
+    closeBtn.addEventListener('click', closeDnaModal);
+    // --- END: MODIFIED CLOSE BUTTON LOGIC ---
+
+    // --- START: MODIFIED SAVE BUTTON LOGIC (Creates dot if tempNewDot exists) ---
     saveBtn.addEventListener('click', () => {
         const nameField = document.getElementById('dna-name-input');
         let name = nameField.value.trim();
         const dna = getCurrentDNA();
         const lifetime = calculateLifetimeFromDNA(dna);
         const habitat = getHabitatFromDNA(dna);
+
+        let shouldClose = true;
+
         if (habitat === 'None') {
+            // If habitat is 'None', we discard the dot, whether it was temp or an existing dot being mutated to 'None'
             if (tempNewDot) {
-                uranus.remove(tempNewDot.mesh);
-                dotData = dotData.filter(dot => dot.id !== tempNewDot.id);
-                selectableObjects = selectableObjects.filter(obj => obj.userData.dotId !== tempNewDot.id);
+                // If it was a temp dot, we just discard the data. No mesh to remove.
             } else if (currentDotForDNA !== null) {
+                // If it was an existing dot, remove it from the scene and data
                 const dotToRemove = dotData.find(d => d.id === currentDotForDNA);
                 if (dotToRemove) {
                     uranus.remove(dotToRemove.mesh);
@@ -1315,87 +1455,95 @@ function createChildDot(dotA, dotB) {
                     savedDNAs.splice(savedIndex, 1);
                 }
             }
-            currentDotForDNA = null;
-            tempNewDot = null;
-            loadedIndex = null;
-            mainModal.style.display = 'none';
-            document.getElementById('dna-name-input').value = '';
-            updateSavedList();
-            return;
-        }
-        let dotToUpdate = null;
-        let dotId = null;
-        if (tempNewDot) {
-            tempNewDot.dnaData = dna;
-            tempNewDot.lifetime = lifetime;
-            tempNewDot.creationTime = Date.now();
-            tempNewDot.habitat = habitat;
-            dotId = tempNewDot.id;
-            dotToUpdate = tempNewDot;
-        } else if (currentDotForDNA !== null) {
-            dotToUpdate = dotData.find(d => d.id === currentDotForDNA);
-            if (dotToUpdate) {
-                dotToUpdate.dnaData = dna;
-                dotToUpdate.lifetime = lifetime;
-                dotToUpdate.creationTime = Date.now();
-                dotToUpdate.habitat = habitat;
-                dotId = dotToUpdate.id;
-            }
-        }
+        } else {
+            // If habitat is viable, proceed to create/update
+            let dotToUpdate = null;
+            let dotId = null;
 
-        if (dotToUpdate) {
-            let aCount = 0;
-            let cCount = 0;
-            let gCount = 0;
-            for (let i = 0; i < Math.min(12, dna.length); i++) {
-                const base = dna[i][0];
-                switch (base) {
-                    case 'A':
-                        aCount++;
-                        break;
-                    case 'C':
-                        cCount++;
-                        break;
-                    case 'G':
-                        gCount++;
-                        break;
-                    case 'T':
-                        const randomBase = ['A', 'C', 'G'][Math.floor(Math.random() * 3)];
-                        if (randomBase === 'A') aCount++;
-                        else if (randomBase === 'C') cCount++;
-                        else gCount++;
-                        break;
+            if (tempNewDot) {
+                // CASE 1: NEW DOT - Create the 3D mesh and add it to the scene and dotData NOW.
+                const newDotData = createDot(
+                    tempNewDot.position,
+                    tempNewDot.insideContinent,
+                    tempNewDot.continentIndex,
+                    dna // Use the DNA from the modal
+                );
+                // Update the new dot with final calculated properties
+                newDotData.lifetime = lifetime;
+                newDotData.creationTime = Date.now();
+                newDotData.habitat = habitat;
+
+                dotId = newDotData.id;
+                dotToUpdate = newDotData; // dotToUpdate is now the real dot object
+
+            } else if (currentDotForDNA !== null) {
+                // CASE 2: EXISTING DOT - Find the existing dot and update its properties.
+                dotToUpdate = dotData.find(d => d.id === currentDotForDNA);
+                if (dotToUpdate) {
+                    dotToUpdate.dnaData = dna;
+                    dotToUpdate.lifetime = lifetime;
+                    dotToUpdate.creationTime = Date.now();
+                    dotToUpdate.habitat = habitat;
+                    dotId = dotToUpdate.id;
                 }
             }
-            const totalCount = aCount + cCount + gCount;
-            let r = 0, g = 0, b = 0;
-            if (totalCount > 0) {
-                r = cCount / totalCount;
-                g = aCount / totalCount;
-                b = gCount / totalCount;
+
+            if (dotToUpdate) {
+                // Color update logic
+                let aCount = 0;
+                let cCount = 0;
+                let gCount = 0;
+                for (let i = 0; i < Math.min(12, dna.length); i++) {
+                    const base = dna[i][0];
+                    switch (base) {
+                        case 'A': aCount++; break;
+                        case 'C': cCount++; break;
+                        case 'G': gCount++; break;
+                        case 'T':
+                            const randomBase = ['A', 'C', 'G'][Math.floor(Math.random() * 3)];
+                            if (randomBase === 'A') aCount++;
+                            else if (randomBase === 'C') cCount++;
+                            else gCount++;
+                            break;
+                    }
+                }
+                const totalCount = aCount + cCount + gCount;
+                let r = 0, g = 0, b = 0;
+                if (totalCount > 0) {
+                    r = cCount / totalCount;
+                    g = aCount / totalCount;
+                    b = gCount / totalCount;
+                }
+                dotToUpdate.mesh.material.color.setRGB(r, g, b);
+
+                if (!name) {
+                    if (dotId) {
+                        name = `Planet DNA ${unnamedPlanetCounter++}`;
+                    } else {
+                        name = `Undefined DNA ${unnamedCounter++}`;
+                    }
+                }
+                // Save/Update DNA to saved list
+                const savedIndex = savedDNAs.findIndex(s => s.dotId === dotId);
+                if (savedIndex !== -1) {
+                    savedDNAs[savedIndex] = { name, data: dna, dotId };
+                } else {
+                    savedDNAs.push({ name, data: dna, dotId });
+                }
+                updateSavedList();
             }
-            dotToUpdate.mesh.material.color.setRGB(r, g, b);
         }
 
-        if (!name) {
-            if (dotId) {
-                name = `Planet DNA ${unnamedPlanetCounter++}`;
-            } else {
-                name = `Undefined DNA ${unnamedCounter++}`;
-            }
-        }
-        if (loadedIndex !== null) {
-            savedDNAs[loadedIndex] = { name, data: dna, dotId };
-        } else {
-            savedDNAs.push({ name, data: dna, dotId });
-        }
-        updateSavedList();
+        // Reset state and close modal
         currentDotForDNA = null;
         loadedIndex = null;
-        tempNewDot = null;
+        tempNewDot = null; // IMPORTANT: Clear temporary data
         mainModal.style.display = 'none';
         document.getElementById('dna-name-input').value = '';
+        updateLegend();
     });
+    // --- END: MODIFIED SAVE BUTTON LOGIC ---
+
     removeBtn.addEventListener('click', () => {
         if (currentDotForDNA !== null) {
             const dotToRemove = dotData.find(d => d.id === currentDotForDNA);
@@ -1411,6 +1559,8 @@ function createChildDot(dotA, dotB) {
         }
         currentDotForDNA = null;
         updateSavedList();
+        // Update legend after removal
+        updateLegend();
         mainModal.style.display = 'none';
     });
     function addToSavedList(index) {
@@ -1427,7 +1577,7 @@ function createChildDot(dotA, dotB) {
         item.appendChild(deleteBtn);
         let clickTimer = null;
         let dblClicked = false;
-        nameSpan.addEventListener('dblclick', (event) => {
+        item.addEventListener('dblclick', (event) => {
             event.stopPropagation();
             dblClicked = true;
             clearTimeout(clickTimer);
@@ -1460,17 +1610,17 @@ function createChildDot(dotA, dotB) {
             });
             input.addEventListener('blur', saveName);
         });
-        nameSpan.addEventListener('click', () => {
+        item.addEventListener('click', () => {
             dblClicked = false;
             clickTimer = setTimeout(() => {
                 if (!dblClicked) {
-                    currentDotForDNA = null;
+                    currentDotForDNA = savedDNAs[index].dotId || null;
                     tempNewDot = null;
                     loadedIndex = index;
                     initializeDNA(savedDNAs[index].data);
                     document.getElementById('dna-name-input').value = savedDNAs[index].name;
-                    saveBtn.style.display = 'inline-block';
-                    removeBtn.style.display = 'none';
+                    saveBtn.style.display = 'none';
+                    removeBtn.style.display = 'inline-block';
                     mainModal.style.display = 'flex';
                     requestAnimationFrame(() => {
                         positionNucleotides();
@@ -1495,6 +1645,7 @@ function createChildDot(dotA, dotB) {
         });
         savedList.appendChild(item);
     }
+
     function updateSavedList() {
         savedList.innerHTML = '';
         savedDNAs.forEach((_, i) => addToSavedList(i));
@@ -1511,6 +1662,8 @@ function createChildDot(dotA, dotB) {
     });
     document.addEventListener('DOMContentLoaded', () => {
       initPlanetVisualization();
+      // Initial call to display 0s
+      updateLegend();
     });
 </script>
 </body>
