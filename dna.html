@@ -190,6 +190,7 @@
       padding: 20px;
       max-width: 95%;
       max-height: 90vh;
+      height: 505px;
       position: relative;
       display: flex;
       flex-direction: column;
@@ -731,113 +732,139 @@
           }
         });
 
-        extraBox.addEventListener("dblclick", function(event) {
-          const rect = extraBox.getBoundingClientRect();
-          mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-          mouse.y = - ((event.clientY - rect.top) / rect.height) * 2 + 1;
-          raycaster.setFromCamera(mouse, camera);
-          const intersects = raycaster.intersectObject(uranus);
-          if (intersects.length > 0) {
-            const point = intersects[0].point;
-            const localPoint = uranus.worldToLocal(point.clone());
-            const r = localPoint.length();
-            const lat = 90 - THREE.MathUtils.radToDeg(Math.acos(localPoint.y / r));
-            const lon = THREE.MathUtils.radToDeg(Math.atan2(localPoint.z, localPoint.x));
-            let insideContinent = false;
-            let continentIndex = null;
-            for (let i = 0; i < continents.length; i++) {
-              const continent = continents[i];
-              const lats = continent.latLonCoordinates.map(p => p.lat);
-              const lons = continent.latLonCoordinates.map(p => p.lon);
-              const minLat = Math.min(...lats);
-              const maxLat = Math.max(...lats);
-              const minLon = Math.min(...lons);
-              const maxLon = Math.max(...lons);
-              if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
-                let minDist = Infinity;
-                let closestPoint = null;
-                for (const p of continent.latLonCoordinates) {
-                  const dLat = p.lat - lat;
-                  const dLon = p.lon - lon;
-                  const dist = dLat * dLat + dLon * dLon;
-                  if (dist < minDist) {
-                    minDist = dist;
-                    closestPoint = p;
-                  }
-                }
-                if (closestPoint && closestPoint.isLand) {
-                  insideContinent = true;
-                  continentIndex = i;
-                  break;
-                }
-              }
+// ...around line 898 of the corrected script.js
+
+// Cached variables for touch/tap logic
+let lastTap = 0;
+const doubleTapThreshold = 300; // ms between taps
+
+// Function to handle the Dot Creation Logic
+function handleDotCreation(client_x, client_y) {
+    const rect = extraBox.getBoundingClientRect();
+    mouse.x = ((client_x - rect.left) / rect.width) * 2 - 1;
+    mouse.y = - ((client_y - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(uranus);
+    if (intersects.length > 0) {
+      const point = intersects[0].point;
+      const localPoint = uranus.worldToLocal(point.clone());
+      const r = localPoint.length();
+      const lat = 90 - THREE.MathUtils.radToDeg(Math.acos(localPoint.y / r));
+      const lon = THREE.MathUtils.radToDeg(Math.atan2(localPoint.z, localPoint.x));
+      let insideContinent = false;
+      let continentIndex = null;
+      for (let i = 0; i < continents.length; i++) {
+        const continent = continents[i];
+        const lats = continent.latLonCoordinates.map(p => p.lat);
+        const lons = continent.latLonCoordinates.map(p => p.lon);
+        const minLat = Math.min(...lats);
+        const maxLat = Math.max(...lats);
+        const minLon = Math.min(...lons);
+        const maxLon = Math.max(...lons);
+        if (lat >= minLat && lat <= maxLat && lon >= minLon && lon <= maxLon) {
+          let minDist = Infinity;
+          let closestPoint = null;
+          for (const p of continent.latLonCoordinates) {
+            const dLat = p.lat - lat;
+            const dLon = p.lon - lon;
+            const dist = dLat * dLat + dLon * dLon;
+            if (dist < minDist) {
+              minDist = dist;
+              closestPoint = p;
             }
-            const newDnaData = [];
-            const bases = ['A', 'T', 'C', 'G'];
-            const complement = { 'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C' };
-            const basesToSet = [];
-            if (insideContinent) {
-                for (let i = 0; i < 12; i++) {
-                    basesToSet.push('C');
-                }
-            } else {
-                const brownBases = ['C', 'C', 'C', 'C', 'C', 'C', 'C', 'C', 'A', 'A', 'A', 'G'];
-                for (let i = brownBases.length - 1; i > 0; i--) {
-                    const j = Math.floor(Math.random() * (i + 1));
-                    [brownBases[i], brownBases[j]] = [brownBases[j], brownBases[i]];
-                }
-                for (let i = 0; i < 12; i++) {
-                    basesToSet.push(brownBases[i]);
-                }
-            }
-
-            for (let i = 0; i < basePairsCount; i++) {
-                let base;
-                if (i < 12) {
-                    base = basesToSet[i];
-                } else {
-                    base = bases[Math.floor(Math.random() * 4)];
-                }
-                newDnaData.push([base, complement[base]]);
-            }
-
-            if (insideContinent) {
-              newDnaData[13][0] = 'A';
-              newDnaData[13][1] = 'T';
-            } else {
-              newDnaData[13][0] = 'T';
-              newDnaData[13][1] = 'A';
-            }
-
-            tempNewDot = {
-                position: localPoint,
-                insideContinent: insideContinent,
-                continentIndex: continentIndex,
-                dnaData: newDnaData,
-                lifetime: calculateLifetimeFromDNA(newDnaData),
-                habitat: getHabitatFromDNA(newDnaData),
-                id: THREE.MathUtils.generateUUID()
-            };
-            currentDotForDNA = tempNewDot.id;
-
-            initializeDNA(newDnaData);
-            document.getElementById('dna-name-input').value = '';
-            saveBtn.style.display = 'inline-block'; // Uses cached saveBtn
-            removeBtn.style.display = 'none'; // Uses cached removeBtn
-            mainModal.style.display = 'flex'; // Uses cached mainModal
-
-            let habitatText = insideContinent ? 'in-land' : 'off-land';
-            infoBox.innerText = `Dot added at\nLat: ${lat.toFixed(2)}°, Lon: ${lon.toFixed(2)}°\nDefault Habitat: ${habitatText}` +
-              (insideContinent ? ` (Index: ${continentIndex})` : '');
-            infoBox.style.display = "block";
-             requestAnimationFrame(() => {
-                positionNucleotides();
-                drawConnectors();
-            });
-          } else {
-            infoBox.style.display = "none";
           }
-        });
+          if (closestPoint && closestPoint.isLand) {
+            insideContinent = true;
+            continentIndex = i;
+            break;
+          }
+        }
+      }
+      const newDnaData = [];
+      const bases = ['A', 'T', 'C', 'G'];
+      const complement = { 'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C' };
+      const basesToSet = [];
+      if (insideContinent) {
+          for (let i = 0; i < 12; i++) {
+              basesToSet.push('C');
+          }
+      } else {
+          const brownBases = ['C', 'C', 'C', 'C', 'C', 'C', 'C', 'C', 'A', 'A', 'A', 'G'];
+          for (let i = brownBases.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [brownBases[i], brownBases[j]] = [brownBases[j], brownBases[i]];
+          }
+          for (let i = 0; i < 12; i++) {
+              basesToSet.push(brownBases[i]);
+          }
+      }
+
+      for (let i = 0; i < basePairsCount; i++) {
+          let base;
+          if (i < 12) {
+              base = basesToSet[i];
+          } else {
+              base = bases[Math.floor(Math.random() * 4)];
+          }
+          newDnaData.push([base, complement[base]]);
+      }
+
+      if (insideContinent) {
+        newDnaData[13][0] = 'A';
+        newDnaData[13][1] = 'T';
+      } else {
+        newDnaData[13][0] = 'T';
+        newDnaData[13][1] = 'A';
+      }
+
+      tempNewDot = {
+          position: localPoint,
+          insideContinent: insideContinent,
+          continentIndex: continentIndex,
+          dnaData: newDnaData,
+          lifetime: calculateLifetimeFromDNA(newDnaData),
+          habitat: getHabitatFromDNA(newDnaData),
+          id: THREE.MathUtils.generateUUID()
+      };
+      currentDotForDNA = tempNewDot.id;
+
+      initializeDNA(newDnaData);
+      document.getElementById('dna-name-input').value = '';
+      if (saveBtn) saveBtn.style.display = 'inline-block';
+      if (removeBtn) removeBtn.style.display = 'none';
+      if (mainModal) mainModal.style.display = 'flex';
+
+      let habitatText = insideContinent ? 'in-land' : 'off-land';
+      if (infoBox) {
+          infoBox.innerText = `Dot added at\nLat: ${lat.toFixed(2)}°, Lon: ${lon.toFixed(2)}°\nDefault Habitat: ${habitatText}` +
+            (insideContinent ? ` (Index: ${continentIndex})` : '');
+          infoBox.style.display = "block";
+      }
+       requestAnimationFrame(() => {
+          positionNucleotides();
+          drawConnectors();
+      });
+    } else {
+      if (infoBox) infoBox.style.display = "none";
+    }
+}
+
+// 1. Double-Click Handler (Desktop)
+extraBox.addEventListener("dblclick", function(event) {
+    handleDotCreation(event.clientX, event.clientY);
+});
+
+// 2. Double-Tap Handler (Mobile)
+extraBox.addEventListener("touchend", function(event) {
+    // Check if it's the second tap within the threshold
+    const now = Date.now();
+    if (now - lastTap < doubleTapThreshold && event.changedTouches.length === 1) {
+        event.preventDefault(); // Prevent zoom or other default browser actions
+        const touch = event.changedTouches[0];
+        handleDotCreation(touch.clientX, touch.clientY);
+    }
+    lastTap = now;
+});
 
         const ringGeometry = new THREE.RingGeometry(4, 6, 128);
         const ringMaterial = new THREE.MeshBasicMaterial({
