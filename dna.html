@@ -340,6 +340,19 @@
         text-align: center;
         margin: 0 4px;
     }
+   .rainbow-text {
+      font-weight: bold;
+      font-size: 18px;
+      background: linear-gradient(to right, red, orange, yellow, green, blue, indigo, violet);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-align: center;
+      display: block; /* or inline-block depending on context */
+    }
+
+    .explain-text-container {
+      text-align: center; /* This is key */
+    }
 
     .nucleotide-inline.A { background-color: #90ee90; color: black; }
     .nucleotide-inline.T { background-color: #da70d6; color: black; }
@@ -360,9 +373,9 @@
   <div id="extra-box">
     <div id="population-legend">
         <strong>Population:</strong>
-        <div id="count-inland">In-land: 0</div>
+        <div id="count-inland">On-land: 0</div>
         <div id="count-offland">Off-land: 0</div>
-        <div id="count-both">Both: 0</div>
+        <div id="count-both">Amphibious: 0</div>
     </div>
     <div id="infoBox"></div>
     <div id="controls">
@@ -393,31 +406,55 @@
     </div>
   </div>
   <div id="explanation-modal-overlay">
-    <div id="explanation-modal-content">
+    <div style="font-size: 14px;" id="explanation-modal-content">
       <div id="explanation-text">
       <h2>What is Game of Life Simulator</h2>
-      <p><b>PROVE THE WORLD THAT YOU CAN SUSTAIN A LIFE!!!</b></p>
+
+      <div class="explain-text-container">
+        <p class="rainbow-text">PROVE THE WORLD THAT YOU CAN SUSTAIN A LIFE!!!</p>
+      </div>
+
+      <h2 style="text-align: center;"><b>How the simulation works:</b></h2>
+      <p style="font-size: 14px;">The simulation mimics basic life scenarios with some fundamental rules:</p>
+      <ol>
+        <li>Lifeforms can either survive on land, off land, or both environments (amphibious).</li>
+        <li>When 2 lifeforms (dots) meet (touch), they create a new lifeform whose characteristics are derived from its parents + random mutation.</li>
+        <li>A newborn lifeform's life expectancy is between 1 second and 110% of the greater of its parents' life expectancies.</li>
+        <li>Each lifeform has a cooldown period after reproduction during which it cannot to reproduce.</li>
+        <li>If in-land or off-land lifeforms end up in an unsuitable environment, their lifespan decay 2x faster.</li>
+        <li>If in-land and off-land lifeforms mate, their children can be in-land habitants, off-land habitants, amphibious, or unviable (death at birth).</li>
+        <li>If the concentration of lifeforms exceeds 20 within a 3-dit radius, half will be eliminated due to disease outbreak or resource scarcity.</li>
+      </ol>
+
+
       <p>
-        <b>How to Play: </br></b>
+        <b style="text-align: center;">How to Play: </br></b>
         You get to design your own DNAs by double-clicking on this magical planet wherever you wish.
-        Using the DNA Travel Speed, you set the pace for the lifeforms to travel through this planet and eventually reproduce.
-        As these lifeforms (dots) meet each other, they create a new life that is derived from their own DNAs + mutations.
-        Below are the information on what each nucleotide pairs does for you to design your winning DNAs.
+        Using the DNA Travel Speed, set the pace for the lifeforms to travel through this planet and eventually reproduce.
+        As these lifeforms (dots) meet each other, they create a new life that is derived from the parents' DNAs + mutations.
+        Learn what each nucleotide pair does to help you build the winning DNA.
       </p>
       <h2>DNA Strand Information</h2>
       <p>Each DNA strand has 19 base pairs, and certain pairs determine key properties of the dots. Here's a breakdown:</p>
       <ul>
-        <li><b>Color (Base pairs 0-11):</b> To determine the dot's color, the color is calculated based on the ratio of Adenine (<div class="nucleotide-inline A">A</div>), Cytosine (<div class="nucleotide-inline C">C</div>), and Guanine (<div class="nucleotide-inline G">G</div>) bases. Thymine (<div class="nucleotide-inline T">T</div>) is a wild-card, randomly becomes A, C, or G for mutation.</li>
-        <li><b>Habitat (Base pair 13):</b> Determines the dot's habitat. This is based on the base in the pair:
+        <li style="list-style: disc;"><b>Color (Base pairs 0-11):</b> A dot's color is calculated based on the ratio of Adenine (<div class="nucleotide-inline A">A</div>), Cytosine (<div class="nucleotide-inline C">C</div>), and Guanine (<div class="nucleotide-inline G">G</div>) bases. Thymine (<div class="nucleotide-inline T">T</div>) is a wild-card, randomly becomes A, C, or G for mutation.
+          <ul><br/>For example:<br/></ul>
+          <ul><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div>
+              <div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div> is light purple</ul>
+          <br/>and <br/>
+          <ul><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div>
+              <div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline G">G</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div><div class="nucleotide-inline C">C</div> is dark purple.</ul>
+        </li>
+        <li style="list-style: disc;"><b>Habitat (Base pair 13):</b> A dot's habitat is determined using the base-pair encoding:
           <li></li>
           <ul>
             <li><b><div class="nucleotide-inline A">A</div>(Adenine):</b> In-land habitant</li>
             <li><b><div class="nucleotide-inline T">T</div>(Thymine):</b> Off-land habitant</li>
             <li><b><div class="nucleotide-inline C">C</div>(Cytosine):</b> Both in-land and off-land habitant</li>
-            <li><b><div class="nucleotide-inline G">G</div>(Guanine):</b> Unlivable genetic mutation (habitat is 'None')</li>
+            <li><b><div class="nucleotide-inline G">G</div>(Guanine):</b> Unviable genetic mutation (habitat is 'None')</li>
           </ul>
         </li>
-        <li><b>Lifetime (Base pairs 15-18):</b> To determine the dot's lifetime in seconds is calculated by converting the four bases into a 8-bit binary number (in seconds) and adding 1. The mapping is:
+        <li style="list-style: disc;"><b>Lifetime (Base pairs 15-18):</b> A dot's lifetime is determined by converting the four bases into an 8-bit binary number (in seconds) + 1. The mapping is:
           <li></li>
           <ul>
             <li><b><div class="nucleotide-inline A">A</div>(Adenine):</b> 2'b00</li>
@@ -491,7 +528,7 @@
         // Use cached elements
         if (inlandEl) inlandEl.innerText = `In-land: ${countInland}`;
         if (offlandEl) offlandEl.innerText = `Off-land: ${countOffland}`;
-        if (bothEl) bothEl.innerText = `Both: ${countBoth}`;
+        if (bothEl) bothEl.innerText = `Amphibious: ${countBoth}`;
     }
 
     function createDot(point, insideContinent, continentIndex, dnaData = null) {
@@ -698,8 +735,10 @@
                       const dnaInfo = dot.dnaData ? 'DNA Defined:\n' + dot.dnaData.map(bp => bp.join('')).join('-') : 'No DNA defined.';
                       let timerInfo = '';
                       if (dot.lifetime !== null) {
-                          const elapsed = (Date.now() - dot.creationTime) / 1000;
-                          const remaining = Math.max(0, dot.lifetime - elapsed);
+                          const elapsedForDisplay = dot.weightedTimeElapsed !== undefined && dot.weightedTimeElapsed !== null
+                              ? dot.weightedTimeElapsed
+                              : (Date.now() - dot.creationTime) / 1000;
+                          const remaining = Math.max(0, dot.lifetime - elapsedForDisplay);
                           timerInfo = `\nTotal Lifetime: ${dot.lifetime.toFixed(1)}s\nRemaining Lifetime: ${remaining.toFixed(1)}s`;
                       } else {
                           timerInfo = `\nLifetime: Not yet saved`;
@@ -1029,9 +1068,9 @@
 function createChildDot(dotA, dotB) {
     const now = Date.now();
     const HABITAT_COOLDOWNS = {
-        'in-land': 30000,
-        'off-land': 20000,
-        'both': 22500,
+        'in-land': 25000,
+        'off-land': 18500,
+        'both': 22000,
         'None': 0
     };
 
@@ -1171,126 +1210,230 @@ function createChildDot(dotA, dotB) {
     }
 }
 
+    // ... (Code before animate function) ...
+
 function animate() {
-          requestAnimationFrame(animate);
-          time += 0.02;
-          if (uranus) uranus.rotation.y += 0.001;
-          if (ring) ring.rotation.z += 0.0005;
-          if (ringParticles) ringParticles.rotation.z += 0.0007;
-          if (flashingMaterial) flashingMaterial.opacity = 0.5 + 0.5 * Math.sin(time * 2);
-          const now = Date.now();
-          const twoRadiiSquared = (dotRadius * 2) * (dotRadius * 2);
-          let expiredDotIds = new Set();
+    requestAnimationFrame(animate);
+    time += 0.02;
+    if (uranus) uranus.rotation.y += 0.001;
+    if (ring) ring.rotation.z += 0.0005;
+    if (ringParticles) ringParticles.rotation.z += 0.0007;
+    if (flashingMaterial) flashingMaterial.opacity = 0.5 + 0.5 * Math.sin(time * 2);
+    const now = Date.now();
+    const twoRadiiSquared = (dotRadius * 2) * (dotRadius * 2);
+    let expiredDotIds = new Set();
 
-          function getNewContinentState(position) {
-              for (let i = 0; i < continents.length; i++) {
-                  if (isPointInContinent(position, continents[i])) {
-                      return { isLand: true, index: i };
-                  }
-              }
-              return { isLand: false, index: -1 };
-          }
+    // Initialize lastFrameTime if it's the first call
+    if (!animate.lastFrameTime) animate.lastFrameTime = now;
+    const deltaTime = (now - animate.lastFrameTime) / 1000; // Time in seconds since last frame
+    animate.lastFrameTime = now;
 
-          // --- PERFORMANCE REFACTORING 2: IN-PLACE ARRAY REMOVAL (Reverse Loop) ---
-          for (let i = dotData.length - 1; i >= 0; i--) {
-              const dot = dotData[i];
-
-              // A. Death Check
-              if (dot.lifetime !== null) {
-                  const elapsed = (now - dot.creationTime) / 1000;
-                  if (dot.lifetime > 0 && elapsed > dot.lifetime) {
-                      // 1. Remove from THREE.js scene
-                      uranus.remove(dot.mesh);
-
-                      // 2. Track ID for savedDNAs cleanup
-                      expiredDotIds.add(dot.id);
-
-                      // 3. Remove from selectableObjects (in-place)
-                      const selectableIndex = selectableObjects.findIndex(obj => obj.userData.dotId === dot.id);
-                      if (selectableIndex !== -1) {
-                          selectableObjects.splice(selectableIndex, 1);
-                      }
-
-                      // 4. Remove from dotData (in-place)
-                      dotData.splice(i, 1);
-
-                      continue; // Skip movement/collision check for this dot
-                  }
-              }
-
-              // B. Movement and Habitat Logic
-              let newPosition = dot.mesh.position.clone();
-              const vibration = new THREE.Vector3(
-                  (Math.random() - 0.5),
-                  (Math.random() - 0.5),
-                  (Math.random() - 0.5)
-              ).normalize().multiplyScalar(dotVibrationSpeed);
-              newPosition.add(vibration);
-              newPosition.normalize().multiplyScalar(planetRadius + 0.02);
-
-              const newState = getNewContinentState(newPosition);
-
-              if (dot.habitat === 'in-land') {
-                  if (newState.isLand) {
-                      dot.mesh.position.copy(newPosition);
-                      dot.position.copy(newPosition);
-                      dot.insideContinent = true;
-                      dot.continentIndex = newState.index;
-                  } else {
-                      if (Math.random() >= 0.95) {
-                          dot.mesh.position.copy(newPosition);
-                          dot.position.copy(newPosition);
-                          dot.insideContinent = false;
-                          dot.continentIndex = -1;
-                      }
-                  }
-              } else if (dot.habitat === 'both') {
-                  if (Math.random() >= 0.5) {
-                      dot.mesh.position.copy(newPosition);
-                      dot.position.copy(newPosition);
-                      dot.insideContinent = false;
-                      dot.continentIndex = -1;
-                  }
-              } else {
-                  dot.mesh.position.copy(newPosition);
-                  dot.position.copy(newPosition);
-                  dot.insideContinent = newState.isLand;
-                  dot.continentIndex = newState.index;
-              }
-          }
-
-          if (expiredDotIds.size > 0) {
-              // In-place removal for savedDNAs after dotData cleanup
-              for (let i = savedDNAs.length - 1; i >= 0; i--) {
-                  if (expiredDotIds.has(savedDNAs[i].dotId)) {
-                      savedDNAs.splice(i, 1);
-                  }
-              }
-              updateSavedList();
-              updateLegend(); // Only call if deaths occurred
-          }
-          // --- END REFACTORING 2 (DEATH CHECK) ---
-
-          // Collision check (O(N^2) complexity)
-          for (let i = 0; i < dotData.length; i++) {
-              for (let j = i + 1; j < dotData.length; j++) {
-                  const dotA = dotData[i];
-                  const dotB = dotData[j];
-                  const distanceSquared = dotA.mesh.position.distanceToSquared(dotB.mesh.position);
-                  if (distanceSquared < twoRadiiSquared) {
-                      if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
-                      createChildDot(dotA, dotB);
-                      }
-                  }
-              }
-          }
-
-          // --- PERFORMANCE REFACTORING 3: REMOVED REDUNDANT updateLegend() CALL HERE ---
-          // The final updateLegend() call from the original code is removed.
-
-          if (controls) controls.update();
-          if (renderer) renderer.render(scene, camera);
+    function getNewContinentState(position) {
+        for (let i = 0; i < continents.length; i++) {
+            if (isPointInContinent(position, continents[i])) {
+                return { isLand: true, index: i };
+            }
         }
+        return { isLand: false, index: -1 };
+    }
+
+    // ==========================================================
+    // START: NEW CULLING LOGIC
+    // ==========================================================
+    const CULL_RADIUS = 3; // The dot-dot radius is 2 * dotRadius. A "3-dot radius" means 3 * (2 * dotRadius).
+    // Given dotRadius = 0.06, twoRadii = 0.12. Cull_Radius = 3 * 0.12 = 0.36
+    const NUM_OF_DOT_RADIUS = 3;
+    const CULL_RADIUS_SQUARED = (NUM_OF_DOT_RADIUS * (dotRadius * 2)) * (NUM_OF_DOT_RADIUS * (dotRadius * 2));
+    const CULL_THRESHOLD = 20;
+
+    // 1. Identify dense regions
+    const dotsToCull = new Set();
+    const checkedDots = new Set();
+
+    for (let i = 0; i < dotData.length; i++) {
+        const dotA = dotData[i];
+        if (checkedDots.has(dotA.id)) continue;
+
+        let localCluster = [dotA];
+
+        // Find all neighbors within the CULL_RADIUS
+        for (let j = i + 1; j < dotData.length; j++) {
+            const dotB = dotData[j];
+            const distanceSquared = dotA.mesh.position.distanceToSquared(dotB.mesh.position);
+
+            if (distanceSquared < CULL_RADIUS_SQUARED) {
+                localCluster.push(dotB);
+            }
+        }
+
+        // 2. Apply CULL_THRESHOLD
+        if (localCluster.length > CULL_THRESHOLD) {
+            // Mark all dots in this cluster for potential culling
+            localCluster.forEach(dot => dotsToCull.add(dot.id));
+
+            // Mark them as checked so we don't re-check a dot that was part of a cluster
+            // centered at an earlier dot.
+            localCluster.forEach(dot => checkedDots.add(dot.id));
+        }
+    }
+
+    // 3. Perform Culling (randomly remove half)
+    if (dotsToCull.size > 0) {
+        const cullList = dotData.filter(dot => dotsToCull.has(dot.id));
+        const numToCull = Math.floor(cullList.length / 2);
+
+        // Shuffle and take the first 'numToCull'
+        for (let i = cullList.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [cullList[i], cullList[j]] = [cullList[j], cullList[i]];
+        }
+
+        const culledDots = cullList.slice(0, numToCull);
+
+        culledDots.forEach(dot => {
+            expiredDotIds.add(dot.id);
+            // 1. Remove from THREE.js scene
+            if (uranus && dot.mesh) uranus.remove(dot.mesh);
+            if (dot.mesh && dot.mesh.geometry) dot.mesh.geometry.dispose();
+            if (dot.mesh && dot.mesh.material) dot.mesh.material.dispose();
+
+            // No need to remove from dotData/selectableObjects here, as the next loop handles it
+            // by splicing based on expiredDotIds.
+        });
+    }
+
+    // ==========================================================
+    // END: NEW CULLING LOGIC
+    // ==========================================================
+
+
+    // --- PERFORMANCE REFACTORING 2: IN-PLACE ARRAY REMOVAL (Reverse Loop) ---
+    for (let i = dotData.length - 1; i >= 0; i--) {
+        const dot = dotData[i];
+
+        // A. Death Check (Original logic and also incorporates the culled dots)
+        if (dot.lifetime !== null && dot.lifetime !== undefined || expiredDotIds.has(dot.id)) {
+            let shouldDie = expiredDotIds.has(dot.id);
+
+            if (!shouldDie) {
+                // Initialize the weighted elapsed time if it's missing
+                if (dot.weightedTimeElapsed === undefined || dot.weightedTimeElapsed === null) {
+                    const naturalElapsed = (now - dot.creationTime) / 1000;
+                    dot.weightedTimeElapsed = naturalElapsed;
+                }
+
+                // **MODIFIED LIFETIME DECAY LOGIC**
+                let decayFactor = 1;
+
+                // Decay 2x faster if the habitat is unsuitable
+                if ((dot.habitat === 'in-land' && !dot.insideContinent) ||
+                    (dot.habitat === 'off-land' && dot.insideContinent)) {
+                    decayFactor = 2;
+                }
+
+                // Accumulate the weighted (accelerated) time elapsed
+                dot.weightedTimeElapsed += deltaTime * decayFactor;
+
+                // Death condition: Weighted elapsed time exceeds the fixed total lifetime (dot.lifetime)
+                if (dot.weightedTimeElapsed >= dot.lifetime) {
+                    shouldDie = true;
+                    // Remove from THREE.js scene if not already removed by culling logic
+                    if (uranus && dot.mesh && !expiredDotIds.has(dot.id)) uranus.remove(dot.mesh);
+                    if (dot.mesh && dot.mesh.geometry) dot.mesh.geometry.dispose();
+                    if (dot.mesh && dot.mesh.material) dot.mesh.material.dispose();
+                }
+            }
+
+
+            if (shouldDie) {
+                // 2. Track ID for savedDNAs cleanup
+                expiredDotIds.add(dot.id);
+
+                // 3. Remove from selectableObjects (in-place)
+                const selectableIndex = selectableObjects.findIndex(obj => obj.userData.dotId === dot.id);
+                if (selectableIndex !== -1) {
+                    selectableObjects.splice(selectableIndex, 1);
+                }
+
+                // 4. Remove from dotData (in-place)
+                dotData.splice(i, 1);
+
+                continue; // Skip movement/collision check for this dot
+            }
+            // **END MODIFIED LIFETIME DECAY LOGIC**
+        }
+
+        // B. Movement and Habitat Logic
+        let newPosition = dot.mesh.position.clone();
+        const vibration = new THREE.Vector3(
+            (Math.random() - 0.5),
+            (Math.random() - 0.5),
+            (Math.random() - 0.5)
+        ).normalize().multiplyScalar(dotVibrationSpeed);
+        newPosition.add(vibration);
+        newPosition.normalize().multiplyScalar(planetRadius + 0.02);
+
+        const newState = getNewContinentState(newPosition);
+
+        if (dot.habitat === 'in-land') {
+            if (newState.isLand) {
+                dot.mesh.position.copy(newPosition);
+                dot.position.copy(newPosition);
+                dot.insideContinent = true;
+                dot.continentIndex = newState.index;
+            } else {
+                if (Math.random() >= 0.95) {
+                    dot.mesh.position.copy(newPosition);
+                    dot.position.copy(newPosition);
+                    dot.insideContinent = false;
+                    dot.continentIndex = -1;
+                }
+            }
+        } else if (dot.habitat === 'both') {
+            if (Math.random() >= 0.5) {
+                dot.mesh.position.copy(newPosition);
+                dot.position.copy(newPosition);
+                dot.insideContinent = false;
+                dot.continentIndex = -1;
+            }
+        } else {
+            dot.mesh.position.copy(newPosition);
+            dot.position.copy(newPosition);
+            dot.insideContinent = newState.isLand;
+            dot.continentIndex = newState.index;
+        }
+    }
+
+    if (expiredDotIds.size > 0) {
+        // In-place removal for savedDNAs after dotData cleanup
+        for (let i = savedDNAs.length - 1; i >= 0; i--) {
+            if (expiredDotIds.has(savedDNAs[i].dotId)) {
+                savedDNAs.splice(i, 1);
+            }
+        }
+        updateSavedList();
+        updateLegend(); // Only call if deaths occurred
+    }
+    // --- END REFACTORING 2 (DEATH CHECK) ---
+
+    // Collision check (O(N^2) complexity) - only check remaining dots
+    for (let i = 0; i < dotData.length; i++) {
+        for (let j = i + 1; j < dotData.length; j++) {
+            const dotA = dotData[i];
+            const dotB = dotData[j];
+            const distanceSquared = dotA.mesh.position.distanceToSquared(dotB.mesh.position);
+            if (distanceSquared < twoRadiiSquared) {
+                if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
+                createChildDot(dotA, dotB);
+                }
+            }
+        }
+    }
+
+    if (controls) controls.update();
+    if (renderer) renderer.render(scene, camera);
+}
+
         animate();
       });
       threeJSInitialized = true;
