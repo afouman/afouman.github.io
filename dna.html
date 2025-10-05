@@ -381,6 +381,15 @@
     <div id="controls">
         <label for="dot-speed-slider">DNA Travel Speed:</label>
         <input type="range" id="dot-speed-slider" min="0" max="0.25" step="0.001" value="0.005">
+
+        <label for="inland-cooldown-slider">In-land Cooldown: <span id="inland-cooldown-value">25</span>s</label>
+        <input type="range" id="inland-cooldown-slider" min="5" max="60" step="1" value="25">
+
+        <label for="offland-cooldown-slider">Off-land Cooldown: <span id="offland-cooldown-value">18.5</span>s</label>
+        <input type="range" id="offland-cooldown-slider" min="5" max="60" step="0.5" value="18.5">
+
+        <label for="both-cooldown-slider">Amphibious Cooldown: <span id="both-cooldown-value">22</span>s</label>
+        <input type="range" id="both-cooldown-slider" min="5" max="60" step="1" value="22">
     </div>
   </div>
   <div id="modal-overlay">
@@ -419,6 +428,7 @@
       <ol>
         <li>Lifeforms can either survive on land, off land, or both environments (amphibious).</li>
         <li>When 2 lifeforms (dots) meet (touch), they create a new lifeform whose characteristics are derived from its parents + random mutation.</li>
+        <li>After reproduction, parents and the newborn will go through a cool down period before reproducing again. Cool down period is controlled by the sliders on the right side.</li>
         <li>A newborn lifeform's life expectancy is between 1 second and 110% of the greater of its parents' life expectancies.</li>
         <li>Each lifeform has a cooldown period after reproduction during which it cannot to reproduce.</li>
         <li>If in-land or off-land lifeforms end up in an unsuitable environment, their lifespan decay 2x faster.</li>
@@ -486,6 +496,15 @@
     const inlandEl = document.getElementById('count-inland');
     const offlandEl = document.getElementById('count-offland');
     const bothEl = document.getElementById('count-both');
+
+    // START: CACHE NEW SLIDER ELEMENTS
+    const inlandCooldownSlider = document.getElementById('inland-cooldown-slider');
+    const offlandCooldownSlider = document.getElementById('offland-cooldown-slider');
+    const bothCooldownSlider = document.getElementById('both-cooldown-slider');
+    const inlandCooldownValueEl = document.getElementById('inland-cooldown-value');
+    const offlandCooldownValueEl = document.getElementById('offland-cooldown-value');
+    const bothCooldownValueEl = document.getElementById('both-cooldown-value');
+
     // --- END CACHING ---
 
     let threeJSInitialized = false;
@@ -502,7 +521,42 @@
     let planetRadius;
     const dotCreationCooldown = 30000;
 
+    // START: NEW COOLDOWN CONFIGURATION
+    let HABITAT_COOLDOWNS = {};
     // --- START: GLOBAL UTILITY FUNCTIONS (Refactored `updateLegend`) ---
+
+// --- NEW FUNCTION TO INITIALIZE COOLDOWNS FROM SLIDERS ---
+function initializeCooldownsFromSliders() {
+    // 1. Get references to the sliders
+    const inlandSlider = document.getElementById('inland-cooldown-slider');
+    const offlandSlider = document.getElementById('offland-cooldown-slider');
+    const bothSlider = document.getElementById('both-cooldown-slider');
+
+    // Value Spans (The elements you want to update)
+    const inlandValueEl = document.getElementById('inland-cooldown-value');
+    const offlandValueEl = document.getElementById('offland-cooldown-value');
+    const bothValueEl = document.getElementById('both-cooldown-value');
+
+    // 2. Read the actual slider values
+    // Use fallback values in case the elements aren't found
+    const inlandVal = parseFloat(inlandSlider?.value || 25);
+    const offlandVal = parseFloat(offlandSlider?.value || 18.5);
+    const bothVal = parseFloat(bothSlider?.value || 22);
+
+    // 3. Synchronize the HABITAT_COOLDOWNS dictionary (The Logic Fix)
+    HABITAT_COOLDOWNS = {
+        'in-land': inlandVal * 1000,
+        'off-land': offlandVal * 1000,
+        'both': bothVal * 1000,
+        'None': 0
+    };
+
+    // 4. Synchronize the displayed text (The Visual Fix for your current request)
+    if (inlandValueEl) inlandValueEl.textContent = inlandVal;
+    if (offlandValueEl) offlandValueEl.textContent = offlandVal;
+    if (bothValueEl) bothValueEl.textContent = bothVal;
+
+}
 
     function updateLegend() {
         let countInland = 0;
@@ -1067,12 +1121,6 @@
 
 function createChildDot(dotA, dotB) {
     const now = Date.now();
-    const HABITAT_COOLDOWNS = {
-        'in-land': 25000,
-        'off-land': 18500,
-        'both': 22000,
-        'None': 0
-    };
 
 
     if (dotA.cooldownUntil < now && dotB.cooldownUntil < now) {
@@ -1445,6 +1493,30 @@ function animate() {
             dotVibrationSpeed = parseFloat(event.target.value);
         });
     }
+   // START: NEW SLIDER EVENT LISTENERS
+    if (inlandCooldownSlider && offlandCooldownSlider && bothCooldownSlider) {
+        // Initialize sliders and dictionary with current values (already set in HTML and HABITAT_COOLDOWNS)
+        // Now set up the listeners to update the global dictionary and display.
+
+        inlandCooldownSlider.addEventListener('input', (event) => {
+            const val = parseFloat(event.target.value);
+            HABITAT_COOLDOWNS['in-land'] = val * 1000; // Convert seconds to milliseconds
+            inlandCooldownValueEl.textContent = val;
+        });
+
+        offlandCooldownSlider.addEventListener('input', (event) => {
+            const val = parseFloat(event.target.value);
+            HABITAT_COOLDOWNS['off-land'] = val * 1000; // Convert seconds to milliseconds
+            offlandCooldownValueEl.textContent = val;
+        });
+
+        bothCooldownSlider.addEventListener('input', (event) => {
+            const val = parseFloat(event.target.value);
+            HABITAT_COOLDOWNS['both'] = val * 1000; // Convert seconds to milliseconds
+            bothCooldownValueEl.textContent = val;
+        });
+    }
+    // END: NEW SLIDER EVENT LISTENERS
     const container = document.getElementById('dna-container');
     const basePairsCount = 19;
     const bases = ['A', 'T', 'C', 'G'];
@@ -1854,6 +1926,7 @@ function animate() {
         }
     });
     document.addEventListener('DOMContentLoaded', () => {
+      initializeCooldownsFromSliders();
       initPlanetVisualization();
       updateLegend();
     });
