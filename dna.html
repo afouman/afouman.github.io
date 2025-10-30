@@ -429,11 +429,10 @@
         <li>Lifeforms can either survive on land, off land, or both environments (amphibious).</li>
         <li>When 2 lifeforms (dots) meet (touch), they create a new lifeform whose characteristics are derived from its parents + random mutation.</li>
         <li>After reproduction, parents and the newborn will go through a cool down period before reproducing again. Cool down period is controlled by the sliders on the right side.</li>
-        <li>A newborn lifeform's life expectancy is between 1 second and 110% of the greater of its parents' life expectancies.</li>
-        <li>Each lifeform has a cooldown period after reproduction during which it cannot to reproduce.</li>
-        <li>If in-land or off-land lifeforms end up in an unsuitable environment, their lifespan decay 2x faster.</li>
+        <li>A newborn's life expectancy is between 1 second and 110% of the greater of its parents' life expectancies.</li>
+        <li>If in-land or off-land lifeforms end up in an unsuitable environment, their lifespans decay 2x faster.</li>
         <li>If in-land and off-land lifeforms mate, their children can be in-land habitants, off-land habitants, amphibious, or unviable (death at birth).</li>
-        <li>If the concentration of lifeforms exceeds 20 within a 3-dit radius, half will be eliminated due to disease outbreak or resource scarcity.</li>
+        <li>If the concentration of lifeforms exceeds 20 within a 3-dot radius, half will be eliminated due to disease outbreak or resource scarcity.</li>
       </ol>
 
 
@@ -676,7 +675,9 @@ function initializeCooldownsFromSliders() {
       pointLight.position.set(10, 10, 10);
       scene.add(pointLight);
       const textureLoader = new THREE.TextureLoader();
-      textureLoader.load('uranus1.jpg', function(texture) {
+      const randomTextureIndex = Math.floor(Math.random() * 4) + 1;
+<!--      textureLoader.load('uranus2.jpg', function(texture) {-->
+      textureLoader.load(`uranus${randomTextureIndex}.jpg`, function(texture) {
         planetRadius = 3;
         const geometry = new THREE.SphereGeometry(planetRadius, 128, 128);
         const material = new THREE.MeshPhongMaterial({ map: texture });
