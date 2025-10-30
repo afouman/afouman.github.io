@@ -675,7 +675,7 @@ function initializeCooldownsFromSliders() {
       pointLight.position.set(10, 10, 10);
       scene.add(pointLight);
       const textureLoader = new THREE.TextureLoader();
-      const randomTextureIndex = Math.floor(Math.random() * 4) + 1;
+      const randomTextureIndex = Math.floor(Math.random() * 2) + 1;
 <!--      textureLoader.load('uranus2.jpg', function(texture) {-->
       textureLoader.load(`uranus${randomTextureIndex}.jpg`, function(texture) {
         planetRadius = 3;
