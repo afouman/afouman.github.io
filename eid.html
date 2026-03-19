@@ -1,29 +1,132 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>Party Cocktail Menu</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🍹 Party Menu 🍴</title>
 <style>
-body { font-family: Arial; background-color: #fff8f0; color: #333; text-align: center; }
-h1 { color: #ff6347; }
-.cocktail { margin: 20px; padding: 10px; border: 1px solid #ffccaa; border-radius: 8px; display: inline-block; }
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #ffe7e0, #fff8f0);
+    color: #333;
+    margin: 0;
+    padding: 0;
+  }
+
+  header {
+    text-align: center;
+    padding: 30px 20px;
+    background-color: #ff6347;
+    color: white;
+    font-size: 2em;
+    font-weight: bold;
+    letter-spacing: 1px;
+  }
+
+  section {
+    max-width: 600px;
+    margin: 30px auto;
+    padding: 0 20px;
+  }
+
+  h2 {
+    color: #ff6347;
+    font-size: 1.5em;
+    margin-bottom: 10px;
+    border-bottom: 2px solid #ffccaa;
+    padding-bottom: 5px;
+  }
+
+  .item {
+    background: #fff3eb;
+    padding: 15px 20px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    transition: transform 0.2s ease;
+  }
+
+  .item:hover {
+    transform: scale(1.02);
+  }
+
+  .ingredients {
+    font-weight: bold;
+    margin-bottom: 5px;
+  }
+
+  .instructions {
+    font-style: italic;
+    color: #555;
+  }
+
+  .emoji {
+    font-size: 1.2em;
+    margin-right: 6px;
+  }
+
+  footer {
+    text-align: center;
+    padding: 20px;
+    font-size: 0.9em;
+    color: #777;
+  }
 </style>
 </head>
 <body>
-<h1>🍹 Party Cocktail Menu 🍹</h1>
-<div class="cocktail">
-<h2>Margarita</h2>
-<p>Tequila, lime juice, triple sec</p>
-<p>Shake with ice, strain, optional salt rim.</p>
-</div>
-<div class="cocktail">
-<h2>Mojito</h2>
-<p>Rum, lime juice, mint, simple syrup, soda water</p>
-<p>Muddle mint, add rum + ice, top with soda.</p>
-</div>
-<div class="cocktail">
-<h2>Piña Colada</h2>
-<p>Rum, pineapple juice, coconut cream</p>
-<p>Shake with ice, strain, garnish with pineapple/cherry.</p>
-</div>
+
+<header>🍹 Party Menu 🍴</header>
+
+<section>
+  <h2>🍸 Cocktails</h2>
+  <div class="item">
+    <h3><span class="emoji">🍋</span>Margarita (Cooler)</h3>
+    <p class="ingredients">Tequila, lime juice, triple sec</p>
+    <p class="instructions">Shake with ice, strain into glass, optional salt rim. Perfect to batch in a cooler!</p>
+  </div>
+  <div class="item">
+    <h3><span class="emoji">🌿</span>Mojito (Made-to-Order)</h3>
+    <p class="ingredients">Rum, lime juice, mint leaves, simple syrup, soda water</p>
+    <p class="instructions">Muddle mint with lime & syrup, add rum + ice, top with soda water. Refreshing & fresh!</p>
+  </div>
+  <div class="item">
+    <h3><span class="emoji">🥥</span>Piña Colada (Made-to-Order)</h3>
+    <p class="ingredients">Rum, pineapple juice, coconut cream</p>
+    <p class="instructions">Shake with ice, strain into glass, garnish with pineapple/cherry. Tropical & creamy!</p>
+  </div>
+
+  <h2>🥤 Drinks</h2>
+  <div class="item">
+    <h3><span class="emoji">🍺</span>Beer</h3>
+    <h3><span class="emoji">🍷</span>Wine</h3>
+    <h3><span class="emoji">🥂</span>Sparkling Wine</h3>
+    <h3><span class="emoji">🍋</span>Lemonade</h3>
+    <h3><span class="emoji">🥛</span>Water</h3>
+  </div>
+
+  <h2>🍴 Food</h2>
+  <div class="item">
+    <h3><span class="emoji">🍗</span>Grilled Chicken Tacos</h3>
+    <p class="instructions">Grilled marinated chicken, tortillas, salsa, avocado, cheese.</p>
+  </div>
+  <div class="item">
+    <h3><span class="emoji">🥗</span>Kabob Koobeh</h3>
+    <p class="instructions">IYKYK.</p>
+  </div>
+
+  <h2>🍿 Snacks</h2>
+  <div class="item">
+    <h3><span class="emoji">🥔</span>Chips</h3>
+  </div>
+  <div class="item">
+    <h3><span class="emoji">🧀</span>Charcuterie board</h3>
+    <p class="instructions">Selection of cheeses, pepperoni, salami, crackers, and fruit.</p>
+  </div>
+</section>
+
+<footer>
+  Enjoy your party responsibly! 🍹
+</footer>
+
 </body>
 </html>
