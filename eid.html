@@ -1,132 +1,207 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🍹 Party Menu 🍴</title>
-<style>
-  body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #ffe7e0, #fff8f0);
-    color: #333;
-    margin: 0;
-    padding: 0;
-  }
+  <meta charset="UTF-8">
+  <title>Nowrooz Party Menu</title>
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Baloo 2', cursive;
+      margin: 0;
+      padding: 0;
+      color: #333;
+      position: relative;
+      min-height: 100vh;
+      /* Festive gradient */
+      background: linear-gradient(135deg, #f7fbe8, #fff5f7, #eef7f2);
+      overflow-x: hidden;
+    }
 
-  header {
-    text-align: center;
-    padding: 30px 20px;
-    background-color: #ff6347;
-    color: white;
-    font-size: 2em;
-    font-weight: bold;
-    letter-spacing: 1px;
-  }
+    /* Bottom-center background image */
+    body::before {
+      content: "";
+      position: fixed;
+      bottom: 0;
+      top: 8%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      max-width: 1400px;
+      height: 100%;
+      background-image: url("https://i.pinimg.com/1200x/af/7d/93/af7d93629a72606f5b5b66839b8e25aa.jpg");
+      background-size: cover;
+      background-repeat: no-repeat;
+      background-position: center bottom;
+      z-index: 0;
+      opacity: 1;
+    }
 
-  section {
-    max-width: 600px;
-    margin: 30px auto;
-    padding: 0 20px;
-  }
+    /* Grass image in lower-right corner */
+    body::after {
+      content: "";
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 250px;
+      height: auto;
+      background-image: url("https://icon2.cleanpng.com/lnd/20241111/bz/cdaa0f4ccaee666c5b422acfa2de72.webp");
+      background-size: contain;
+      background-repeat: no-repeat;
+      z-index: 1;
+      opacity: 0.9;
+    }
 
-  h2 {
-    color: #ff6347;
-    font-size: 1.5em;
-    margin-bottom: 10px;
-    border-bottom: 2px solid #ffccaa;
-    padding-bottom: 5px;
-  }
+    .container {
+      max-width: 800px;
+      margin: 50px auto;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 40px;
+      border-radius: 14px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+      border: 2px solid #e6d8a8;
+      position: relative;
+      z-index: 2;
+    }
 
-  .item {
-    background: #fff3eb;
-    padding: 15px 20px;
-    border-radius: 12px;
-    margin-bottom: 15px;
-    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    transition: transform 0.2s ease;
-  }
+    h1 {
+      text-align: center;
+      margin-bottom: 5px;
+      color: #6b8e23;
+      font-size: 36px;
+    }
 
-  .item:hover {
-    transform: scale(1.02);
-  }
+    .subtitle {
+      text-align: center;
+      margin-bottom: 30px;
+      color: #888;
+      font-size: 16px;
+    }
 
-  .ingredients {
-    font-weight: bold;
-    margin-bottom: 5px;
-  }
+    h2 {
+      color: #b8860b;
+      font-size: 26px;
+      margin-top: 40px;
+      text-align: center;
+      border-bottom: 2px solid #e6d8a8;
+      display: inline-block;
+      padding-bottom: 6px;
+    }
 
-  .instructions {
-    font-style: italic;
-    color: #555;
-  }
+    ul {
+      list-style: none;
+      padding-left: 0;
+      margin-top: 15px;
+    }
 
-  .emoji {
-    font-size: 1.2em;
-    margin-right: 6px;
-  }
+    li {
+      font-size: 18px;
+      text-align: center;
+      margin: 15px 0;
+      padding-bottom: 10px;
+      position: relative;
+    }
 
-  footer {
-    text-align: center;
-    padding: 20px;
-    font-size: 0.9em;
-    color: #777;
-  }
-</style>
+    li .description {
+      font-size: 14px;
+      color: #555;
+      margin-top: 4px;
+      display: block;
+    }
+
+    li::after {
+      content: "";
+      display: block;
+      height: 2px;
+      margin-top: 8px;
+      width: 100%;
+      max-width: 400px;
+      margin-left: auto;
+      margin-right: auto;
+      background: linear-gradient(to right, transparent, #e6d8a8, transparent);
+    }
+
+    .divider {
+      width: 60px;
+      height: 2px;
+      background: #e6d8a8;
+      margin: 20px auto;
+      border-radius: 1px;
+    }
+
+    .footer {
+      text-align: center;
+      margin-top: 40px;
+      font-size: 16px;
+      color: #777;
+      position: relative;
+      z-index: 2;
+    }
+  </style>
 </head>
 <body>
 
-<header>🍹 Party Menu 🍴</header>
+<div class="container">
+  <h1>Eid Didani Menu</h1>
+  <div class="subtitle">🌿Happy Nowrooz • Eat, Drink, Enjoy & Celebrate🌸</div>
+  <div class="subtitle">⚠Don't get me evicted⚠</div>
 
-<section>
-  <h2>🍸 Cocktails</h2>
-  <div class="item">
-    <h3><span class="emoji">🍋‍🟩</span>Margarita (Cooler)</h3>
-    <p class="ingredients">Tequila, lime juice, triple sec</p>
-    <p class="instructions">Shake with ice, strain into glass, optional salt rim. Perfect to batch in a cooler!</p>
-  </div>
-  <div class="item">
-    <h3><span class="emoji">🌿</span>Mojito (Made-to-Order)</h3>
-    <p class="ingredients">Rum, lime juice, mint leaves, simple syrup, soda water</p>
-    <p class="instructions">Muddle mint with lime & syrup, add rum + ice, top with soda water. Refreshing & fresh!</p>
-  </div>
-  <div class="item">
-    <h3><span class="emoji">🥥</span>Piña Colada (Made-to-Order)</h3>
-    <p class="ingredients">Rum, pineapple juice, coconut cream</p>
-    <p class="instructions">Shake with ice, strain into glass, garnish with pineapple/cherry. Tropical & creamy!</p>
-  </div>
+  <h2>🥂 Drinks</h2>
+  <ul>
+    <li>Margarita</li>
+    <li>Piña Colada</li>
+    <li>Beer</li>
+    <li>Wine</li>
+    <li>Pepsi</li>
+    <li>Diet Pepsi</li>
+    <li>Sprite</li>
+    <li>Sparkling Water</li>
+    <li>Water</li>
+  </ul>
 
-  <h2>🥤 Drinks</h2>
-  <div class="item">
-    <h3><span class="emoji">🍺</span>Beer</h3>
-    <h3><span class="emoji">🍷</span>Wine</h3>
-    <h3><span class="emoji">🥂</span>Sparkling Wine</h3>
-    <h3><span class="emoji">🍋</span>Lemonade</h3>
-    <h3><span class="emoji">💧</span>Water</h3>
-  </div>
+  <div class="divider"></div>
 
-  <h2>🍴 Food</h2>
-  <div class="item">
-    <h3><span class="emoji">🌮</span>Grilled Chicken Tacos</h3>
-    <p class="instructions">Grilled marinated chicken, tortillas, salsa, avocado, cheese.</p>
-  </div>
-  <div class="item">
-    <h3><span class="emoji">🍢</span>Kabob Koobideh</h3>
-    <p class="instructions">IYKYK.</p>
-  </div>
+  <h2>🍓 Welcome & Grazing</h2>
+  <ul>
+    <li>Fruit Board</li>
+    <li>Cheese & Meat Board</li>
+  </ul>
 
-  <h2>🍿 Snacks</h2>
-  <div class="item">
-    <h3><span class="emoji">🥔</span>Chips</h3>
-  </div>
-  <div class="item">
-    <h3><span class="emoji">🧀</span>Charcuterie board</h3>
-    <p class="instructions">Selection of cheeses, pepperoni, salami, crackers, and fruit.</p>
-  </div>
-</section>
+  <div class="divider"></div>
 
-<footer>
-  Enjoy your party responsibly! 🍹
-</footer>
+  <h2>🍤 Appetizers</h2>
+  <ul>
+    <li>Shrimp Cocktail</li>
+    <li>Steak on Crackers</li>
+    <li>Sushi Selection</li>
+  </ul>
+
+  <div class="divider"></div>
+
+  <h2>🌮 Lunch</h2>
+  <ul>
+    <li>
+      Kabob Koobideh
+      <span class="description">bread, grilled tomatoes, herbs</span>
+    </li>
+    <li>
+      Chicken Tacos
+      <span class="description">tortillas, beans, guac, sour cream, salsa</span>
+    </li>
+  </ul>
+
+  <div class="divider"></div>
+
+  <h2>🥪 Snacks</h2>
+  <ul>
+    <li>Chips & Dip</li>
+    <li>Sandwiches</li>
+  </ul>
+
+  <div class="footer">
+    🌿 Wishing you a joyful and prosperous Nowrooz! 🌸
+  </div>
+</div>
 
 </body>
 </html>
