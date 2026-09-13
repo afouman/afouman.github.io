@@ -750,7 +750,10 @@ export default function Home() {
   }
 
   async function createEvent() {
-    if (!newEvent.title.trim() || !newEvent.date.trim()) return;
+    if (!newEvent.title.trim() || !newEvent.date.trim()) {
+      notify('Add an event name and date before creating the menu');
+      return;
+    }
     const baseSlug =
       newEvent.title
         .toLowerCase()
@@ -778,24 +781,37 @@ export default function Home() {
         },
       ],
     };
-    if (firebaseConfigured) {
-      const [{ getApp }, store, authModule] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/firestore'),
-        import('firebase/auth'),
-      ]);
-      const user = authModule.getAuth(getApp()).currentUser;
-      if (!user || user.isAnonymous) return;
-      event.ownerUid = user.uid;
-      await store.setDoc(
-        store.doc(store.getFirestore(getApp()), 'events', event.id),
-        event,
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store, authModule] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+          import('firebase/auth'),
+        ]);
+        const user = authModule.getAuth(getApp()).currentUser;
+        if (!user || user.isAnonymous) {
+          notify('Sign in with the approved host account before creating an event');
+          return;
+        }
+        event.ownerUid = user.uid;
+        await store.setDoc(
+          store.doc(store.getFirestore(getApp()), 'events', event.id),
+          event,
+        );
+      } else {
+        const nextEvents = [...events, event];
+        setEvents(nextEvents);
+        shareDemoUpdate({ type: 'events', value: nextEvents });
+        shareDemoUpdate({ type: 'orders', eventId: event.id, value: [] });
+      }
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(
+        code === 'permission-denied'
+          ? 'Firebase rules have not yet allowed this host account to create events.'
+          : 'The event could not be created. Please try again.',
       );
-    } else {
-      const nextEvents = [...events, event];
-      setEvents(nextEvents);
-      shareDemoUpdate({ type: 'events', value: nextEvents });
-      shareDemoUpdate({ type: 'orders', eventId: event.id, value: [] });
+      return;
     }
     setMenu(event);
     setOrders([]);
