@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /events/{eventId}/items/{fileName} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com'
+        && firestore.get(/databases/(default)/documents/events/$(eventId)).data.ownerUid == request.auth.uid
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com'
+        && firestore.get(/databases/(default)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
+    }
+  }
+}

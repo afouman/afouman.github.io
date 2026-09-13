@@ -1,0 +1,75 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isHost(eventId) {
+      return signedIn() &&
+        get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
+    }
+    function isRealAccount() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    function isApprovedHost() {
+      return isRealAccount()
+        && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com';
+    }
+
+    match /events/{eventId} {
+      allow read: if true;
+      allow create: if isApprovedHost() && request.resource.data.ownerUid == request.auth.uid;
+      allow update: if isHost(eventId) && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if isHost(eventId);
+
+      match /orders/{orderId} {
+        allow create: if signedIn()
+          && get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
+          && request.resource.data.keys().hasOnly([
+            'id', 'guestName', 'selections', 'note', 'status', 'createdAt',
+            'updatedAt', 'guestUid', 'revision'
+          ])
+          && request.resource.data.id == orderId
+          && request.resource.data.status == 'new'
+          && request.resource.data.guestUid == request.auth.uid
+          && request.resource.data.revision == 1
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.guestName is string
+          && request.resource.data.guestName.size() > 0
+          && request.resource.data.guestName.size() <= 80
+          && request.resource.data.note is string
+          && request.resource.data.note.size() <= 500
+          && request.resource.data.selections is map;
+        allow get: if isHost(eventId) || (signedIn() && resource.data.guestUid == request.auth.uid);
+        allow list: if isHost(eventId);
+        allow update: if isHost(eventId) || (
+          signedIn()
+          && resource.data.guestUid == request.auth.uid
+          && resource.data.status == 'new'
+          && request.resource.data.guestUid == resource.data.guestUid
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.status in ['new', 'cancelled']
+          && (
+            request.resource.data.status == 'cancelled'
+            || get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
+          )
+          && request.resource.data.revision == resource.data.revision + 1
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.guestName is string
+          && request.resource.data.guestName.size() > 0
+          && request.resource.data.guestName.size() <= 80
+          && request.resource.data.note is string
+          && request.resource.data.note.size() <= 500
+          && request.resource.data.selections is map
+          && (
+            request.resource.data.status == 'new'
+            || request.resource.data.cancelledAt == request.time
+          )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'guestName', 'selections', 'note', 'status', 'updatedAt', 'cancelledAt', 'revision'
+          ])
+        );
+        allow delete: if isHost(eventId);
+      }
+    }
+  }
+}
