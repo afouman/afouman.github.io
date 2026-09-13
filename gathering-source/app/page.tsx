@@ -1098,23 +1098,34 @@ export default function Home() {
     notify('Your order was cancelled');
   }
   async function signInHost() {
-    const [{ getApp }, authModule] = await Promise.all([
-      import('firebase/app'),
-      import('firebase/auth'),
-    ]);
-    const result = await authModule.signInWithPopup(
-      authModule.getAuth(getApp()),
-      new authModule.GoogleAuthProvider(),
-    );
-    if (
-      HOST_EMAIL &&
-      result.user.email?.toLowerCase() !== HOST_EMAIL
-    ) {
-      await authModule.signOut(authModule.getAuth(getApp()));
-      notify(`Use the approved host account: ${HOST_EMAIL}`);
-      return;
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/auth'),
+      ]);
+      const result = await authModule.signInWithPopup(
+        authModule.getAuth(getApp()),
+        new authModule.GoogleAuthProvider(),
+      );
+      if (
+        HOST_EMAIL &&
+        result.user.email?.toLowerCase() !== HOST_EMAIL
+      ) {
+        await authModule.signOut(authModule.getAuth(getApp()));
+        notify(`Use the approved host account: ${HOST_EMAIL}`);
+        return;
+      }
+      setHostUser(result.user.email || result.user.uid);
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(
+        code === 'auth/unauthorized-domain'
+          ? 'Firebase must authorize afouman.github.io before Google sign-in can work.'
+          : code === 'auth/popup-closed-by-user'
+            ? 'Google sign-in was closed before it completed.'
+            : 'Google sign-in could not be completed. Please try again.',
+      );
     }
-    setHostUser(result.user.email || result.user.uid);
   }
   async function saveMenu() {
     const cleanedMenu = {
