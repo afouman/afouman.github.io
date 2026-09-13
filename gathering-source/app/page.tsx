@@ -1103,9 +1103,12 @@ export default function Home() {
         import('firebase/app'),
         import('firebase/auth'),
       ]);
+      const provider = new authModule.GoogleAuthProvider();
+      // Do not silently reuse the Firebase-console account in a shared browser.
+      provider.setCustomParameters({ prompt: 'select_account' });
       const result = await authModule.signInWithPopup(
         authModule.getAuth(getApp()),
-        new authModule.GoogleAuthProvider(),
+        provider,
       );
       if (
         HOST_EMAIL &&
