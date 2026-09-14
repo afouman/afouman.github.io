@@ -404,6 +404,8 @@ function saveReceipt(eventId: string, orderId: string, createdAt: number) {
   return receipt;
 }
 
+const guestNameKey = (name: string) => name.trim().toLocaleLowerCase();
+
 export default function Home() {
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
@@ -905,6 +907,71 @@ export default function Home() {
     if (phoneNumber.trim() && phoneStep !== 'verified') {
       notify('Verify the text code first, or clear the optional phone number');
       return;
+    }
+    // Names are deliberately not globally searchable by guests. Instead, when
+    // a shared device has already placed an active order for this name, let the
+    // person decide whether to add dishes to that order or create another one.
+    if (!editingOrderId) {
+      const existingOrder = rememberedOrders
+        .filter(
+          (order) =>
+            order.status === 'new' &&
+            guestNameKey(order.guestName) === guestNameKey(guestName),
+        )
+        .sort((left, right) => right.createdAt - left.createdAt)[0];
+      if (existingOrder) {
+        const sameGuest = window.confirm(
+          `${existingOrder.guestName} already has an active order on this device. Is this the same guest?\n\nChoose OK to add these items to their existing order, or Cancel to create a separate order.`,
+        );
+        if (sameGuest) {
+          const selections = { ...existingOrder.selections };
+          Object.entries(cart).forEach(([itemId, quantity]) => {
+            selections[itemId] = (selections[itemId] || 0) + quantity;
+          });
+          const amended: Order = {
+            ...existingOrder,
+            selections,
+            note: note.trim() || existingOrder.note,
+            updatedAt: Date.now(),
+            revision: (existingOrder.revision || 1) + 1,
+          };
+          if (firebaseConfigured) {
+            const [{ getApp }, store] = await Promise.all([
+              import('firebase/app'),
+              import('firebase/firestore'),
+            ]);
+            await store.updateDoc(
+              store.doc(
+                store.getFirestore(getApp()),
+                'events',
+                menu.id,
+                'orders',
+                existingOrder.id,
+              ),
+              {
+                selections,
+                note: amended.note,
+                updatedAt: store.serverTimestamp(),
+                revision: store.increment(1),
+              },
+            );
+          } else {
+            const next = orders.map((order) =>
+              order.id === amended.id ? amended : order,
+            );
+            setOrders(next);
+            shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
+          }
+          setRememberedOrder(amended);
+          setRememberedOrders((current) =>
+            current.map((order) =>
+              order.id === amended.id ? amended : order,
+            ),
+          );
+          showSubmissionConfirmation('updated');
+          return;
+        }
+      }
     }
     if (editingOrderId && rememberedOrder) {
       const updated: Order = {
