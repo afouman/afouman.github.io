@@ -11,6 +11,7 @@ import {
   Copy,
   ExternalLink,
   Flame,
+  GripVertical,
   ImagePlus,
   LayoutDashboard,
   Leaf,
@@ -224,13 +225,6 @@ const DEMO_CHANNEL = 'gather-demo-sync';
 const RECEIPTS_KEY = 'gather-order-receipts';
 const RECEIPT_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const DESCRIPTION_EXAMPLE = 'Add a short, tempting description';
-const itemNames = (order: Order, menu: EventMenu) =>
-  Object.entries(order.selections)
-    .filter(([, qty]) => qty > 0)
-    .map(
-      ([id, qty]) =>
-        `${qty}× ${menu.items.find((i) => i.id === id)?.name ?? 'Menu item'}`,
-    );
 const menuCategories = (menu: EventMenu) => [
   ...new Set(
     [
@@ -2192,10 +2186,21 @@ function RememberedOrderCard({
       (task.status === 'ready' || task.status === 'served') &&
       !acknowledgedTasks.includes(task.id),
   );
-  const hasAcknowledgedProduction =
-    acknowledgedTasks.length > 0 &&
-    (order.status === 'preparing' || order.status === 'served');
-  if (hasAcknowledgedProduction && readyTasks.length === 0) return null;
+  const progressTasks =
+    order.tasks?.length
+      ? order.tasks
+      : Object.entries(order.selections)
+          .filter(([, quantity]) => quantity > 0)
+          .flatMap(([itemId, quantity]) =>
+            Array.from({ length: quantity }, (_, index) => ({
+              id: `${itemId}-${index}`,
+              itemId,
+              status:
+                order.status === 'cancelled'
+                  ? ('served' as TaskStatus)
+                  : ('waiting' as TaskStatus),
+            })),
+          );
   const acknowledgeReady = () => {
     const next = [
       ...new Set([...acknowledgedTasks, ...readyTasks.map((task) => task.id)]),
@@ -2223,7 +2228,7 @@ function RememberedOrderCard({
           {readyTasks.length ? 'Ready' : statusLabel[order.status]}
         </span>
       </div>
-      {readyTasks.length ? (
+      {readyTasks.length > 0 && (
         <div className="guest-ready-message">
           <strong>
             {readyTasks.length === 1
@@ -2242,42 +2247,61 @@ function RememberedOrderCard({
             <Check size={15} /> OK
           </button>
         </div>
+      )}
+      <section className="guest-order-progress" aria-label="Order item status">
+        <div>
+          <strong>Your items</strong>
+          <span>{progressTasks.length} item{progressTasks.length === 1 ? '' : 's'}</span>
+        </div>
+        <ul>
+          {progressTasks.map((task, index) => {
+            const label: Record<TaskStatus, string> = {
+              waiting: 'Queued',
+              preparing: 'Cooking',
+              ready: 'Ready',
+              served: 'Served',
+            };
+            return (
+              <li key={task.id} className={`item-status-${task.status}`}>
+                <span>
+                  {menu.items.find((item) => item.id === task.itemId)?.name ||
+                    'Menu item'}
+                  {progressTasks.filter((entry) => entry.itemId === task.itemId)
+                    .length > 1 && ` · ${index + 1}`}
+                </span>
+                <b>{order.status === 'cancelled' ? 'Cancelled' : label[task.status]}</b>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+      {order.note && (
+        <p className="mt-3 text-xs italic text-black/50">“{order.note}”</p>
+      )}
+      {order.updatedAt && order.updatedAt > order.createdAt && (
+        <p className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-black/35">
+          Updated{' '}
+          {new Date(order.updatedAt).toLocaleTimeString([], {
+            hour: 'numeric',
+            minute: '2-digit',
+          })}
+        </p>
+      )}
+      {editable ? (
+        <div className="mt-5 flex gap-2">
+          <button onClick={onEdit} className="secondary-button">
+            <Pencil size={14} /> Edit
+          </button>
+          <button onClick={onCancel} className="cancel-link">
+            <XCircle size={14} /> Cancel
+          </button>
+        </div>
       ) : (
-        <>
-          <ul className="mt-4 space-y-1.5 text-sm">
-            {itemNames(order, menu).map((name) => (
-              <li key={name}>{name}</li>
-            ))}
-          </ul>
-          {order.note && (
-            <p className="mt-3 text-xs italic text-black/50">“{order.note}”</p>
-          )}
-          {order.updatedAt && order.updatedAt > order.createdAt && (
-            <p className="mt-3 text-[11px] font-semibold uppercase tracking-wider text-black/35">
-              Updated{' '}
-              {new Date(order.updatedAt).toLocaleTimeString([], {
-                hour: 'numeric',
-                minute: '2-digit',
-              })}
-            </p>
-          )}
-          {editable ? (
-            <div className="mt-5 flex gap-2">
-              <button onClick={onEdit} className="secondary-button">
-                <Pencil size={14} /> Edit
-              </button>
-              <button onClick={onCancel} className="cancel-link">
-                <XCircle size={14} /> Cancel
-              </button>
-            </div>
-          ) : (
-            <p className="mt-4 text-xs leading-5 text-black/45">
-              {order.status === 'cancelled'
-                ? 'This order has been cancelled.'
-                : 'Your host is working through your items. We’ll tell you as each one is ready.'}
-            </p>
-          )}
-        </>
+        <p className="mt-4 text-xs leading-5 text-black/45">
+          {order.status === 'cancelled'
+            ? 'This order has been cancelled.'
+            : 'Your host is working through your items. We’ll tell you as each one is ready.'}
+        </p>
       )}
     </aside>
   );
@@ -2683,6 +2707,7 @@ function MenuEditor({
     {},
   );
   const [uploadingItem, setUploadingItem] = useState<string | null>(null);
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const categories = menuCategories(menu);
   const updateItem = (
     id: string,
@@ -2703,7 +2728,6 @@ function MenuEditor({
       ...menu,
       categories: categories.length ? categories : [category],
       items: [
-        ...menu.items,
         {
           id: crypto.randomUUID(),
           name: '',
@@ -2712,8 +2736,19 @@ function MenuEditor({
           price: 0,
           prepMinutes: 15,
         },
+        ...menu.items,
       ],
     });
+  };
+  const reorderItems = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) return;
+    const items = [...menu.items];
+    const from = items.findIndex((item) => item.id === draggedId);
+    const to = items.findIndex((item) => item.id === targetId);
+    if (from < 0 || to < 0) return;
+    const [dragged] = items.splice(from, 1);
+    items.splice(to, 0, dragged);
+    setMenu({ ...menu, items });
   };
   const addCategory = (itemId: string) => {
     const category = newCategory.trim();
@@ -2882,7 +2917,19 @@ function MenuEditor({
       </div>
       <div className="space-y-4">
         {menu.items.map((item, index) => (
-          <article key={item.id} className="menu-editor-card">
+          // Drag events belong on the card so a dish is a clear drop target.
+          // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
+          <article
+            key={item.id}
+            className={`menu-editor-card ${draggingItemId === item.id ? 'is-dragging' : ''}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              const draggedId = event.dataTransfer.getData('text/plain');
+              if (draggedId) reorderItems(draggedId, item.id);
+              setDraggingItemId(null);
+            }}
+          >
             <div className="menu-image-editor">
               {item.imageUrl ? (
                 <Image
@@ -3156,6 +3203,21 @@ function MenuEditor({
                 </div>
               </div>
             </div>
+            <button
+              type="button"
+              draggable
+              className="drag-handle"
+              aria-label={`Drag to reorder ${item.name || `dish ${index + 1}`}`}
+              title="Drag to reorder"
+              onDragStart={(event) => {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', item.id);
+                setDraggingItemId(item.id);
+              }}
+              onDragEnd={() => setDraggingItemId(null)}
+            >
+              <GripVertical size={18} />
+            </button>
             <button
               onClick={() => remove(item.id)}
               className="icon-button shrink-0 text-red-600"
