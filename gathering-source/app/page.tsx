@@ -738,7 +738,15 @@ export default function Home() {
   const setQty = (id: string, delta: number) =>
     setCart((current) => {
       const item = menu.items.find((entry) => entry.id === id);
-      const limit = item?.soldOut ? 0 : item?.maxServings;
+      const alreadyReserved = reservedServings(
+        rememberedOrders.filter((order) => order.id !== editingOrderId),
+        id,
+      );
+      const limit = item?.soldOut
+        ? 0
+        : item?.maxServings == null
+          ? undefined
+          : Math.max(0, item.maxServings - alreadyReserved);
       const next = Math.max(0, (current[id] || 0) + delta);
       return { ...current, [id]: limit == null ? next : Math.min(limit, next) };
     });
@@ -1433,6 +1441,7 @@ export default function Home() {
           menu={menu}
           categories={categories}
           cart={cart}
+          reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
           setQty={setQty}
         />
       ) : (
@@ -1855,11 +1864,13 @@ function GuestMenu({
   menu,
   categories,
   cart,
+  reserved,
   setQty,
 }: {
   menu: EventMenu;
   categories: string[];
   cart: Record<string, number>;
+  reserved: Order[];
   setQty: (id: string, delta: number) => void;
 }) {
   return (
@@ -1940,7 +1951,10 @@ function GuestMenu({
                 .map((item, itemIndex) => (
                   (() => {
                     const unavailable = Boolean(item.soldOut);
-                    const atGuestLimit = item.maxServings != null && (cart[item.id] || 0) >= item.maxServings;
+                    const remaining = item.maxServings == null
+                      ? undefined
+                      : Math.max(0, item.maxServings - reservedServings(reserved, item.id));
+                    const atGuestLimit = remaining != null && (cart[item.id] || 0) >= remaining;
                     return (
                   <article
                     key={item.id}
@@ -1965,6 +1979,7 @@ function GuestMenu({
                           <h3 className="font-display">{item.name}</h3>
                           {item.featured && <Sparkles size={15} />}
                           {unavailable && <span className="sold-out-badge">Sold out</span>}
+                          {!unavailable && remaining === 0 && <span className="sold-out-badge">Sold out</span>}
                         </div>
                         {itemDescription(item) && (
                           <p>{itemDescription(item)}</p>
@@ -1980,6 +1995,11 @@ function GuestMenu({
                             <Clock3 size={11} />
                             {itemPrepMinutes(item)} min
                           </span>
+                          {remaining != null && !unavailable && (
+                            <span className={remaining === 0 ? 'availability-empty' : ''}>
+                              {remaining === 0 ? 'Sold out' : `${remaining} left`}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1994,7 +2014,7 @@ function GuestMenu({
                       <span>{cart[item.id] || 0}</span>
                       <button
                         onClick={() => setQty(item.id, 1)}
-                        disabled={!menu.accepting || unavailable || atGuestLimit}
+                        disabled={!menu.accepting || unavailable || remaining === 0 || atGuestLimit}
                         aria-label={`Add ${item.name}`}
                       >
                         <Plus size={15} />
@@ -3304,7 +3324,7 @@ function MenuEditor({
                   </div>
                 </label>
                 <label>
-                  <span>Servings available</span>
+                  <span>Total servings for this event</span>
                   <div className="prep-input">
                     <input
                       aria-label={`Dish ${index + 1} servings available`}
