@@ -409,6 +409,7 @@ export default function Home() {
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
   const [events, setEvents] = useState<EventMenu[]>([demoMenu]);
   const [orders, setOrders] = useState<Order[]>(sampleOrders);
+  const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [guestName, setGuestName] = useState('');
   const [note, setNote] = useState('');
@@ -521,6 +522,7 @@ export default function Home() {
       applyOrders(nextOrders);
       if (!storedOrders)
         shareDemoUpdate({ type: 'orders', eventId, value: nextOrders });
+      setEventReady(true);
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key === demoOrdersKey(eventId) && event.newValue)
@@ -577,9 +579,10 @@ export default function Home() {
         new URLSearchParams(location.search).get('event') || menu.id;
       const unsubMenu = store.onSnapshot(
         store.doc(db, 'events', eventId),
-        (snap) =>
-          snap.exists() &&
-          setMenu({ id: snap.id, ...snap.data() } as EventMenu),
+        (snap) => {
+          if (snap.exists()) setMenu({ id: snap.id, ...snap.data() } as EventMenu);
+          setEventReady(true);
+        },
       );
       let unsubOrders = () => {};
       let unsubEvents = () => {};
@@ -1407,6 +1410,15 @@ export default function Home() {
     if (remaining[0]) selectHostEvent(remaining[0]);
     else history.replaceState({}, '', '?view=host');
     notify('Event deleted');
+  }
+
+  if (!eventReady) {
+    return (
+      <main className="event-loading" aria-live="polite">
+        <span><UtensilsCrossed size={22} /></span>
+        <p>Loading your event…</p>
+      </main>
+    );
   }
 
   return (
@@ -3012,6 +3024,15 @@ function MenuEditor({
   const categories = menuCategories(menu);
   useLayoutEffect(() => {
     const nextPositions = new Map<string, DOMRect>();
+    // Updating an input must never trigger the drag-and-drop FLIP animation.
+    // It only runs while a dish is actively being moved.
+    if (!draggingItemId) {
+      cardRefs.current.forEach((element, id) => {
+        nextPositions.set(id, element.getBoundingClientRect());
+      });
+      previousCardPositions.current = nextPositions;
+      return;
+    }
     cardRefs.current.forEach((element, id) => {
       const next = element.getBoundingClientRect();
       const previous = previousCardPositions.current.get(id);
@@ -3030,7 +3051,7 @@ function MenuEditor({
       nextPositions.set(id, next);
     });
     previousCardPositions.current = nextPositions;
-  }, [menu.items]);
+  }, [menu.items, draggingItemId]);
   const updateItem = (
     id: string,
     field: keyof MenuItem,

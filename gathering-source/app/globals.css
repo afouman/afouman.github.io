@@ -355,6 +355,31 @@ button:disabled {
   font-weight: 700;
   box-shadow: 0 10px 30px rgb(0 0 0/0.2);
 }
+.event-loading {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 0.8rem;
+  background: var(--cream);
+  color: rgb(75 17 29/0.62);
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+.event-loading > span {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  justify-self: center;
+  border-radius: 50%;
+  background: var(--tomato);
+  color: white;
+  animation: event-loading-pulse 1.1s ease-in-out infinite alternate;
+}
+@keyframes event-loading-pulse {
+  to { transform: scale(1.08); box-shadow: 0 0 0 10px rgb(217 84 61/0.1); }
+}
 .description-input::placeholder {
   color: #776f63;
   font-style: italic;
