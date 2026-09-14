@@ -3369,6 +3369,7 @@ function MenuEditor({
                       type="number"
                       min="1"
                       max="240"
+                      onWheel={(event) => event.currentTarget.blur()}
                       value={item.prepMinutes ?? ''}
                       onChange={(e) =>
                         updateItem(
@@ -3398,6 +3399,7 @@ function MenuEditor({
                       type="number"
                       min="0"
                       max="999"
+                      onWheel={(event) => event.currentTarget.blur()}
                       value={item.maxServings ?? ''}
                       placeholder="Unlimited"
                       onChange={(e) =>
