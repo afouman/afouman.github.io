@@ -1254,8 +1254,11 @@ export default function Home() {
       };
       image.src = source;
     });
-    if (imageUrl.length > 240_000) {
-      notify('That image is still too detailed — choose a simpler or smaller photo');
+    const otherImageBytes = menu.items
+      .filter((item) => item.id !== itemId)
+      .reduce((total, item) => total + (item.imageUrl?.startsWith('data:') ? item.imageUrl.length : 0), 0);
+    if (imageUrl.length > 180_000 || otherImageBytes + imageUrl.length > 700_000) {
+      notify('This menu is at its image limit — choose a smaller photo or remove another image');
       return;
     }
     setMenu((current) => ({
