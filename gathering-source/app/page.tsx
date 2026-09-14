@@ -15,6 +15,7 @@ import {
   ImagePlus,
   LayoutDashboard,
   Leaf,
+  ListChecks,
   LockKeyhole,
   Minus,
   Pencil,
@@ -2341,6 +2342,17 @@ function SchedulerBoard({
       item: menu.items.find((item) => item.id === task.itemId),
     })),
   );
+  const orderHistory = [...orders].sort(
+    (left, right) => right.createdAt - left.createdAt,
+  );
+  const productionTotals = orderHistory
+    .filter((order) => order.status === 'preparing' || order.status === 'served')
+    .flatMap((order) => Object.entries(order.selections))
+    .filter(([, quantity]) => quantity > 0)
+    .reduce<Record<string, number>>((totals, [itemId, quantity]) => {
+      totals[itemId] = (totals[itemId] || 0) + quantity;
+      return totals;
+    }, {});
   const lanes: {
     status: TaskStatus;
     label: string;
@@ -2614,6 +2626,70 @@ function SchedulerBoard({
           </p>
         </section>
       )}
+      <section className="service-record">
+        <header>
+          <div>
+            <p className="scheduler-label">Service record</p>
+            <h3 className="font-display">Everything you made</h3>
+          </div>
+          <span>{orderHistory.length} total orders</span>
+        </header>
+        {Object.keys(productionTotals).length > 0 && (
+          <div className="production-totals" aria-label="Production totals">
+            {Object.entries(productionTotals).map(([itemId, quantity]) => (
+              <span key={itemId}>
+                <b>{quantity}×</b>
+                {menu.items.find((item) => item.id === itemId)?.name ||
+                  'Menu item'}
+              </span>
+            ))}
+          </div>
+        )}
+        {orderHistory.length ? (
+          <div className="service-record-list">
+            {orderHistory.map((order) => (
+              <article key={order.id}>
+                <div className="service-record-top">
+                  <div>
+                    <strong>{order.guestName}</strong>
+                    <span suppressHydrationWarning>
+                      {new Date(order.createdAt).toLocaleTimeString([], {
+                        hour: 'numeric',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+                  <b className={`record-status record-${order.status}`}>
+                    {order.status === 'new'
+                      ? 'Waiting'
+                      : order.status === 'preparing'
+                        ? 'In progress'
+                        : order.status === 'served'
+                          ? 'Served'
+                          : 'Cancelled'}
+                  </b>
+                </div>
+                <ul>
+                  {Object.entries(order.selections)
+                    .filter(([, quantity]) => quantity > 0)
+                    .map(([itemId, quantity]) => (
+                      <li key={itemId}>
+                        <b>{quantity}×</b>
+                        {menu.items.find((item) => item.id === itemId)?.name ||
+                          'Menu item'}
+                      </li>
+                    ))}
+                </ul>
+                {order.note && <p>“{order.note}”</p>}
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="pipeline-empty compact">
+            <ListChecks size={18} /> Orders you accept will be kept here.
+          </div>
+        )}
+      </section>
     </div>
   );
 }
