@@ -917,71 +917,6 @@ export default function Home() {
       notify('Verify the text code first, or clear the optional phone number');
       return;
     }
-    // Names are deliberately not globally searchable by guests. Instead, when
-    // a shared device has already placed an active order for this name, let the
-    // person decide whether to add dishes to that order or create another one.
-    if (!editingOrderId) {
-      const existingOrder = rememberedOrders
-        .filter(
-          (order) =>
-            order.status === 'new' &&
-            guestNameKey(order.guestName) === guestNameKey(guestName),
-        )
-        .sort((left, right) => right.createdAt - left.createdAt)[0];
-      if (existingOrder) {
-        const sameGuest = window.confirm(
-          `${existingOrder.guestName} already has an active order on this device. Is this the same guest?\n\nChoose OK to add these items to their existing order, or Cancel to create a separate order.`,
-        );
-        if (sameGuest) {
-          const selections = { ...existingOrder.selections };
-          Object.entries(cart).forEach(([itemId, quantity]) => {
-            selections[itemId] = (selections[itemId] || 0) + quantity;
-          });
-          const amended: Order = {
-            ...existingOrder,
-            selections,
-            note: note.trim() || existingOrder.note,
-            updatedAt: Date.now(),
-            revision: (existingOrder.revision || 1) + 1,
-          };
-          if (firebaseConfigured) {
-            const [{ getApp }, store] = await Promise.all([
-              import('firebase/app'),
-              import('firebase/firestore'),
-            ]);
-            await store.updateDoc(
-              store.doc(
-                store.getFirestore(getApp()),
-                'events',
-                menu.id,
-                'orders',
-                existingOrder.id,
-              ),
-              {
-                selections,
-                note: amended.note,
-                updatedAt: store.serverTimestamp(),
-                revision: store.increment(1),
-              },
-            );
-          } else {
-            const next = orders.map((order) =>
-              order.id === amended.id ? amended : order,
-            );
-            setOrders(next);
-            shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
-          }
-          setRememberedOrder(amended);
-          setRememberedOrders((current) =>
-            current.map((order) =>
-              order.id === amended.id ? amended : order,
-            ),
-          );
-          showSubmissionConfirmation('updated');
-          return;
-        }
-      }
-    }
     if (editingOrderId && rememberedOrder) {
       const updated: Order = {
         ...rememberedOrder,
@@ -1026,7 +961,6 @@ export default function Home() {
     const createdAt = Date.now();
     const orderId = crypto.randomUUID();
     let guestUid = 'preview-device';
-    let guestLabel: string | undefined;
     if (firebaseConfigured) {
       const [{ getApp }, authModule] = await Promise.all([
         import('firebase/app'),
@@ -1048,10 +982,9 @@ export default function Home() {
       const guestUids = (nameRecord.data()?.guestUids || []) as string[];
       if (guestUids.some((uid) => uid !== guestUid)) {
         const sameGuest = window.confirm(
-          `${guestName.trim()} is already being used from another device. Is this the same guest?\n\nChoose OK to keep the same name, or Cancel to distinguish this guest for the host.`,
+          `${guestName.trim()} is already being used from another device. Is this the same guest?\n\nChoose OK for “I’m the same person,” or Cancel to return and use a different name.`,
         );
-        if (!sameGuest)
-          guestLabel = `${guestName.trim()} · guest ${guestUids.length + 1}`;
+        if (!sameGuest) return;
       }
       await store.setDoc(
         nameRef,
@@ -1062,7 +995,6 @@ export default function Home() {
     const newOrder: Order = {
       id: orderId,
       guestName: guestName.trim(),
-      ...(guestLabel ? { guestLabel } : {}),
       selections: cart,
       note: note.trim(),
       status: 'new',
