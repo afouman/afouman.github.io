@@ -409,6 +409,7 @@ export default function Home() {
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
   const [events, setEvents] = useState<EventMenu[]>([demoMenu]);
   const [orders, setOrders] = useState<Order[]>(sampleOrders);
+  const [eventIncomingCounts, setEventIncomingCounts] = useState<Record<string, number>>({});
   const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [guestName, setGuestName] = useState('');
@@ -586,6 +587,7 @@ export default function Home() {
       );
       let unsubOrders = () => {};
       let unsubEvents = () => {};
+      let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
       if (
         mode === 'host' &&
@@ -602,6 +604,19 @@ export default function Home() {
               (d) => ({ id: d.id, ...d.data() }) as EventMenu,
             );
             setEvents(ownedEvents);
+            unsubEventOrderCounts.forEach((unsubscribe) => unsubscribe());
+            unsubEventOrderCounts = ownedEvents.map((event) =>
+              store.onSnapshot(
+                store.collection(db, 'events', event.id, 'orders'),
+                (ordersSnapshot) =>
+                  setEventIncomingCounts((current) => ({
+                    ...current,
+                    [event.id]: ordersSnapshot.docs.filter(
+                      (entry) => entry.data().status === 'new',
+                    ).length,
+                  })),
+              ),
+            );
             if (
               ownedEvents.length &&
               !ownedEvents.some((event) => event.id === eventId)
@@ -662,6 +677,7 @@ export default function Home() {
       stop = () => {
         unsubMenu();
         unsubEvents();
+        unsubEventOrderCounts.forEach((unsubscribe) => unsubscribe());
         unsubOrders();
         unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
@@ -1496,6 +1512,7 @@ export default function Home() {
           events={events}
           menu={menu}
           orders={orders}
+          eventIncomingCounts={eventIncomingCounts}
           editing={editing}
           setEditing={setEditing}
           setMenu={setMenu}
@@ -2085,6 +2102,7 @@ function HostWorkspace({
   events,
   menu,
   orders,
+  eventIncomingCounts,
   editing,
   setEditing,
   setMenu,
@@ -2105,6 +2123,7 @@ function HostWorkspace({
   events: EventMenu[];
   menu: EventMenu;
   orders: Order[];
+  eventIncomingCounts: Record<string, number>;
   editing: boolean;
   setEditing: (value: boolean) => void;
   setMenu: (menu: EventMenu) => void;
@@ -2175,7 +2194,12 @@ function HostWorkspace({
                     {event.accepting ? 'Live' : 'Closed'}
                   </span>
                   <strong className="font-display">{event.title}</strong>
-                  <small>{event.date}</small>
+                  <small>
+                    {eventIncomingCounts[event.id]
+                      ? `${eventIncomingCounts[event.id]} incoming · `
+                      : ''}
+                    {event.date}
+                  </small>
                 </button>
               ))}
             </div>
