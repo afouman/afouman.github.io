@@ -13,19 +13,26 @@ service cloud.firestore {
       return isRealAccount()
         && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com';
     }
+    function canManageEvent(eventId) {
+      return isHost(eventId) || isApprovedHost();
+    }
 
     match /events/{eventId} {
       allow read: if true;
       allow create: if isApprovedHost() && request.resource.data.ownerUid == request.auth.uid;
-      allow update: if isHost(eventId) && request.resource.data.ownerUid == resource.data.ownerUid;
-      allow delete: if isHost(eventId);
+      // The approved host can administer events created before the host
+      // account was moved to its current email. The original owner ID stays
+      // immutable, so a guest cannot claim an event.
+      allow update: if canManageEvent(eventId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if canManageEvent(eventId);
 
       match /orders/{orderId} {
         allow create: if signedIn()
           && get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
           && request.resource.data.keys().hasOnly([
             'id', 'guestName', 'selections', 'note', 'status', 'createdAt',
-            'updatedAt', 'guestUid', 'revision'
+            'updatedAt', 'guestUid', 'guestLabel', 'revision'
           ])
           && request.resource.data.id == orderId
           && request.resource.data.status == 'new'
@@ -39,9 +46,9 @@ service cloud.firestore {
           && request.resource.data.note is string
           && request.resource.data.note.size() <= 500
           && request.resource.data.selections is map;
-        allow get: if isHost(eventId) || (signedIn() && resource.data.guestUid == request.auth.uid);
-        allow list: if isHost(eventId);
-        allow update: if isHost(eventId) || (
+        allow get: if canManageEvent(eventId) || (signedIn() && resource.data.guestUid == request.auth.uid);
+        allow list: if canManageEvent(eventId);
+        allow update: if canManageEvent(eventId) || (
           signedIn()
           && resource.data.guestUid == request.auth.uid
           && resource.data.status == 'new'
@@ -65,10 +72,23 @@ service cloud.firestore {
             || request.resource.data.cancelledAt == request.time
           )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestName', 'selections', 'note', 'status', 'updatedAt', 'cancelledAt', 'revision'
+            'guestName', 'guestLabel', 'selections', 'note', 'status', 'updatedAt', 'cancelledAt', 'revision'
           ])
         );
-        allow delete: if isHost(eventId);
+        allow delete: if canManageEvent(eventId);
+      }
+
+      match /name-index/{nameHash} {
+        allow get: if signedIn();
+        allow create: if signedIn()
+          && request.resource.data.keys().hasOnly(['guestUids', 'updatedAt'])
+          && request.resource.data.guestUids.size() == 1
+          && request.resource.data.guestUids[0] == request.auth.uid;
+        allow update: if signedIn()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestUids', 'updatedAt'])
+          && request.resource.data.guestUids.hasAll(resource.data.guestUids)
+          && request.resource.data.guestUids.hasAll([request.auth.uid])
+          && request.resource.data.guestUids.size() <= resource.data.guestUids.size() + 1;
       }
     }
   }

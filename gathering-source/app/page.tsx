@@ -74,6 +74,7 @@ type OrderTask = {
 type Order = {
   id: string;
   guestName: string;
+  guestLabel?: string;
   selections: Record<string, number>;
   note: string;
   status: OrderStatus;
@@ -405,6 +406,14 @@ function saveReceipt(eventId: string, orderId: string, createdAt: number) {
 }
 
 const guestNameKey = (name: string) => name.trim().toLocaleLowerCase();
+const guestDisplayName = (order: Order) => order.guestLabel || order.guestName;
+async function guestNameIndexId(name: string) {
+  const bytes = new TextEncoder().encode(guestNameKey(name));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
 
 export default function Home() {
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
@@ -1017,6 +1026,7 @@ export default function Home() {
     const createdAt = Date.now();
     const orderId = crypto.randomUUID();
     let guestUid = 'preview-device';
+    let guestLabel: string | undefined;
     if (firebaseConfigured) {
       const [{ getApp }, authModule] = await Promise.all([
         import('firebase/app'),
@@ -1025,10 +1035,34 @@ export default function Home() {
       const auth = authModule.getAuth(getApp());
       if (!auth.currentUser) await authModule.signInAnonymously(auth);
       guestUid = auth.currentUser!.uid;
+      const store = await import('firebase/firestore');
+      const db = store.getFirestore(getApp());
+      const nameRef = store.doc(
+        db,
+        'events',
+        menu.id,
+        'name-index',
+        await guestNameIndexId(guestName),
+      );
+      const nameRecord = await store.getDoc(nameRef);
+      const guestUids = (nameRecord.data()?.guestUids || []) as string[];
+      if (guestUids.some((uid) => uid !== guestUid)) {
+        const sameGuest = window.confirm(
+          `${guestName.trim()} is already being used from another device. Is this the same guest?\n\nChoose OK to keep the same name, or Cancel to distinguish this guest for the host.`,
+        );
+        if (!sameGuest)
+          guestLabel = `${guestName.trim()} · guest ${guestUids.length + 1}`;
+      }
+      await store.setDoc(
+        nameRef,
+        { guestUids: store.arrayUnion(guestUid), updatedAt: store.serverTimestamp() },
+        { merge: true },
+      );
     }
     const newOrder: Order = {
       id: orderId,
       guestName: guestName.trim(),
+      guestLabel,
       selections: cart,
       note: note.trim(),
       status: 'new',
@@ -2637,9 +2671,9 @@ function SchedulerBoard({
         }
       >
     >((groups, order) => {
-      const key = order.guestName.trim().toLowerCase() || 'unnamed guest';
+      const key = guestDisplayName(order).trim().toLowerCase() || 'unnamed guest';
       const group = groups[key] || {
-        guestName: order.guestName,
+        guestName: guestDisplayName(order),
         orders: [],
         selections: {},
         latestAt: order.createdAt,
@@ -2784,7 +2818,7 @@ function SchedulerBoard({
                         minute: '2-digit',
                       })}
                     </span>
-                    <h4 className="font-display">{order.guestName}</h4>
+                    <h4 className="font-display">{guestDisplayName(order)}</h4>
                   </div>
                   <i />
                 </div>
@@ -2848,7 +2882,7 @@ function SchedulerBoard({
                   return (
                     <article key={task.id} className="task-ticket">
                       <div className="task-priority">
-                        <span>{order.guestName}</span>
+                        <span>{guestDisplayName(order)}</span>
                         <b>#{String(task.sequence + 1).padStart(2, '0')}</b>
                       </div>
                       <h4 className="font-display">
@@ -2936,7 +2970,7 @@ function SchedulerBoard({
               .slice(-6)
               .map(
                 (view) =>
-                  `${view.item?.name || 'Item'} for ${view.order.guestName}`,
+                  `${view.item?.name || 'Item'} for ${guestDisplayName(view.order)}`,
               )
               .join(' · ')}
           </p>
