@@ -760,9 +760,14 @@ button:disabled {
   grid-row: 2;
 }
 .menu-item-fields > .sold-out-toggle,
-.menu-item-fields > .new-category-row,
-.menu-item-fields > .item-resource-editor {
+.menu-item-fields > .new-category-row {
   grid-column: 1 / -1;
+}
+.menu-item-fields > .item-resource-editor {
+  grid-column: 2;
+  grid-row: 3;
+  margin-top: 0.15rem;
+  padding-top: 0.7rem;
 }
 .menu-item-fields label > span {
   display: block;
@@ -800,6 +805,21 @@ button:disabled {
   outline: 0;
   font: inherit;
   font-weight: 700;
+}
+.prep-input button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 0.48rem;
+  background: rgb(75 17 29/0.08);
+  color: var(--wine);
+}
+.prep-input button:hover {
+  background: var(--wine);
+  color: white;
 }
 .prep-input input[type='number'] {
   appearance: textfield;
@@ -918,7 +938,7 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
   }
-  .remembered-order {
+.remembered-order {
     right: 0.75rem;
     bottom: calc(5.6rem + env(safe-area-inset-bottom));
     width: calc(100% - 1.5rem);
@@ -950,6 +970,39 @@ button:disabled {
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
   }
 }
+.minimize-order-button {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(29 29 25/0.06);
+  color: rgb(29 29 25/0.55);
+}
+.minimize-order-button:hover {
+  background: var(--wine);
+  color: white;
+}
+.remembered-order-minimized {
+  position: fixed;
+  z-index: 35;
+  right: 1.25rem;
+  bottom: 6.2rem;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--wine);
+  color: #fff8eb;
+  box-shadow: 0 16px 36px rgb(45 37 28/0.22);
+}
+.remembered-order-minimized:hover { background: var(--tomato); }
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;

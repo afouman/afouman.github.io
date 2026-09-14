@@ -2306,6 +2306,7 @@ function RememberedOrderCard({
   onCancel: (order: Order) => void;
 }) {
   const [activeOrderId, setActiveOrderId] = useState(orders[0]?.id || '');
+  const [minimized, setMinimized] = useState(false);
   const order = orders.find((entry) => entry.id === activeOrderId) || orders[0];
   const acknowledgementKey = `gather-ready-ack:${order?.id || ''}`;
   const [acknowledgedTasks, setAcknowledgedTasks] = useState<string[]>([]);
@@ -2358,6 +2359,17 @@ function RememberedOrderCard({
     setAcknowledgedTasks(next);
     localStorage.setItem(acknowledgementKey, JSON.stringify(next));
   };
+  if (minimized) {
+    return (
+      <button
+        className="remembered-order-minimized"
+        onClick={() => setMinimized(false)}
+        aria-label="Show your order summary"
+      >
+        <ShoppingBag size={20} />
+      </button>
+    );
+  }
   return (
     <aside
       className={`remembered-order ${readyTasks.length ? 'has-ready-items' : ''}`}
@@ -2379,6 +2391,14 @@ function RememberedOrderCard({
           </div>
         </nav>
       )}
+      <button
+        className="minimize-order-button"
+        onClick={() => setMinimized(true)}
+        aria-label="Minimize your order summary"
+        title="Minimize"
+      >
+        <XCircle size={18} />
+      </button>
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">
@@ -3383,6 +3403,11 @@ function MenuEditor({
                 <label>
                   <span>Preparation time</span>
                   <div className="prep-input">
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'prepMinutes', Math.max(1, (item.prepMinutes ?? 10) - 1))}
+                      aria-label={`Decrease ${item.name || 'dish'} preparation time`}
+                    ><Minus size={14} /></button>
                     <input
                       aria-label={`Dish ${index + 1} preparation minutes`}
                       type="number"
@@ -3407,12 +3432,22 @@ function MenuEditor({
                         updateItem(item.id, 'prepMinutes', 10)
                       }
                     />
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'prepMinutes', Math.min(240, (item.prepMinutes ?? 10) + 1))}
+                      aria-label={`Increase ${item.name || 'dish'} preparation time`}
+                    ><Plus size={14} /></button>
                     <b>min</b>
                   </div>
                 </label>
                 <label>
                   <span>Total servings for this event</span>
                   <div className="prep-input">
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'maxServings', Math.max(0, (item.maxServings ?? 0) - 1))}
+                      aria-label={`Decrease ${item.name || 'dish'} servings`}
+                    ><Minus size={14} /></button>
                     <input
                       aria-label={`Dish ${index + 1} servings available`}
                       type="number"
@@ -3431,6 +3466,11 @@ function MenuEditor({
                         )
                       }
                     />
+                    <button
+                      type="button"
+                      onClick={() => updateItem(item.id, 'maxServings', Math.min(999, (item.maxServings ?? 0) + 1))}
+                      aria-label={`Increase ${item.name || 'dish'} servings`}
+                    ><Plus size={14} /></button>
                     <b>max</b>
                   </div>
                   {item.maxServings != null && (
