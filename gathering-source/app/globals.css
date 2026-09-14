@@ -86,7 +86,8 @@ button:disabled {
 }
 .qty {
   display: grid;
-  grid-template-columns: 34px 28px 34px;
+  grid-template-columns: 48px 44px 48px;
+  gap: 0.28rem;
   align-items: center;
   text-align: center;
   flex: none;
@@ -95,8 +96,8 @@ button:disabled {
 .icon-button {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 48px;
+  height: 48px;
   border: 1px solid rgb(0 0 0/0.1);
   border-radius: 50%;
   background: white;
@@ -1222,9 +1223,12 @@ button:disabled {
   margin: 0 1.25rem 1.35rem 0;
 }
 .guest-mode .qty {
-  grid-template-columns: 36px 28px 36px;
+  grid-template-columns: 52px 46px 52px;
+  gap: 0.35rem;
 }
 .guest-mode .qty button {
+  width: 52px;
+  height: 52px;
   border-color: rgb(75 17 29/0.14);
   background: transparent;
   color: var(--wine);
