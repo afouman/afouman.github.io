@@ -1232,59 +1232,38 @@ export default function Home() {
       notify('Please choose an image smaller than 5 MB');
       return;
     }
-    if (firebaseConfigured) {
-      if (!process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET) {
-        notify('Add the Firebase Storage bucket to enable uploads');
-        return;
-      }
-      const [{ getApp }, storageModule] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/storage'),
-      ]);
-      const extension =
-        file.name
-          .split('.')
-          .pop()
-          ?.replace(/[^a-z0-9]/gi, '')
-          .toLowerCase() || 'jpg';
-      const imagePath = `events/${menu.id}/items/${itemId}-${crypto.randomUUID()}.${extension}`;
-      const imageRef = storageModule.ref(
-        storageModule.getStorage(getApp()),
-        imagePath,
-      );
-      await storageModule.uploadBytes(imageRef, file, {
-        contentType: file.type,
-      });
-      const imageUrl = await storageModule.getDownloadURL(imageRef);
-      setMenu((current) => ({
-        ...current,
-        items: current.items.map((item) =>
-          item.id === itemId ? { ...item, imageUrl, imagePath } : item,
-        ),
-      }));
-    } else {
-      if (file.size > 1.5 * 1024 * 1024) {
-        notify('For the local preview, use an image smaller than 1.5 MB');
-        return;
-      }
-      const imageUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () =>
-          typeof reader.result === 'string'
-            ? resolve(reader.result)
-            : reject(new Error('Could not read image'));
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-      setMenu((current) => ({
-        ...current,
-        items: current.items.map((item) =>
-          item.id === itemId
-            ? { ...item, imageUrl, imagePath: undefined }
-            : item,
-        ),
-      }));
+    // Keep item art in the event document. This makes images work on GitHub Pages
+    // without requiring a paid Firebase Storage bucket. Resize first so a menu
+    // remains comfortably below Firestore's 1 MB document limit.
+    const imageUrl = await new Promise<string>((resolve, reject) => {
+      const source = URL.createObjectURL(file);
+      const image = new window.Image();
+      image.onload = () => {
+        const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+        const scale = Math.min(1, 900 / longestSide);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(source);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      };
+      image.onerror = () => {
+        URL.revokeObjectURL(source);
+        reject(new Error('Could not read image'));
+      };
+      image.src = source;
+    });
+    if (imageUrl.length > 240_000) {
+      notify('That image is still too detailed — choose a simpler or smaller photo');
+      return;
     }
+    setMenu((current) => ({
+      ...current,
+      items: current.items.map((item) =>
+        item.id === itemId ? { ...item, imageUrl, imagePath: undefined } : item,
+      ),
+    }));
     notify('Image added — save the menu when ready');
   }
 
