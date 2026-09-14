@@ -2376,6 +2376,34 @@ function SchedulerBoard({
   const orderHistory = [...orders].sort(
     (left, right) => right.createdAt - left.createdAt,
   );
+  const guestHistory = Object.values(
+    orderHistory.reduce<
+      Record<
+        string,
+        {
+          guestName: string;
+          orders: Order[];
+          selections: Record<string, number>;
+          latestAt: number;
+        }
+      >
+    >((groups, order) => {
+      const key = order.guestName.trim().toLowerCase() || 'unnamed guest';
+      const group = groups[key] || {
+        guestName: order.guestName,
+        orders: [],
+        selections: {},
+        latestAt: order.createdAt,
+      };
+      group.orders.push(order);
+      group.latestAt = Math.max(group.latestAt, order.createdAt);
+      Object.entries(order.selections).forEach(([itemId, quantity]) => {
+        group.selections[itemId] = (group.selections[itemId] || 0) + quantity;
+      });
+      groups[key] = group;
+      return groups;
+    }, {}),
+  ).sort((left, right) => right.latestAt - left.latestAt);
   const productionTotals = orderHistory
     .filter((order) => order.status === 'preparing' || order.status === 'served')
     .flatMap((order) => Object.entries(order.selections))
@@ -2663,7 +2691,7 @@ function SchedulerBoard({
             <p className="scheduler-label">Service record</p>
             <h3 className="font-display">Everything you made</h3>
           </div>
-          <span>{orderHistory.length} total orders</span>
+          <span>{orderHistory.length} orders · {guestHistory.length} guests</span>
         </header>
         {Object.keys(productionTotals).length > 0 && (
           <div className="production-totals" aria-label="Production totals">
@@ -2678,30 +2706,43 @@ function SchedulerBoard({
         )}
         {orderHistory.length ? (
           <div className="service-record-list">
-            {orderHistory.map((order) => (
-              <article key={order.id}>
+            {guestHistory.map((guest) => {
+              const statuses = guest.orders.map((order) => order.status);
+              const status = statuses.includes('preparing')
+                ? 'preparing'
+                : statuses.includes('new')
+                  ? 'new'
+                  : statuses.every((entry) => entry === 'served')
+                    ? 'served'
+                    : 'cancelled';
+              const notes = guest.orders
+                .map((order) => order.note.trim())
+                .filter(Boolean);
+              return (
+              <article key={guest.guestName.toLowerCase()}>
                 <div className="service-record-top">
                   <div>
-                    <strong>{order.guestName}</strong>
+                    <strong>{guest.guestName}</strong>
                     <span suppressHydrationWarning>
-                      {new Date(order.createdAt).toLocaleTimeString([], {
+                      {guest.orders.length} order{guest.orders.length === 1 ? '' : 's'} · latest{' '}
+                      {new Date(guest.latestAt).toLocaleTimeString([], {
                         hour: 'numeric',
                         minute: '2-digit',
                       })}
                     </span>
                   </div>
-                  <b className={`record-status record-${order.status}`}>
-                    {order.status === 'new'
+                  <b className={`record-status record-${status}`}>
+                    {status === 'new'
                       ? 'Waiting'
-                      : order.status === 'preparing'
+                      : status === 'preparing'
                         ? 'In progress'
-                        : order.status === 'served'
+                        : status === 'served'
                           ? 'Served'
                           : 'Cancelled'}
                   </b>
                 </div>
                 <ul>
-                  {Object.entries(order.selections)
+                  {Object.entries(guest.selections)
                     .filter(([, quantity]) => quantity > 0)
                     .map(([itemId, quantity]) => (
                       <li key={itemId}>
@@ -2711,9 +2752,10 @@ function SchedulerBoard({
                       </li>
                     ))}
                 </ul>
-                {order.note && <p>“{order.note}”</p>}
+                {notes.length > 0 && <p>“{notes.join(' · ')}”</p>}
               </article>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="pipeline-empty compact">
