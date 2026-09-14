@@ -521,6 +521,23 @@ button:disabled {
   box-shadow: 0 14px 34px rgb(217 84 61/0.16);
   opacity: 0.6;
 }
+.menu-editor-card.is-drop-target {
+  border-color: rgb(217 84 61/0.58);
+  background: #fff8f2;
+}
+.menu-editor-card.is-drop-target::before {
+  position: absolute;
+  z-index: 4;
+  top: -0.42rem;
+  right: 1.25rem;
+  left: 1.25rem;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--tomato);
+  box-shadow: 0 0 0 4px rgb(217 84 61/0.12);
+  content: '';
+  animation: drop-target-pulse 0.8s ease-in-out infinite alternate;
+}
 .drag-handle {
   position: absolute;
   z-index: 2;
@@ -542,6 +559,10 @@ button:disabled {
 .drag-handle:hover {
   border-color: rgb(217 84 61/0.35);
   color: var(--tomato);
+}
+@keyframes drop-target-pulse {
+  from { opacity: 0.65; transform: scaleX(0.94); }
+  to { opacity: 1; transform: scaleX(1); }
 }
 .menu-image-editor {
   position: relative;

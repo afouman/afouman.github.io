@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
 import {
   ArrowLeft,
@@ -2817,7 +2817,31 @@ function MenuEditor({
   );
   const [uploadingItem, setUploadingItem] = useState<string | null>(null);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  const cardRefs = useRef(new Map<string, HTMLElement>());
+  const previousCardPositions = useRef(new Map<string, DOMRect>());
   const categories = menuCategories(menu);
+  useLayoutEffect(() => {
+    const nextPositions = new Map<string, DOMRect>();
+    cardRefs.current.forEach((element, id) => {
+      const next = element.getBoundingClientRect();
+      const previous = previousCardPositions.current.get(id);
+      if (previous) {
+        const deltaY = previous.top - next.top;
+        if (Math.abs(deltaY) > 1) {
+          element.animate(
+            [
+              { transform: `translateY(${deltaY}px)`, boxShadow: '0 18px 38px rgb(217 84 61 / 0.14)' },
+              { transform: 'translateY(0)', boxShadow: '0 10px 28px rgb(50 43 31 / 0.04)' },
+            ],
+            { duration: 260, easing: 'cubic-bezier(.2,.8,.2,1)' },
+          );
+        }
+      }
+      nextPositions.set(id, next);
+    });
+    previousCardPositions.current = nextPositions;
+  }, [menu.items]);
   const updateItem = (
     id: string,
     field: keyof MenuItem,
@@ -3030,13 +3054,24 @@ function MenuEditor({
           // oxlint-disable-next-line jsx-a11y/no-noninteractive-element-interactions
           <article
             key={item.id}
-            className={`menu-editor-card ${draggingItemId === item.id ? 'is-dragging' : ''}`}
-            onDragOver={(event) => event.preventDefault()}
+            ref={(element) => {
+              if (element) cardRefs.current.set(item.id, element);
+              else cardRefs.current.delete(item.id);
+            }}
+            className={`menu-editor-card ${draggingItemId === item.id ? 'is-dragging' : ''} ${dragOverItemId === item.id ? 'is-drop-target' : ''}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              if (!draggingItemId || draggingItemId === item.id) return;
+              if (dragOverItemId !== item.id) {
+                setDragOverItemId(item.id);
+                reorderItems(draggingItemId, item.id);
+              }
+            }}
             onDrop={(event) => {
               event.preventDefault();
-              const draggedId = event.dataTransfer.getData('text/plain');
-              if (draggedId) reorderItems(draggedId, item.id);
               setDraggingItemId(null);
+              setDragOverItemId(null);
             }}
           >
             <div className="menu-image-editor">
@@ -3322,8 +3357,12 @@ function MenuEditor({
                 event.dataTransfer.effectAllowed = 'move';
                 event.dataTransfer.setData('text/plain', item.id);
                 setDraggingItemId(item.id);
+                setDragOverItemId(item.id);
               }}
-              onDragEnd={() => setDraggingItemId(null)}
+              onDragEnd={() => {
+                setDraggingItemId(null);
+                setDragOverItemId(null);
+              }}
             >
               <GripVertical size={18} />
             </button>
