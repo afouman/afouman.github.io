@@ -3330,14 +3330,15 @@ function MenuEditor({
                 <span>
                   Description <em>optional</em>
                 </span>
-                <input
+                <textarea
                   aria-label={`Dish ${index + 1} description`}
-                  className="editor-input description-input"
+                  className="editor-input description-input description-textarea"
                   value={itemDescription(item)}
                   placeholder={DESCRIPTION_EXAMPLE}
                   onChange={(e) =>
                     updateItem(item.id, 'description', e.target.value)
                   }
+                  rows={3}
                 />
               </label>
               <div className="grid gap-3 sm:grid-cols-2">
