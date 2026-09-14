@@ -3021,22 +3021,18 @@ function MenuEditor({
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
   const previousCardPositions = useRef(new Map<string, DOMRect>());
+  const animateReorderRef = useRef(false);
   const categories = menuCategories(menu);
   useLayoutEffect(() => {
     const nextPositions = new Map<string, DOMRect>();
-    // Updating an input must never trigger the drag-and-drop FLIP animation.
-    // It only runs while a dish is actively being moved.
-    if (!draggingItemId) {
-      cardRefs.current.forEach((element, id) => {
-        nextPositions.set(id, element.getBoundingClientRect());
-      });
-      previousCardPositions.current = nextPositions;
-      return;
-    }
+    // Only an actual reorder arms the FLIP animation. Text changes also
+    // replace menu.items, but they must not move or animate the page.
+    const animateReorder = animateReorderRef.current;
+    animateReorderRef.current = false;
     cardRefs.current.forEach((element, id) => {
       const next = element.getBoundingClientRect();
       const previous = previousCardPositions.current.get(id);
-      if (previous) {
+      if (previous && animateReorder) {
         const deltaY = previous.top - next.top;
         if (Math.abs(deltaY) > 1) {
           element.animate(
@@ -3051,7 +3047,7 @@ function MenuEditor({
       nextPositions.set(id, next);
     });
     previousCardPositions.current = nextPositions;
-  }, [menu.items, draggingItemId]);
+  }, [menu.items]);
   const updateItem = (
     id: string,
     field: keyof MenuItem,
@@ -3091,6 +3087,7 @@ function MenuEditor({
     if (from < 0 || to < 0) return;
     const [dragged] = items.splice(from, 1);
     items.splice(to, 0, dragged);
+    animateReorderRef.current = true;
     setMenu({ ...menu, items });
   };
   const addCategory = (itemId: string) => {
