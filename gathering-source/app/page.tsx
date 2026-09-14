@@ -235,9 +235,9 @@ const menuCategories = (menu: EventMenu) => [
   ),
 ];
 const itemDescription = (item: MenuItem) =>
-  item.description?.trim() === DESCRIPTION_EXAMPLE
+  item.description === DESCRIPTION_EXAMPLE
     ? ''
-    : item.description?.trim() || '';
+    : item.description || '';
 const itemPrepMinutes = (item?: MenuItem) =>
   Math.max(1, item?.prepMinutes || 10);
 const formatDateTime = (value: string) =>
@@ -1185,6 +1185,28 @@ export default function Home() {
     setEditing(false);
     notify('Menu saved');
   }
+  async function cancelMenuEdits() {
+    let savedMenu = events.find((event) => event.id === menu.id);
+    if (firebaseConfigured) {
+      try {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        const snapshot = await store.getDoc(
+          store.doc(store.getFirestore(getApp()), 'events', menu.id),
+        );
+        if (snapshot.exists())
+          savedMenu = { id: snapshot.id, ...snapshot.data() } as EventMenu;
+      } catch {
+        notify('Could not reload the saved menu. Your draft is still open.');
+        return;
+      }
+    }
+    if (savedMenu) setMenu(savedMenu);
+    setEditing(false);
+    notify('Changes discarded — the saved menu is restored');
+  }
 
   async function setEventAccepting(accepting: boolean) {
     const previousMenu = menu;
@@ -1397,6 +1419,7 @@ export default function Home() {
           setCreatingEvent={setCreatingEvent}
           setDeletingEvent={setDeletingEvent}
           saveMenu={saveMenu}
+          cancelMenuEdits={cancelMenuEdits}
           uploadItemImage={uploadItemImage}
           acceptOrder={acceptOrder}
           finishTask={finishTask}
@@ -1962,6 +1985,7 @@ function HostWorkspace({
   setCreatingEvent,
   setDeletingEvent,
   saveMenu,
+  cancelMenuEdits,
   uploadItemImage,
   acceptOrder,
   finishTask,
@@ -1979,6 +2003,7 @@ function HostWorkspace({
   setCreatingEvent: (value: boolean) => void;
   setDeletingEvent: (event: EventMenu | null) => void;
   saveMenu: () => Promise<void>;
+  cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
   acceptOrder: (order: Order) => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
@@ -2102,7 +2127,12 @@ function HostWorkspace({
                   <Copy size={16} />
                   <span>Copy link</span>
                 </button>
-                <button onClick={() => setEditing(!editing)} className="edit">
+                <button
+                  onClick={() =>
+                    editing ? void cancelMenuEdits() : setEditing(true)
+                  }
+                  className="edit"
+                >
                   <Settings2 size={16} />
                   <span>{editing ? 'Orders' : 'Edit menu'}</span>
                 </button>
@@ -2120,6 +2150,7 @@ function HostWorkspace({
                 menu={menu}
                 setMenu={setMenu}
                 saveMenu={saveMenu}
+                cancelMenuEdits={cancelMenuEdits}
                 uploadItemImage={uploadItemImage}
               />
             ) : (
@@ -2768,11 +2799,13 @@ function MenuEditor({
   menu,
   setMenu,
   saveMenu,
+  cancelMenuEdits,
   uploadItemImage,
 }: {
   menu: EventMenu;
   setMenu: (menu: EventMenu) => void;
   saveMenu: () => Promise<void>;
+  cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
 }) {
   const [addingCategoryFor, setAddingCategoryFor] = useState<string | null>(
@@ -3377,17 +3410,22 @@ function MenuEditor({
         <p className="text-xs text-black/40">
           Saving updates every open guest tab for this event.
         </p>
-        <button
-          disabled={
-            !menu.title.trim() ||
-            !menu.date.trim() ||
-            menu.items.some((item) => !item.name.trim())
-          }
-          onClick={() => void saveMenu()}
-          className="primary-button disabled:opacity-40"
-        >
-          <Check size={16} /> Save event & menu
-        </button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button onClick={() => void cancelMenuEdits()} className="secondary-button">
+            <XCircle size={16} /> Cancel
+          </button>
+          <button
+            disabled={
+              !menu.title.trim() ||
+              !menu.date.trim() ||
+              menu.items.some((item) => !item.name.trim())
+            }
+            onClick={() => void saveMenu()}
+            className="primary-button disabled:opacity-40"
+          >
+            <Check size={16} /> Save event & menu
+          </button>
+        </div>
       </div>
     </section>
   );
