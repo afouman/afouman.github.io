@@ -373,6 +373,41 @@ button:disabled {
   box-shadow: 0 22px 60px rgb(45 37 28/0.16);
   backdrop-filter: blur(12px);
 }
+.guest-order-tabs {
+  margin: -0.25rem -0.25rem 1rem;
+  border-bottom: 1px solid rgb(0 0 0/0.08);
+  padding: 0 0.25rem 0.8rem;
+}
+.guest-order-tabs > span {
+  display: block;
+  margin-bottom: 0.45rem;
+  color: rgb(29 29 25/0.48);
+  font-size: 0.62rem;
+  font-weight: 850;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.guest-order-tabs > div {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.15rem;
+}
+.guest-order-tabs button {
+  flex: 0 0 auto;
+  border: 1px solid rgb(29 29 25/0.12);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(29 29 25/0.58);
+  padding: 0.35rem 0.58rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+.guest-order-tabs button.active {
+  border-color: var(--wine);
+  background: var(--wine);
+  color: #fff8eb;
+}
 .status-pill {
   border-radius: 999px;
   padding: 0.35rem 0.65rem;

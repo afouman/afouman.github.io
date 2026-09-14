@@ -359,36 +359,41 @@ function shareDemoUpdate(update: DemoUpdate) {
   }
 }
 
-function readReceipt(eventId: string): Receipt | null {
+function readReceipts(eventId: string): Receipt[] {
   try {
     const receipts = JSON.parse(
       localStorage.getItem(RECEIPTS_KEY) || '{}',
-    ) as Record<string, Receipt>;
-    const receipt = receipts[eventId];
-    if (!receipt || receipt.expiresAt <= Date.now()) {
-      if (receipt) {
-        delete receipts[eventId];
-        localStorage.setItem(RECEIPTS_KEY, JSON.stringify(receipts));
-      }
-      return null;
+    ) as Record<string, Receipt | Receipt[]>;
+    // Older versions saved one receipt per event. Preserve it while migrating
+    // to a list, so existing guests do not lose their tracking link.
+    const saved = receipts[eventId];
+    const active = (Array.isArray(saved) ? saved : saved ? [saved] : []).filter(
+      (receipt) => receipt.expiresAt > Date.now(),
+    );
+    if (active.length !== (Array.isArray(saved) ? saved.length : saved ? 1 : 0)) {
+      receipts[eventId] = active;
+      localStorage.setItem(RECEIPTS_KEY, JSON.stringify(receipts));
     }
-    return receipt;
+    return active;
   } catch {
-    return null;
+    return [];
   }
 }
 
 function saveReceipt(eventId: string, orderId: string, createdAt: number) {
-  const receipts = JSON.parse(
-    localStorage.getItem(RECEIPTS_KEY) || '{}',
-  ) as Record<string, Receipt>;
+  const receipts = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || '{}') as Record<
+    string,
+    Receipt | Receipt[]
+  >;
   const receipt = {
     eventId,
     orderId,
     createdAt,
     expiresAt: createdAt + RECEIPT_LIFETIME,
   };
-  receipts[eventId] = receipt;
+  const prior = receipts[eventId];
+  const eventReceipts = Array.isArray(prior) ? prior : prior ? [prior] : [];
+  receipts[eventId] = [...eventReceipts.filter((entry) => entry.orderId !== orderId), receipt];
   localStorage.setItem(RECEIPTS_KEY, JSON.stringify(receipts));
   return receipt;
 }
@@ -405,8 +410,9 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [editing, setEditing] = useState(false);
   const [hostUser, setHostUser] = useState<string | null>(null);
-  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [rememberedOrder, setRememberedOrder] = useState<Order | null>(null);
+  const [rememberedOrders, setRememberedOrders] = useState<Order[]>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [lastAction, setLastAction] = useState<'created' | 'updated'>(
@@ -437,7 +443,7 @@ export default function Home() {
       queueMicrotask(() => setMode('host'));
     const eventId =
       new URLSearchParams(window.location.search).get('event') || demoMenu.id;
-    queueMicrotask(() => setReceipt(readReceipt(eventId)));
+    queueMicrotask(() => setReceipts(readReceipts(eventId)));
   }, []);
 
   useEffect(() => {
@@ -480,11 +486,12 @@ export default function Home() {
       new URLSearchParams(window.location.search).get('event') || menu.id;
     const applyOrders = (next: Order[]) => {
       setOrders(next);
-      const savedReceipt = readReceipt(eventId);
-      setRememberedOrder(
-        savedReceipt
-          ? next.find((order) => order.id === savedReceipt.orderId) || null
-          : null,
+      const savedReceipts = readReceipts(eventId);
+      setReceipts(savedReceipts);
+      setRememberedOrders(
+        savedReceipts
+          .map((receipt) => next.find((order) => order.id === receipt.orderId))
+          .filter((order): order is Order => Boolean(order)),
       );
     };
     const applyEvents = (next: EventMenu[]) => {
@@ -570,7 +577,7 @@ export default function Home() {
       );
       let unsubOrders = () => {};
       let unsubEvents = () => {};
-      let unsubRememberedOrder = () => {};
+      const unsubRememberedOrders: (() => void)[] = [];
       if (
         mode === 'host' &&
         auth.currentUser &&
@@ -620,35 +627,40 @@ export default function Home() {
             ),
         );
       }
-      if (mode === 'guest' && receipt)
-        unsubRememberedOrder = store.onSnapshot(
-          store.doc(db, 'events', eventId, 'orders', receipt.orderId),
-          (snap) =>
-            setRememberedOrder(
-              snap.exists()
-                ? ({
+      if (mode === 'guest' && receipts.length) {
+        receipts.forEach((receipt) => {
+          unsubRememberedOrders.push(
+            store.onSnapshot(
+              store.doc(db, 'events', eventId, 'orders', receipt.orderId),
+              (snap) =>
+                setRememberedOrders((current) => {
+                  const withoutThis = current.filter((order) => order.id !== receipt.orderId);
+                  if (!snap.exists()) return withoutThis;
+                  const order = {
                     id: snap.id,
                     ...snap.data(),
-                    createdAt:
-                      snap.data().createdAt?.toMillis?.() ?? receipt.createdAt,
+                    createdAt: snap.data().createdAt?.toMillis?.() ?? receipt.createdAt,
                     updatedAt: snap.data().updatedAt?.toMillis?.(),
                     cancelledAt: snap.data().cancelledAt?.toMillis?.(),
                     readyAt: snap.data().readyAt?.toMillis?.(),
-                  } as Order)
-                : null,
+                  } as Order;
+                  return [...withoutThis, order].sort((a, b) => b.createdAt - a.createdAt);
+                }),
             ),
-        );
+          );
+        });
+      }
       stop = () => {
         unsubMenu();
         unsubEvents();
         unsubOrders();
-        unsubRememberedOrder();
+        unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
     })().catch(() =>
       setToast('Could not connect to live orders. Showing the preview.'),
     );
     return () => stop();
-  }, [mode, hostUser, receipt, menu.id]);
+  }, [mode, hostUser, receipts, menu.id]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext })
@@ -737,6 +749,8 @@ export default function Home() {
     setEditing(false);
     setCart({});
     setRememberedOrder(null);
+    setRememberedOrders([]);
+    setReceipts([]);
     const nextOrders = firebaseConfigured
       ? []
       : (JSON.parse(
@@ -941,11 +955,12 @@ export default function Home() {
       const next = [newOrder, ...orders];
       setOrders(next);
       shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
-      setRememberedOrder(newOrder);
+      setRememberedOrders((current) => [newOrder, ...current]);
     }
     const savedReceipt = saveReceipt(menu.id, orderId, createdAt);
-    setReceipt(savedReceipt);
+    setReceipts((current) => [...current.filter((entry) => entry.orderId !== savedReceipt.orderId), savedReceipt]);
     setRememberedOrder(newOrder);
+    setRememberedOrders((current) => [newOrder, ...current.filter((order) => order.id !== newOrder.id)]);
     showSubmissionConfirmation('created');
   }
   async function sendPhoneCode() {
@@ -1774,12 +1789,15 @@ export default function Home() {
           </div>
         </div>
       )}
-      {mode === 'guest' && rememberedOrder && !submitted && (
+      {mode === 'guest' && rememberedOrders.length > 0 && !submitted && (
         <RememberedOrderCard
-          order={rememberedOrder}
+          orders={rememberedOrders}
           menu={menu}
-          onEdit={() => beginOrderEdit(rememberedOrder)}
-          onCancel={() => setConfirmingCancel(true)}
+          onEdit={beginOrderEdit}
+          onCancel={(order) => {
+            setRememberedOrder(order);
+            setConfirmingCancel(true);
+          }}
         />
       )}
       {confirmingCancel && rememberedOrder && (
@@ -2183,17 +2201,19 @@ function HostWorkspace({
 }
 
 function RememberedOrderCard({
-  order,
+  orders,
   menu,
   onEdit,
   onCancel,
 }: {
-  order: Order;
+  orders: Order[];
   menu: EventMenu;
-  onEdit: () => void;
-  onCancel: () => void;
+  onEdit: (order: Order) => void;
+  onCancel: (order: Order) => void;
 }) {
-  const acknowledgementKey = `gather-ready-ack:${order.id}`;
+  const [activeOrderId, setActiveOrderId] = useState(orders[0]?.id || '');
+  const order = orders.find((entry) => entry.id === activeOrderId) || orders[0];
+  const acknowledgementKey = `gather-ready-ack:${order?.id || ''}`;
   const [acknowledgedTasks, setAcknowledgedTasks] = useState<string[]>([]);
   useEffect(() => {
     queueMicrotask(() => {
@@ -2208,6 +2228,7 @@ function RememberedOrderCard({
       }
     });
   }, [acknowledgementKey]);
+  if (!order) return null;
   const editable = order.status === 'new';
   const statusLabel: Record<OrderStatus, string> = {
     new: 'Received',
@@ -2247,6 +2268,22 @@ function RememberedOrderCard({
       className={`remembered-order ${readyTasks.length ? 'has-ready-items' : ''}`}
       aria-label="Your saved order"
     >
+      {orders.length > 1 && (
+        <nav className="guest-order-tabs" aria-label="Your orders">
+          <span>{orders.length} orders on this device</span>
+          <div>
+            {orders.map((entry) => (
+              <button
+                key={entry.id}
+                className={entry.id === order.id ? 'active' : ''}
+                onClick={() => setActiveOrderId(entry.id)}
+              >
+                {entry.guestName || 'Guest'}
+              </button>
+            ))}
+          </div>
+        </nav>
+      )}
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="eyebrow">
@@ -2323,10 +2360,10 @@ function RememberedOrderCard({
       )}
       {editable ? (
         <div className="mt-5 flex gap-2">
-          <button onClick={onEdit} className="secondary-button">
+          <button onClick={() => onEdit(order)} className="secondary-button">
             <Pencil size={14} /> Edit
           </button>
-          <button onClick={onCancel} className="cancel-link">
+          <button onClick={() => onCancel(order)} className="cancel-link">
             <XCircle size={14} /> Cancel
           </button>
         </div>
