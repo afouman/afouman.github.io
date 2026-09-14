@@ -450,9 +450,11 @@ export default function Home() {
       location.protocol === 'https:' &&
       'serviceWorker' in navigator
     ) {
-      const serviceWorkerUrl = new URL('sw.js', document.baseURI);
+      // Changing this release marker causes a prompt service-worker update on
+      // GitHub Pages, rather than waiting for the browser's periodic check.
+      const serviceWorkerUrl = new URL('sw.js?v=2', document.baseURI);
       void navigator.serviceWorker
-        .register(serviceWorkerUrl.pathname, { scope: './' })
+        .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
     }
   }, [mode]);
