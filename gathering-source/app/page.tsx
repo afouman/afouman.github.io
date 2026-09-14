@@ -39,6 +39,8 @@ type MenuItem = {
   category: string;
   price: number;
   prepMinutes?: number;
+  maxServings?: number;
+  soldOut?: boolean;
   requirements?: Record<string, number>;
   imageUrl?: string;
   imagePath?: string;
@@ -240,6 +242,10 @@ const itemDescription = (item: MenuItem) =>
     : item.description || '';
 const itemPrepMinutes = (item?: MenuItem) =>
   Math.max(1, item?.prepMinutes || 10);
+const reservedServings = (orders: Order[], itemId: string) =>
+  orders
+    .filter((order) => order.status !== 'cancelled')
+    .reduce((total, order) => total + (order.selections[itemId] || 0), 0);
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
@@ -730,7 +736,12 @@ export default function Home() {
     [menu.items],
   );
   const setQty = (id: string, delta: number) =>
-    setCart((c) => ({ ...c, [id]: Math.max(0, (c[id] || 0) + delta) }));
+    setCart((current) => {
+      const item = menu.items.find((entry) => entry.id === id);
+      const limit = item?.soldOut ? 0 : item?.maxServings;
+      const next = Math.max(0, (current[id] || 0) + delta);
+      return { ...current, [id]: limit == null ? next : Math.min(limit, next) };
+    });
   const notify = (message: string) => {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
@@ -1927,9 +1938,13 @@ function GuestMenu({
               {menu.items
                 .filter((i) => i.category === category)
                 .map((item, itemIndex) => (
+                  (() => {
+                    const unavailable = Boolean(item.soldOut);
+                    const atGuestLimit = item.maxServings != null && (cart[item.id] || 0) >= item.maxServings;
+                    return (
                   <article
                     key={item.id}
-                    className={`menu-card ${item.imageUrl ? 'has-image' : ''} ${cart[item.id] ? 'selected' : ''}`}
+                    className={`menu-card ${item.imageUrl ? 'has-image' : ''} ${cart[item.id] ? 'selected' : ''} ${unavailable ? 'sold-out' : ''}`}
                   >
                     {item.imageUrl && (
                       <Image
@@ -1949,6 +1964,7 @@ function GuestMenu({
                         <div className="flex items-center gap-2">
                           <h3 className="font-display">{item.name}</h3>
                           {item.featured && <Sparkles size={15} />}
+                          {unavailable && <span className="sold-out-badge">Sold out</span>}
                         </div>
                         {itemDescription(item) && (
                           <p>{itemDescription(item)}</p>
@@ -1970,7 +1986,7 @@ function GuestMenu({
                     <div className="qty">
                       <button
                         onClick={() => setQty(item.id, -1)}
-                        disabled={!cart[item.id] || !menu.accepting}
+                        disabled={!cart[item.id] || !menu.accepting || unavailable}
                         aria-label={`Remove ${item.name}`}
                       >
                         <Minus size={15} />
@@ -1978,13 +1994,15 @@ function GuestMenu({
                       <span>{cart[item.id] || 0}</span>
                       <button
                         onClick={() => setQty(item.id, 1)}
-                        disabled={!menu.accepting}
+                        disabled={!menu.accepting || unavailable || atGuestLimit}
                         aria-label={`Add ${item.name}`}
                       >
                         <Plus size={15} />
                       </button>
                     </div>
                   </article>
+                    );
+                  })()
                 ))}
             </div>
           </section>
@@ -2168,6 +2186,7 @@ function HostWorkspace({
             {editing ? (
               <MenuEditor
                 menu={menu}
+                orders={orders}
                 setMenu={setMenu}
                 saveMenu={saveMenu}
                 cancelMenuEdits={cancelMenuEdits}
@@ -2878,12 +2897,14 @@ function matchingResources(resources: EventResource[], query: string) {
 
 function MenuEditor({
   menu,
+  orders,
   setMenu,
   saveMenu,
   cancelMenuEdits,
   uploadItemImage,
 }: {
   menu: EventMenu;
+  orders: Order[];
   setMenu: (menu: EventMenu) => void;
   saveMenu: () => Promise<void>;
   cancelMenuEdits: () => Promise<void>;
@@ -2926,7 +2947,7 @@ function MenuEditor({
   const updateItem = (
     id: string,
     field: keyof MenuItem,
-    value: string | number | undefined,
+    value: string | number | boolean | undefined,
   ) =>
     setMenu({
       ...menu,
@@ -3282,7 +3303,43 @@ function MenuEditor({
                     <b>min</b>
                   </div>
                 </label>
+                <label>
+                  <span>Servings available</span>
+                  <div className="prep-input">
+                    <input
+                      aria-label={`Dish ${index + 1} servings available`}
+                      type="number"
+                      min="0"
+                      max="999"
+                      value={item.maxServings ?? ''}
+                      placeholder="Unlimited"
+                      onChange={(e) =>
+                        updateItem(
+                          item.id,
+                          'maxServings',
+                          e.target.value === ''
+                            ? undefined
+                            : Math.min(999, Math.max(0, Number(e.target.value))),
+                        )
+                      }
+                    />
+                    <b>max</b>
+                  </div>
+                  {item.maxServings != null && (
+                    <small className="inventory-note">
+                      {Math.max(0, item.maxServings - reservedServings(orders, item.id))} remaining · {reservedServings(orders, item.id)} ordered
+                    </small>
+                  )}
+                </label>
               </div>
+              <label className="sold-out-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(item.soldOut)}
+                  onChange={(event) => updateItem(item.id, 'soldOut', event.target.checked)}
+                />
+                <span>Mark this dish sold out</span>
+              </label>
               {addingCategoryFor === item.id && (
                 <div className="new-category-row">
                   <input

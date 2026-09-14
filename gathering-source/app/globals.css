@@ -360,6 +360,40 @@ button:disabled {
   font-weight: 500;
   opacity: 1;
 }
+.inventory-note {
+  display: block;
+  margin: 0.38rem 0 0 0.1rem;
+  color: rgb(33 28 24/0.52);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+.sold-out-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  color: #6f302c;
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+.sold-out-toggle input {
+  accent-color: var(--tomato);
+}
+.menu-card.sold-out {
+  opacity: 0.62;
+}
+.sold-out-badge {
+  flex: none;
+  border-radius: 999px;
+  background: #6d2727;
+  color: #fff7ed;
+  padding: 0.2rem 0.45rem;
+  font-family: var(--font-body);
+  font-size: 0.56rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
 .remembered-order {
   position: fixed;
   z-index: 35;
