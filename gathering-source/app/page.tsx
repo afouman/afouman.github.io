@@ -59,7 +59,7 @@ type EventMenu = {
   ownerUid?: string;
   items: MenuItem[];
 };
-type OrderStatus = 'new' | 'preparing' | 'served' | 'cancelled';
+type OrderStatus = 'new' | 'preparing' | 'served' | 'cancelled' | 'rejected';
 type TaskStatus = 'waiting' | 'preparing' | 'ready' | 'served';
 type OrderTask = {
   id: string;
@@ -244,7 +244,7 @@ const itemPrepMinutes = (item?: MenuItem) =>
   Math.max(1, item?.prepMinutes || 10);
 const reservedServings = (orders: Order[], itemId: string) =>
   orders
-    .filter((order) => order.status !== 'cancelled')
+    .filter((order) => order.status !== 'cancelled' && order.status !== 'rejected')
     .reduce((total, order) => total + (order.selections[itemId] || 0), 0);
 const formatDateTime = (value: string) =>
   new Intl.DateTimeFormat('en-US', {
@@ -1063,6 +1063,41 @@ export default function Home() {
     notify(`${order.guestName}'s items were added to the production queue`);
   }
 
+  async function rejectOrder(order: Order) {
+    const rejected = { ...order, status: 'rejected' as OrderStatus, updatedAt: Date.now() };
+    if (firebaseConfigured) {
+      const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+      await store.updateDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'orders', order.id), {
+        status: 'rejected', updatedAt: store.serverTimestamp(),
+      });
+    } else {
+      const next = orders.map((entry) => entry.id === order.id ? rejected : entry);
+      setOrders(next);
+      shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
+    }
+    notify(`${order.guestName}'s order was rejected`);
+  }
+
+  async function clearOrderHistory() {
+    if (!window.confirm(`Clear all ${orders.length} orders for ${menu.title}? This keeps the menu but permanently removes the order history.`)) return;
+    if (firebaseConfigured) {
+      const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+      const db = store.getFirestore(getApp());
+      const snapshot = await store.getDocs(store.collection(db, 'events', menu.id, 'orders'));
+      const docs = [...snapshot.docs];
+      while (docs.length) {
+        const batch = store.writeBatch(db);
+        docs.splice(0, 450).forEach((entry) => batch.delete(entry.ref));
+        await batch.commit();
+      }
+    } else {
+      shareDemoUpdate({ type: 'orders', eventId: menu.id, value: [] });
+    }
+    setOrders([]);
+    setRememberedOrders([]);
+    notify('Order history cleared');
+  }
+
   async function finishTask(orderId: string, taskId: string) {
     const released = orders.map((order) =>
       order.id === orderId
@@ -1459,6 +1494,8 @@ export default function Home() {
           cancelMenuEdits={cancelMenuEdits}
           uploadItemImage={uploadItemImage}
           acceptOrder={acceptOrder}
+          rejectOrder={rejectOrder}
+          clearOrderHistory={clearOrderHistory}
           finishTask={finishTask}
           serveTask={serveTask}
           setAccepting={setEventAccepting}
@@ -2046,6 +2083,8 @@ function HostWorkspace({
   cancelMenuEdits,
   uploadItemImage,
   acceptOrder,
+  rejectOrder,
+  clearOrderHistory,
   finishTask,
   serveTask,
   setAccepting,
@@ -2064,6 +2103,8 @@ function HostWorkspace({
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
   acceptOrder: (order: Order) => Promise<void>;
+  rejectOrder: (order: Order) => Promise<void>;
+  clearOrderHistory: () => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
   setAccepting: (accepting: boolean) => Promise<void>;
@@ -2227,6 +2268,8 @@ function HostWorkspace({
                   orders={orders}
                   menu={menu}
                   acceptOrder={acceptOrder}
+                  rejectOrder={rejectOrder}
+                  clearOrderHistory={clearOrderHistory}
                   finishTask={finishTask}
                   serveTask={serveTask}
                 />
@@ -2274,6 +2317,7 @@ function RememberedOrderCard({
     preparing: 'Preparing',
     served: 'Served',
     cancelled: 'Cancelled',
+    rejected: 'Not accepted',
   };
   const readyTasks = (order.tasks || []).filter(
     (task) =>
@@ -2290,7 +2334,7 @@ function RememberedOrderCard({
               id: `${itemId}-${index}`,
               itemId,
               status:
-                order.status === 'cancelled'
+                order.status === 'cancelled' || order.status === 'rejected'
                   ? ('served' as TaskStatus)
                   : ('waiting' as TaskStatus),
             })),
@@ -2379,7 +2423,7 @@ function RememberedOrderCard({
                   {progressTasks.filter((entry) => entry.itemId === task.itemId)
                     .length > 1 && ` · ${index + 1}`}
                 </span>
-                <b>{order.status === 'cancelled' ? 'Cancelled' : label[task.status]}</b>
+                <b>{order.status === 'cancelled' ? 'Cancelled' : order.status === 'rejected' ? 'Not accepted' : label[task.status]}</b>
               </li>
             );
           })}
@@ -2408,8 +2452,8 @@ function RememberedOrderCard({
         </div>
       ) : (
         <p className="mt-4 text-xs leading-5 text-black/45">
-          {order.status === 'cancelled'
-            ? 'This order has been cancelled.'
+          {order.status === 'cancelled' || order.status === 'rejected'
+            ? order.status === 'rejected' ? 'This order was not accepted.' : 'This order has been cancelled.'
             : 'Your host is working through your items. We’ll tell you as each one is ready.'}
         </p>
       )}
@@ -2421,12 +2465,16 @@ function SchedulerBoard({
   orders,
   menu,
   acceptOrder,
+  rejectOrder,
+  clearOrderHistory,
   finishTask,
   serveTask,
 }: {
   orders: Order[];
   menu: EventMenu;
   acceptOrder: (order: Order) => Promise<void>;
+  rejectOrder: (order: Order) => Promise<void>;
+  clearOrderHistory: () => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
 }) {
@@ -2629,9 +2677,17 @@ function SchedulerBoard({
                     ))}
                 </ul>
                 {order.note && <p>“{order.note}”</p>}
-                <button onClick={() => void acceptOrder(order)}>
-                  <Sparkles size={15} /> Accept & auto-schedule
-                </button>
+                <div className="incoming-actions">
+                  <button onClick={() => void acceptOrder(order)}>
+                    <Sparkles size={15} /> Accept
+                  </button>
+                  <button
+                    className="reject-order"
+                    onClick={() => void rejectOrder(order)}
+                  >
+                    <XCircle size={15} /> Reject
+                  </button>
+                </div>
               </article>
             ))}
           </div>
@@ -2769,7 +2825,14 @@ function SchedulerBoard({
             <p className="scheduler-label">Service record</p>
             <h3 className="font-display">Everything you made</h3>
           </div>
-          <span>{orderHistory.length} orders · {guestHistory.length} guests</span>
+          <div className="service-record-actions">
+            <span>{orderHistory.length} orders · {guestHistory.length} guests</span>
+            {orderHistory.length > 0 && (
+              <button onClick={() => void clearOrderHistory()}>
+                <Trash2 size={13} /> Clear history
+              </button>
+            )}
+          </div>
         </header>
         {Object.keys(productionTotals).length > 0 && (
           <div className="production-totals" aria-label="Production totals">
@@ -2792,7 +2855,9 @@ function SchedulerBoard({
                   ? 'new'
                   : statuses.every((entry) => entry === 'served')
                     ? 'served'
-                    : 'cancelled';
+                    : statuses.includes('rejected')
+                      ? 'rejected'
+                      : 'cancelled';
               const notes = guest.orders
                 .map((order) => order.note.trim())
                 .filter(Boolean);
@@ -2814,9 +2879,11 @@ function SchedulerBoard({
                       ? 'Waiting'
                       : status === 'preparing'
                         ? 'In progress'
-                        : status === 'served'
-                          ? 'Served'
-                          : 'Cancelled'}
+                          : status === 'served'
+                            ? 'Served'
+                          : status === 'rejected'
+                            ? 'Rejected'
+                            : 'Cancelled'}
                   </b>
                 </div>
                 <ul>

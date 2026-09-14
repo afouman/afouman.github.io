@@ -2118,7 +2118,8 @@ button:disabled {
   font-size: 0.68rem;
   font-style: italic;
 }
-.incoming-ticket > button {
+.incoming-ticket > button,
+.incoming-actions button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2133,8 +2134,47 @@ button:disabled {
   font-size: 0.68rem;
   font-weight: 900;
 }
-.incoming-ticket > button:hover {
+.incoming-ticket > button:hover,
+.incoming-actions button:hover {
   background: var(--tomato);
+}
+.incoming-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 0.45rem;
+  margin-top: auto;
+}
+.incoming-actions button {
+  width: auto;
+  margin-top: 0;
+}
+.incoming-actions .reject-order {
+  background: #ede2d6;
+  color: #782d2b;
+}
+.incoming-actions .reject-order:hover {
+  background: #e7c3bd;
+}
+.service-record-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.service-record-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid rgb(246 240 228/0.18);
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(246 240 228/0.72);
+  padding: 0.35rem 0.55rem;
+  font-size: 0.58rem;
+  font-weight: 850;
+}
+.service-record-actions button:hover {
+  border-color: rgb(242 166 142/0.55);
+  color: var(--peach);
 }
 .pipeline-grid {
   display: grid;
