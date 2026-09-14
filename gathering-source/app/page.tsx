@@ -1062,7 +1062,7 @@ export default function Home() {
     const newOrder: Order = {
       id: orderId,
       guestName: guestName.trim(),
-      guestLabel,
+      ...(guestLabel ? { guestLabel } : {}),
       selections: cart,
       note: note.trim(),
       status: 'new',
