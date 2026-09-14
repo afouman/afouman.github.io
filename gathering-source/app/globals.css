@@ -1874,6 +1874,7 @@ button:disabled {
 }
 .resource-rack,
 .incoming-orders {
+  min-width: 0;
   border: 1px solid rgb(255 255 255/0.08);
   border-radius: 0.35rem;
   background: #171a15;
@@ -1965,9 +1966,10 @@ button:disabled {
   line-height: 1.5;
 }
 .incoming-grid {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: 280px;
+  display: flex;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   gap: 0.7rem;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
@@ -1979,7 +1981,10 @@ button:disabled {
 }
 .incoming-ticket {
   display: flex;
+  width: 280px;
+  min-width: 280px;
   height: 280px;
+  flex: 0 0 280px;
   flex-direction: column;
   border-radius: 0.25rem;
   background: #f2eadc;
