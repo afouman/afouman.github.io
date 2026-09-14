@@ -28,6 +28,7 @@ import {
   SquarePlus,
   Trash2,
   UtensilsCrossed,
+  Users,
   XCircle,
 } from 'lucide-react';
 
@@ -434,6 +435,10 @@ export default function Home() {
   const [rememberedOrders, setRememberedOrders] = useState<Order[]>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [nameConflict, setNameConflict] = useState<{
+    name: string;
+    resolve: (samePerson: boolean) => void;
+  } | null>(null);
   const [lastAction, setLastAction] = useState<'created' | 'updated'>(
     'created',
   );
@@ -784,6 +789,8 @@ export default function Home() {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
   };
+  const confirmSameGuest = (name: string) =>
+    new Promise<boolean>((resolve) => setNameConflict({ name, resolve }));
   const switchMode = (next: 'guest' | 'host') => {
     setMode(next);
     history.replaceState(
@@ -917,6 +924,63 @@ export default function Home() {
       notify('Verify the text code first, or clear the optional phone number');
       return;
     }
+    // This browser already knows which orders it placed. A second order using
+    // the same name is therefore an amendment, not a possible name conflict.
+    if (!editingOrderId) {
+      const existingOrder = rememberedOrders
+        .filter(
+          (order) =>
+            order.status === 'new' &&
+            guestNameKey(order.guestName) === guestNameKey(guestName),
+        )
+        .sort((left, right) => right.createdAt - left.createdAt)[0];
+      if (existingOrder) {
+        const selections = { ...existingOrder.selections };
+        Object.entries(cart).forEach(([itemId, quantity]) => {
+          selections[itemId] = (selections[itemId] || 0) + quantity;
+        });
+        const amended: Order = {
+          ...existingOrder,
+          selections,
+          note: note.trim() || existingOrder.note,
+          updatedAt: Date.now(),
+          revision: (existingOrder.revision || 1) + 1,
+        };
+        if (firebaseConfigured) {
+          const [{ getApp }, store] = await Promise.all([
+            import('firebase/app'),
+            import('firebase/firestore'),
+          ]);
+          await store.updateDoc(
+            store.doc(
+              store.getFirestore(getApp()),
+              'events',
+              menu.id,
+              'orders',
+              existingOrder.id,
+            ),
+            {
+              selections,
+              note: amended.note,
+              updatedAt: store.serverTimestamp(),
+              revision: store.increment(1),
+            },
+          );
+        } else {
+          const next = orders.map((order) =>
+            order.id === amended.id ? amended : order,
+          );
+          setOrders(next);
+          shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
+        }
+        setRememberedOrder(amended);
+        setRememberedOrders((current) =>
+          current.map((order) => (order.id === amended.id ? amended : order)),
+        );
+        showSubmissionConfirmation('updated');
+        return;
+      }
+    }
     if (editingOrderId && rememberedOrder) {
       const updated: Order = {
         ...rememberedOrder,
@@ -981,9 +1045,7 @@ export default function Home() {
       const nameRecord = await store.getDoc(nameRef);
       const guestUids = (nameRecord.data()?.guestUids || []) as string[];
       if (guestUids.some((uid) => uid !== guestUid)) {
-        const sameGuest = window.confirm(
-          `${guestName.trim()} is already being used from another device. Is this the same guest?\n\nChoose OK for “I’m the same person,” or Cancel to return and use a different name.`,
-        );
+        const sameGuest = await confirmSameGuest(guestName.trim());
         if (!sameGuest) return;
       }
       await store.setDoc(
@@ -1949,6 +2011,44 @@ export default function Home() {
           </section>
         </div>
       )}
+      {nameConflict && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/45 p-5 backdrop-blur-sm">
+          <section className="w-full max-w-md rounded-3xl bg-[var(--cream)] p-7 text-center shadow-2xl">
+            <span className="mx-auto grid size-14 place-items-center rounded-full bg-[var(--orange)]/15 text-[var(--orange)]">
+              <Users size={25} />
+            </span>
+            <h2 className="font-display mt-5 text-3xl font-semibold">
+              Is this {nameConflict.name}?
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-black/55">
+              This name already has an order from another device. Confirm only
+              if it belongs to the same guest.
+            </p>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+              <button
+                onClick={() => {
+                  const { resolve } = nameConflict;
+                  setNameConflict(null);
+                  resolve(true);
+                }}
+                className="primary-button justify-center"
+              >
+                I’m the same person
+              </button>
+              <button
+                onClick={() => {
+                  const { resolve } = nameConflict;
+                  setNameConflict(null);
+                  resolve(false);
+                }}
+                className="secondary-button justify-center"
+              >
+                Let me rename
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       {toast && (
         <output className="toast">
           <Check size={15} />
@@ -2581,6 +2681,37 @@ function SchedulerBoard({
         (order.status === 'preparing' && !order.tasks?.length),
     )
     .sort((a, b) => a.createdAt - b.createdAt);
+  const incomingTickets = Object.values(
+    incoming.reduce<
+      Record<
+        string,
+        {
+          guestName: string;
+          orders: Order[];
+          selections: Record<string, number>;
+          createdAt: number;
+          notes: string[];
+        }
+      >
+    >((groups, order) => {
+      const key = guestNameKey(order.guestName) || 'unnamed guest';
+      const ticket = groups[key] || {
+        guestName: guestDisplayName(order),
+        orders: [],
+        selections: {},
+        createdAt: order.createdAt,
+        notes: [],
+      };
+      ticket.orders.push(order);
+      ticket.createdAt = Math.min(ticket.createdAt, order.createdAt);
+      if (order.note && !ticket.notes.includes(order.note)) ticket.notes.push(order.note);
+      Object.entries(order.selections).forEach(([itemId, quantity]) => {
+        ticket.selections[itemId] = (ticket.selections[itemId] || 0) + quantity;
+      });
+      groups[key] = ticket;
+      return groups;
+    }, {}),
+  ).sort((left, right) => left.createdAt - right.createdAt);
   const taskViews = orders.flatMap((order) =>
     (order.tasks || []).map((task) => ({
       order,
@@ -2736,26 +2867,26 @@ function SchedulerBoard({
             <p className="scheduler-label">01 · Accept</p>
             <h3 className="font-display">Incoming orders</h3>
           </div>
-          <span>{incoming.length} waiting</span>
+          <span>{incomingTickets.length} waiting</span>
         </header>
-        {incoming.length ? (
+        {incomingTickets.length ? (
           <div className="incoming-grid">
-            {incoming.map((order) => (
-              <article key={order.id} className="incoming-ticket">
+            {incomingTickets.map((ticket) => (
+              <article key={ticket.orders.map((order) => order.id).join('-')} className="incoming-ticket">
                 <div className="ticket-top">
                   <div>
                     <span suppressHydrationWarning>
-                      {new Date(order.createdAt).toLocaleTimeString([], {
+                      {new Date(ticket.createdAt).toLocaleTimeString([], {
                         hour: 'numeric',
                         minute: '2-digit',
                       })}
                     </span>
-                    <h4 className="font-display">{guestDisplayName(order)}</h4>
+                    <h4 className="font-display">{ticket.guestName}</h4>
                   </div>
                   <i />
                 </div>
                 <ul>
-                  {Object.entries(order.selections)
+                  {Object.entries(ticket.selections)
                     .filter(([, quantity]) => quantity > 0)
                     .map(([itemId, quantity]) => (
                       <li key={itemId}>
@@ -2765,14 +2896,18 @@ function SchedulerBoard({
                       </li>
                     ))}
                 </ul>
-                {order.note && <p>“{order.note}”</p>}
+                {ticket.notes.map((note) => <p key={note}>“{note}”</p>)}
                 <div className="incoming-actions">
-                  <button onClick={() => void acceptOrder(order)}>
+                  <button onClick={() => void (async () => {
+                    for (const order of ticket.orders) await acceptOrder(order);
+                  })()}>
                     <Sparkles size={15} /> Accept
                   </button>
                   <button
                     className="reject-order"
-                    onClick={() => void rejectOrder(order)}
+                    onClick={() => void (async () => {
+                      for (const order of ticket.orders) await rejectOrder(order);
+                    })()}
                   >
                     <XCircle size={15} /> Reject
                   </button>
