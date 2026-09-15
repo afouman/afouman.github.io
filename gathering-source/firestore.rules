@@ -90,6 +90,33 @@ service cloud.firestore {
           && request.resource.data.guestUids.hasAll([request.auth.uid])
           && request.resource.data.guestUids.size() <= resource.data.guestUids.size() + 1;
       }
+
+      match /rsvps/{guestUid} {
+        allow create: if signedIn()
+          && guestUid == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+            'guestUid', 'guestName', 'status', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.guestUid == request.auth.uid
+          && request.resource.data.status == 'attending'
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow get: if canManageEvent(eventId)
+          || (signedIn() && guestUid == request.auth.uid);
+        allow list: if canManageEvent(eventId);
+        allow update: if canManageEvent(eventId) || (
+          signedIn()
+          && guestUid == request.auth.uid
+          && request.resource.data.guestUid == resource.data.guestUid
+          && request.resource.data.status == 'attending'
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'guestName', 'updatedAt'
+          ])
+        );
+        allow delete: if canManageEvent(eventId);
+      }
     }
   }
 }

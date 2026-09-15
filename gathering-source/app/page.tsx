@@ -87,6 +87,13 @@ type Order = {
   guestUid?: string;
   revision?: number;
 };
+type Rsvp = {
+  guestUid: string;
+  guestName: string;
+  status: 'attending';
+  createdAt: number;
+  updatedAt?: number;
+};
 type Receipt = {
   eventId: string;
   orderId: string;
@@ -421,6 +428,7 @@ export default function Home() {
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
   const [events, setEvents] = useState<EventMenu[]>([demoMenu]);
   const [orders, setOrders] = useState<Order[]>(sampleOrders);
+  const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [eventIncomingCounts, setEventIncomingCounts] = useState<Record<string, number>>({});
   const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
@@ -583,8 +591,10 @@ export default function Home() {
           });
       const auth = authModule.getAuth(app);
       await authModule.setPersistence(auth, authModule.browserLocalPersistence);
-      if (mode === 'guest' && !auth.currentUser)
-        await authModule.signInAnonymously(auth);
+      if (mode === 'guest' && auth.currentUser?.phoneNumber) {
+        setPhoneNumber(auth.currentUser.phoneNumber);
+        setPhoneStep('verified');
+      }
       if (
         auth.currentUser &&
         !auth.currentUser.isAnonymous &&
@@ -602,6 +612,7 @@ export default function Home() {
         },
       );
       let unsubOrders = () => {};
+      let unsubRsvps = () => {};
       let unsubEvents = () => {};
       let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
@@ -666,6 +677,23 @@ export default function Home() {
               ),
             ),
         );
+        unsubRsvps = store.onSnapshot(
+          store.query(
+            store.collection(db, 'events', eventId, 'rsvps'),
+            store.orderBy('createdAt', 'desc'),
+          ),
+          (snap) =>
+            setRsvps(
+              snap.docs.map(
+                (d) => ({
+                  ...d.data(),
+                  guestUid: d.id,
+                  createdAt: d.data().createdAt?.toMillis?.() ?? Date.now(),
+                  updatedAt: d.data().updatedAt?.toMillis?.(),
+                }) as Rsvp,
+              ),
+            ),
+        );
       }
       if (mode === 'guest' && receipts.length) {
         receipts.forEach((receipt) => {
@@ -695,6 +723,7 @@ export default function Home() {
         unsubEvents();
         unsubEventOrderCounts.forEach((unsubscribe) => unsubscribe());
         unsubOrders();
+        unsubRsvps();
         unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
     })().catch(() =>
@@ -920,8 +949,8 @@ export default function Home() {
       return;
     }
     if (!guestName.trim() || count === 0) return;
-    if (phoneNumber.trim() && phoneStep !== 'verified') {
-      notify('Verify the text code first, or clear the optional phone number');
+    if (firebaseConfigured && phoneStep !== 'verified') {
+      notify('Verify your phone number to identify this order and RSVP');
       return;
     }
     // This browser already knows which orders it placed. A second order using
@@ -1031,7 +1060,10 @@ export default function Home() {
         import('firebase/auth'),
       ]);
       const auth = authModule.getAuth(getApp());
-      if (!auth.currentUser) await authModule.signInAnonymously(auth);
+      if (!auth.currentUser || auth.currentUser.isAnonymous) {
+        notify('Verify your phone number before sending an order');
+        return;
+      }
       guestUid = auth.currentUser!.uid;
       const store = await import('firebase/firestore');
       const db = store.getFirestore(getApp());
@@ -1083,6 +1115,17 @@ export default function Home() {
           createdAt: store.serverTimestamp(),
           updatedAt: store.serverTimestamp(),
         },
+      );
+      await store.setDoc(
+        store.doc(store.getFirestore(getApp()), 'events', menu.id, 'rsvps', guestUid),
+        {
+          guestUid,
+          guestName: guestName.trim(),
+          status: 'attending',
+          createdAt: store.serverTimestamp(),
+          updatedAt: store.serverTimestamp(),
+        },
+        { merge: true },
       );
     } else {
       const next = [newOrder, ...orders];
@@ -1607,6 +1650,7 @@ export default function Home() {
           events={events}
           menu={menu}
           orders={orders}
+          rsvps={rsvps}
           eventIncomingCounts={eventIncomingCounts}
           editing={editing}
           setEditing={setEditing}
@@ -1870,9 +1914,9 @@ export default function Home() {
           </label>
           {firebaseConfigured && !editingOrderId && (
             <section className="mt-5 rounded-2xl border border-black/8 bg-white/60 p-4">
-              <p className="text-sm font-semibold">Phone number <span className="font-normal text-black/40">Optional</span></p>
+              <p className="text-sm font-semibold">Phone number <span className="font-normal text-black/40">Required</span></p>
               <p className="mt-1 text-xs leading-5 text-black/50">
-                Verify by text to make this order easier to recognize on this device.
+                A text code creates a temporary guest identity for your orders and RSVP. Your number is not stored in the event.
               </p>
               {phoneStep === 'verified' ? (
                 <p className="mt-3 flex items-center gap-2 text-sm font-semibold text-emerald-700">
@@ -2235,6 +2279,7 @@ function HostWorkspace({
   events,
   menu,
   orders,
+  rsvps,
   eventIncomingCounts,
   editing,
   setEditing,
@@ -2256,6 +2301,7 @@ function HostWorkspace({
   events: EventMenu[];
   menu: EventMenu;
   orders: Order[];
+  rsvps: Rsvp[];
   eventIncomingCounts: Record<string, number>;
   editing: boolean;
   setEditing: (value: boolean) => void;
@@ -2435,6 +2481,7 @@ function HostWorkspace({
                 </header>
                 <SchedulerBoard
                   orders={orders}
+                  rsvps={rsvps}
                   menu={menu}
                   acceptOrder={acceptOrder}
                   rejectOrder={rejectOrder}
@@ -2652,6 +2699,7 @@ function RememberedOrderCard({
 
 function SchedulerBoard({
   orders,
+  rsvps,
   menu,
   acceptOrder,
   rejectOrder,
@@ -2660,6 +2708,7 @@ function SchedulerBoard({
   serveTask,
 }: {
   orders: Order[];
+  rsvps: Rsvp[];
   menu: EventMenu;
   acceptOrder: (order: Order) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
@@ -2812,6 +2861,25 @@ function SchedulerBoard({
   };
   return (
     <div className="scheduler-shell">
+      <section className="resource-rack">
+        <header>
+          <div>
+            <p className="scheduler-label">Guest list</p>
+            <h3 className="font-display">RSVPs</h3>
+          </div>
+          <span>{rsvps.length} attending</span>
+        </header>
+        {rsvps.length ? (
+          <div className="resource-meter-grid">
+            {rsvps.map((rsvp) => (
+              <article key={rsvp.guestUid}>
+                <div><strong>{rsvp.guestName}</strong><span>Phone-verified guest</span></div>
+                <Check size={18} aria-label="Attending" />
+              </article>
+            ))}
+          </div>
+        ) : <p className="resource-empty-note">Verified guests appear here when they RSVP or place an order.</p>}
+      </section>
       <section className="resource-rack">
         <header>
           <div>
