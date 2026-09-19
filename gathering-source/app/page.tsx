@@ -91,6 +91,14 @@ type Rsvp = {
   guestName: string;
   guestPhone: string;
   status: 'yes' | 'maybe' | 'no';
+  activeOrderCount: number;
+  createdAt: number;
+  updatedAt?: number;
+};
+type GuestProfile = {
+  guestUid: string;
+  guestName: string;
+  guestPhone: string;
   createdAt: number;
   updatedAt?: number;
 };
@@ -361,12 +369,14 @@ function scheduleWaitingTasks(
 type DemoUpdate =
   | { type: 'orders'; eventId: string; value: Order[] }
   | { type: 'rsvps'; eventId: string; value: Rsvp[] }
+  | { type: 'profile'; eventId: string; value: GuestProfile | null }
   | { type: 'events'; value: EventMenu[] };
 
 function shareDemoUpdate(update: DemoUpdate) {
   const key =
     update.type === 'orders' ? demoOrdersKey(update.eventId)
-      : update.type === 'rsvps' ? `gather-demo-rsvps:${update.eventId}` : DEMO_EVENTS_KEY;
+      : update.type === 'rsvps' ? `gather-demo-rsvps:${update.eventId}`
+        : update.type === 'profile' ? `gather-demo-profile:${update.eventId}` : DEMO_EVENTS_KEY;
   const value = update.value;
   localStorage.setItem(key, JSON.stringify(value));
   if ('BroadcastChannel' in window) {
@@ -446,6 +456,9 @@ export default function Home() {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [myRsvp, setMyRsvp] = useState<Rsvp | null>(null);
+  const [guestProfile, setGuestProfile] = useState<GuestProfile | null>(null);
+  const [editingGuestProfile, setEditingGuestProfile] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [guestUid, setGuestUid] = useState<string | null>(null);
@@ -483,7 +496,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=4', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=5', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -541,6 +554,12 @@ export default function Home() {
       const savedRsvps = JSON.parse(localStorage.getItem(`gather-demo-rsvps:${eventId}`) || '[]') as Rsvp[];
       setRsvps(savedRsvps);
       setMyRsvp(savedRsvps.find((entry) => entry.guestUid === 'preview-device') || null);
+      const savedProfile = JSON.parse(localStorage.getItem(`gather-demo-profile:${eventId}`) || 'null') as GuestProfile | null;
+      setGuestProfile(savedProfile);
+      if (savedProfile) {
+        setGuestName(savedProfile.guestName);
+        setPhoneNumber(savedProfile.guestPhone);
+      }
       if (!storedOrders)
         shareDemoUpdate({ type: 'orders', eventId, value: nextOrders });
       setEventReady(true);
@@ -552,6 +571,8 @@ export default function Home() {
         applyEvents(JSON.parse(event.newValue) as EventMenu[]);
       if (event.key === `gather-demo-rsvps:${eventId}` && event.newValue)
         setRsvps(JSON.parse(event.newValue) as Rsvp[]);
+      if (event.key === `gather-demo-profile:${eventId}`)
+        setGuestProfile(event.newValue ? JSON.parse(event.newValue) as GuestProfile : null);
     };
     const channel =
       'BroadcastChannel' in window ? new BroadcastChannel(DEMO_CHANNEL) : null;
@@ -562,6 +583,8 @@ export default function Home() {
         if (event.data.type === 'events') applyEvents(event.data.value);
         if (event.data.type === 'rsvps' && event.data.eventId === eventId)
           setRsvps(event.data.value);
+        if (event.data.type === 'profile' && event.data.eventId === eventId)
+          setGuestProfile(event.data.value);
       };
     queueMicrotask(loadSharedPreview);
     window.addEventListener('storage', onStorage);
@@ -621,6 +644,7 @@ export default function Home() {
       let unsubOrders = () => {};
       let unsubRsvps = () => {};
       let unsubMyRsvp = () => {};
+      let unsubGuestProfile = () => {};
       let unsubEvents = () => {};
       let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
@@ -693,6 +717,7 @@ export default function Home() {
                 (d) => ({
                   ...d.data(),
                   guestUid: d.id,
+                  activeOrderCount: d.data().activeOrderCount || 0,
                   createdAt: d.data().createdAt?.toMillis?.() ?? Date.now(),
                   updatedAt: d.data().updatedAt?.toMillis?.(),
                 }) as Rsvp,
@@ -702,6 +727,24 @@ export default function Home() {
       }
       if (mode === 'guest' && auth.currentUser?.isAnonymous) {
         const uid = auth.currentUser.uid;
+        unsubGuestProfile = store.onSnapshot(
+          store.doc(db, 'events', eventId, 'guests', uid),
+          (snap) => {
+            const data = snap.data();
+            const profile = data ? {
+              ...data,
+              guestUid: uid,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.(),
+            } as GuestProfile : null;
+            setGuestProfile(profile);
+            if (profile) {
+              setGuestName(profile.guestName);
+              setPhoneNumber(profile.guestPhone);
+              setEditingGuestProfile(false);
+            }
+          },
+        );
         unsubMyRsvp = store.onSnapshot(
           store.doc(db, 'events', eventId, 'rsvps', uid),
           (snap) => {
@@ -709,14 +752,13 @@ export default function Home() {
             setMyRsvp(data ? {
               ...data,
               guestUid: uid,
+              activeOrderCount: data.activeOrderCount || 0,
               createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
               updatedAt: data.updatedAt?.toMillis?.(),
             } as Rsvp : null);
             if (data) {
-              setGuestName(data.guestName);
-              setPhoneNumber(data.guestPhone || '');
               setRsvpChoice(data.status);
-            } else setGuestName('');
+            }
           },
         );
         unsubOrders = store.onSnapshot(
@@ -743,6 +785,7 @@ export default function Home() {
         unsubOrders();
         unsubRsvps();
         unsubMyRsvp();
+        unsubGuestProfile();
         unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
     })().catch(() =>
@@ -780,6 +823,8 @@ export default function Home() {
           },
           annotations: { readOnlyHint: false, untrustedContentHint: false },
           execute(input) {
+            if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting)
+              throw new Error('A Yes RSVP and open ordering are required.');
             const candidate = input as { selections?: Record<string, number> };
             if (
               !candidate.selections ||
@@ -811,15 +856,23 @@ export default function Home() {
       ),
     ).catch(() => undefined);
     return () => lifecycle.abort();
-  }, [menu.items]);
+  }, [menu.items, menu.accepting, myRsvp]);
 
   const count = Object.values(cart).reduce((a, b) => a + b, 0);
+  const effectiveGuestProfile = guestProfile || (myRsvp ? {
+    guestUid: myRsvp.guestUid,
+    guestName: myRsvp.guestName,
+    guestPhone: myRsvp.guestPhone,
+    createdAt: myRsvp.createdAt,
+    updatedAt: myRsvp.updatedAt,
+  } : null);
   const categories = useMemo(
     () => [...new Set(menu.items.map((i) => i.category))],
     [menu.items],
   );
   const setQty = (id: string, delta: number) =>
     setCart((current) => {
+      if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting) return current;
       const item = menu.items.find((entry) => entry.id === id);
       const alreadyReserved = reservedServings(
         rememberedOrders.filter((order) => order.id !== editingOrderId),
@@ -836,6 +889,16 @@ export default function Home() {
   const notify = (message: string) => {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
+  };
+  const adjustDemoRsvpActiveCount = (uid: string | undefined, delta: number) => {
+    if (!uid) return;
+    const nextRsvps = rsvps.map((entry) => entry.guestUid === uid
+      ? { ...entry, activeOrderCount: Math.max(0, (entry.activeOrderCount || 0) + delta), updatedAt: Date.now() }
+      : entry);
+    setRsvps(nextRsvps);
+    shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: nextRsvps });
+    if (myRsvp?.guestUid === uid)
+      setMyRsvp({ ...myRsvp, activeOrderCount: Math.max(0, (myRsvp.activeOrderCount || 0) + delta) });
   };
   const switchMode = (next: 'guest' | 'host') => {
     setMode(next);
@@ -941,7 +1004,6 @@ export default function Home() {
 
   function beginOrderEdit(order: Order) {
     setCart({ ...order.selections });
-    setGuestName(order.guestName);
     setNote(order.note);
     setEditingOrderId(order.id);
     (document.getElementById('checkout') as HTMLDialogElement)?.showModal();
@@ -1007,6 +1069,10 @@ export default function Home() {
               selections: cart, note: note.trim(), status: 'new', revision: 1,
               createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
             });
+            transaction.update(store.doc(db, 'events', menu.id, 'rsvps', user.uid), {
+              activeOrderCount: (rsvp.data().activeOrderCount || 0) + 1,
+              updatedAt: store.serverTimestamp(),
+            });
           }
         });
       } else {
@@ -1029,6 +1095,7 @@ export default function Home() {
         setOrders(next);
         shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
         setRememberedOrders([nextOrder, ...rememberedOrders.filter((order) => order.id !== orderId)]);
+        if (!target) adjustDemoRsvpActiveCount(myRsvp?.guestUid, 1);
       }
       const savedReceipt = saveReceipt(menu.id, orderId, createdAt);
       setReceipts((current) => [...current.filter((entry) => entry.orderId !== orderId), savedReceipt]);
@@ -1039,7 +1106,7 @@ export default function Home() {
         : 'Order was not sent. Check your RSVP and try again.');
     }
   }
-  async function saveRsvp() {
+  async function saveGuestProfile() {
     const name = guestName.trim().replace(/\s+/g, ' ');
     const phoneDigits = phoneNumber.replace(/\D/g, '');
     const normalizedPhone = `+${phoneDigits.length === 10 ? `1${phoneDigits}` : phoneDigits}`;
@@ -1051,11 +1118,7 @@ export default function Home() {
       notify('Enter a complete phone number, including country code when outside the US');
       return;
     }
-    if (myRsvp?.status === 'yes' && rsvpChoice !== 'yes' && rememberedOrders.some((order) => order.status === 'new' || order.status === 'preparing')) {
-      notify('Cancel or finish your active order before changing your RSVP');
-      return;
-    }
-    setRsvpBusy(true);
+    setProfileBusy(true);
     try {
       if (firebaseConfigured) {
         const [{ getApp }, authModule, store] = await Promise.all([
@@ -1064,17 +1127,20 @@ export default function Home() {
         const user = authModule.getAuth(getApp('gather-guest')).currentUser;
         if (!user?.isAnonymous) throw new Error('guest-session');
         const db = store.getFirestore(getApp('gather-guest'));
+        const profileRef = store.doc(db, 'events', menu.id, 'guests', user.uid);
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', user.uid);
         const nameRef = store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(name));
         const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(normalizedPhone));
         await store.runTransaction(db, async (transaction) => {
-          const prior = await transaction.get(rsvpRef);
+          const prior = await transaction.get(profileRef);
+          const priorRsvp = await transaction.get(rsvpRef);
           const nameClaim = await transaction.get(nameRef);
           const phoneClaim = await transaction.get(phoneRef);
-          const oldNameRef = prior.exists() && guestNameKey(prior.data().guestName) !== guestNameKey(name)
-            ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(prior.data().guestName)) : null;
-          const oldPhoneRef = prior.exists() && typeof prior.data().guestPhone === 'string' && prior.data().guestPhone !== normalizedPhone
-            ? store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(prior.data().guestPhone)) : null;
+          const previous = prior.exists() ? prior.data() : priorRsvp.data();
+          const oldNameRef = previous && guestNameKey(previous.guestName) !== guestNameKey(name)
+            ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(previous.guestName)) : null;
+          const oldPhoneRef = previous && typeof previous.guestPhone === 'string' && previous.guestPhone !== normalizedPhone
+            ? store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(previous.guestPhone)) : null;
           const oldClaim = oldNameRef ? await transaction.get(oldNameRef) : null;
           const oldPhoneClaim = oldPhoneRef ? await transaction.get(oldPhoneRef) : null;
           if (nameClaim.exists() && nameClaim.data().guestUid !== user.uid) throw new Error('name-taken');
@@ -1087,9 +1153,14 @@ export default function Home() {
           });
           if (oldNameRef && oldClaim?.data()?.guestUid === user.uid) transaction.delete(oldNameRef);
           if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === user.uid) transaction.delete(oldPhoneRef);
-          transaction.set(rsvpRef, {
-            guestUid: user.uid, guestName: name, guestPhone: normalizedPhone, status: rsvpChoice,
+          transaction.set(profileRef, {
+            guestUid: user.uid, guestName: name, guestPhone: normalizedPhone,
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
+            updatedAt: store.serverTimestamp(),
+          });
+          if (priorRsvp.exists()) transaction.update(rsvpRef, {
+            guestName: name, guestPhone: normalizedPhone,
+            activeOrderCount: priorRsvp.data().activeOrderCount || 0,
             updatedAt: store.serverTimestamp(),
           });
         });
@@ -1097,19 +1168,80 @@ export default function Home() {
         const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
         if (others.some((entry) => entry.guestPhone === normalizedPhone)) throw new Error('phone-taken');
-        const saved: Rsvp = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, status: rsvpChoice, createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now() };
-        const next = [saved, ...others];
-        setRsvps(next);
-        shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
-        setMyRsvp(saved);
+        const saved: GuestProfile = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
+        setGuestProfile(saved);
+        shareDemoUpdate({ type: 'profile', eventId: menu.id, value: saved });
       }
-      notify(`RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
+      setEditingGuestProfile(false);
+      notify(guestProfile ? 'Guest profile updated' : 'Guest profile created — now RSVP');
     } catch (error) {
       notify((error as Error).message === 'name-taken'
         ? 'That name is already used for this event. Please choose a different name.'
         : (error as Error).message === 'phone-taken'
-          ? 'That phone number already has an RSVP for this event.'
-          : 'RSVP was not saved. Please try again.');
+          ? 'That phone number already belongs to another guest for this event.'
+          : 'Guest profile was not saved. Please try again.');
+    } finally {
+      setProfileBusy(false);
+    }
+  }
+
+  async function saveRsvp() {
+    const profile = effectiveGuestProfile;
+    if (!profile) {
+      notify('Create your guest profile before responding');
+      return;
+    }
+    const activeOrders = rememberedOrders.filter((order) => order.status === 'new' || order.status === 'preparing');
+    if (myRsvp?.status === 'yes' && rsvpChoice !== 'yes' && activeOrders.length) {
+      setRsvpChoice(myRsvp.status);
+      notify('Cancel new orders and wait until accepted food is served before changing your RSVP');
+      return;
+    }
+    setRsvpBusy(true);
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, authModule, store] = await Promise.all([
+          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+        ]);
+        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
+        if (!user?.isAnonymous || user.uid !== profile.guestUid) throw new Error('guest-session');
+        const db = store.getFirestore(getApp('gather-guest'));
+        const profileRef = store.doc(db, 'events', menu.id, 'guests', user.uid);
+        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', user.uid);
+        await store.runTransaction(db, async (transaction) => {
+          const [savedProfile, prior] = await Promise.all([transaction.get(profileRef), transaction.get(rsvpRef)]);
+          if (!savedProfile.exists()) transaction.set(profileRef, {
+            guestUid: user.uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
+            createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
+          });
+          const activeOrderCount = prior.exists() ? prior.data().activeOrderCount || 0 : 0;
+          if (prior.exists() && prior.data().status === 'yes' && rsvpChoice !== 'yes' && activeOrderCount > 0)
+            throw new Error('active-orders');
+          transaction.set(rsvpRef, {
+            guestUid: user.uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
+            status: rsvpChoice, activeOrderCount,
+            createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
+            updatedAt: store.serverTimestamp(),
+          });
+        });
+      } else {
+        const others = rsvps.filter((entry) => entry.guestUid !== profile.guestUid);
+        const saved: Rsvp = {
+          guestUid: profile.guestUid, guestName: profile.guestName, guestPhone: profile.guestPhone,
+          status: rsvpChoice, activeOrderCount: myRsvp?.activeOrderCount || 0,
+          createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now(),
+        };
+        const next = [saved, ...others];
+        setRsvps(next);
+        setMyRsvp(saved);
+        shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
+      }
+      notify(`RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
+    } catch (error) {
+      if ((error as Error).message === 'active-orders' && myRsvp) setRsvpChoice(myRsvp.status);
+      notify((error as Error).message === 'active-orders'
+        ? 'Your active order must be completed or cancelled before changing your RSVP.'
+        : 'RSVP was not saved. Please try again.');
     } finally {
       setRsvpBusy(false);
     }
@@ -1155,13 +1287,22 @@ export default function Home() {
     const rejected = { ...order, status: 'rejected' as OrderStatus, updatedAt: Date.now() };
     if (firebaseConfigured) {
       const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
-      await store.updateDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'orders', order.id), {
-        status: 'rejected', updatedAt: store.serverTimestamp(),
+      const db = store.getFirestore(getApp());
+      const orderRef = store.doc(db, 'events', menu.id, 'orders', order.id);
+      const rsvpRef = order.guestUid ? store.doc(db, 'events', menu.id, 'rsvps', order.guestUid) : null;
+      await store.runTransaction(db, async (transaction) => {
+        const rsvp = rsvpRef ? await transaction.get(rsvpRef) : null;
+        transaction.update(orderRef, { status: 'rejected', updatedAt: store.serverTimestamp() });
+        if (rsvp?.exists() && rsvpRef) transaction.update(rsvpRef, {
+          activeOrderCount: Math.max(0, (rsvp.data().activeOrderCount || 0) - 1),
+          updatedAt: store.serverTimestamp(),
+        });
       });
     } else {
       const next = orders.map((entry) => entry.id === order.id ? rejected : entry);
       setOrders(next);
       shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
+      adjustDemoRsvpActiveCount(order.guestUid, -1);
     }
     notify(`${order.guestName}'s order was rejected`);
   }
@@ -1178,8 +1319,19 @@ export default function Home() {
         docs.splice(0, 450).forEach((entry) => batch.delete(entry.ref));
         await batch.commit();
       }
+      const rsvpSnapshot = await store.getDocs(store.collection(db, 'events', menu.id, 'rsvps'));
+      for (let index = 0; index < rsvpSnapshot.docs.length; index += 450) {
+        const batch = store.writeBatch(db);
+        rsvpSnapshot.docs.slice(index, index + 450).forEach((entry) =>
+          batch.update(entry.ref, { activeOrderCount: 0, updatedAt: store.serverTimestamp() }));
+        await batch.commit();
+      }
     } else {
       shareDemoUpdate({ type: 'orders', eventId: menu.id, value: [] });
+      const unlockedRsvps = rsvps.map((entry) => ({ ...entry, activeOrderCount: 0, updatedAt: Date.now() }));
+      setRsvps(unlockedRsvps);
+      shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: unlockedRsvps });
+      if (myRsvp) setMyRsvp({ ...myRsvp, activeOrderCount: 0 });
     }
     setOrders([]);
     setRememberedOrders([]);
@@ -1208,6 +1360,7 @@ export default function Home() {
   }
 
   async function serveTask(orderId: string, taskId: string) {
+    const previous = orders.find((order) => order.id === orderId);
     const next = orders.map((order) => {
       if (order.id !== orderId) return order;
       const tasks = (order.tasks || []).map((task) =>
@@ -1225,6 +1378,21 @@ export default function Home() {
       };
     });
     await persistScheduledOrders(next);
+    const completed = next.find((order) => order.id === orderId);
+    if (firebaseConfigured && previous?.status !== 'served' && completed?.status === 'served' && completed.guestUid) {
+      const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+      const db = store.getFirestore(getApp());
+      const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', completed.guestUid);
+      await store.runTransaction(db, async (transaction) => {
+        const rsvp = await transaction.get(rsvpRef);
+        if (rsvp.exists()) transaction.update(rsvpRef, {
+          activeOrderCount: Math.max(0, (rsvp.data().activeOrderCount || 0) - 1),
+          updatedAt: store.serverTimestamp(),
+        });
+      });
+    }
+    if (!firebaseConfigured && previous?.status !== 'served' && completed?.status === 'served')
+      adjustDemoRsvpActiveCount(completed.guestUid, -1);
     notify('Item served');
   }
   async function cancelRememberedOrder() {
@@ -1241,21 +1409,25 @@ export default function Home() {
         import('firebase/app'),
         import('firebase/firestore'),
       ]);
-      await store.updateDoc(
-        store.doc(
-          store.getFirestore(getApp('gather-guest')),
-          'events',
-          menu.id,
-          'orders',
-          rememberedOrder.id,
-        ),
-        {
+      const db = store.getFirestore(getApp('gather-guest'));
+      const orderRef = store.doc(db, 'events', menu.id, 'orders', rememberedOrder.id);
+      const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', rememberedOrder.guestUid!);
+      await store.runTransaction(db, async (transaction) => {
+        const [orderSnapshot, rsvpSnapshot] = await Promise.all([
+          transaction.get(orderRef), transaction.get(rsvpRef),
+        ]);
+        if (!orderSnapshot.exists() || orderSnapshot.data().status !== 'new') throw new Error('order-changed');
+        transaction.update(orderRef, {
           status: 'cancelled',
           cancelledAt: store.serverTimestamp(),
           updatedAt: store.serverTimestamp(),
           revision: store.increment(1),
-        },
-      );
+        });
+        if (rsvpSnapshot.exists()) transaction.update(rsvpRef, {
+          activeOrderCount: Math.max(0, (rsvpSnapshot.data().activeOrderCount || 0) - 1),
+          updatedAt: store.serverTimestamp(),
+        });
+      });
     } else {
       const next = orders.map((order) =>
         order.id === cancelled.id ? cancelled : order,
@@ -1263,7 +1435,10 @@ export default function Home() {
       setOrders(next);
       shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
       setRememberedOrder(cancelled);
+      adjustDemoRsvpActiveCount(cancelled.guestUid, -1);
     }
+    setRememberedOrders((current) => current.map((order) =>
+      order.id === cancelled.id ? cancelled : order));
     setConfirmingCancel(false);
     notify('Your order was cancelled');
   }
@@ -1472,7 +1647,7 @@ export default function Home() {
           }),
       );
       const eventDocuments = (await Promise.all(
-        ['orders', 'rsvps', 'guest-names', 'guest-phones', 'name-index'].map((collectionName) =>
+        ['orders', 'rsvps', 'guests', 'guest-names', 'guest-phones', 'name-index'].map((collectionName) =>
           store.getDocs(store.collection(db, 'events', event.id, collectionName)),
         ),
       )).flatMap((snapshot) => snapshot.docs);
@@ -1573,30 +1748,58 @@ export default function Home() {
 
       {mode === 'guest' ? (
         <>
-          <section className="guest-rsvp-panel" aria-label="Your RSVP">
-            <div className="guest-rsvp-heading">
-              <div><p className="eyebrow">Your invitation</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
-              {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
-            </div>
-            <p className="guest-rsvp-explainer">Enter your name and phone number so the host can identify your RSVP and orders. No verification code is sent. You can RSVP even when ordering is closed.</p>
-            <div className="guest-rsvp-form">
+          {(!effectiveGuestProfile || editingGuestProfile) ? (
+            <section className="guest-rsvp-panel guest-account-panel" aria-label="Guest profile">
+              <div className="guest-rsvp-heading">
+                <div><p className="eyebrow">Step 1 of 3</p><h2 className="font-display">Create your guest profile</h2></div>
+              </div>
+              <p className="guest-rsvp-explainer">Your profile keeps your RSVP and orders together on this browser. Enter a name and phone number; no verification code is sent.</p>
+              <div className="guest-rsvp-form">
                 <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
                 <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" /></label>
+                <div className="guest-profile-actions">
+                  {effectiveGuestProfile && <button type="button" className="secondary-button" onClick={() => {
+                    setGuestName(effectiveGuestProfile.guestName);
+                    setPhoneNumber(effectiveGuestProfile.guestPhone);
+                    setEditingGuestProfile(false);
+                  }}>Cancel</button>}
+                  <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile ? 'Save profile' : 'Continue to RSVP'}</button>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <section className="guest-rsvp-panel" aria-label="Your RSVP">
+              <div className="guest-rsvp-heading">
+                <div><p className="eyebrow">Step 2 of 3</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
+                {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+              </div>
+              <div className="guest-profile-summary">
+                <div><strong>{effectiveGuestProfile.guestName}</strong><span>{effectiveGuestProfile.guestPhone}</span></div>
+                <button type="button" onClick={() => setEditingGuestProfile(true)}>Edit profile</button>
+              </div>
+              <p className="guest-rsvp-explainer">RSVP separately from your profile. Choose Yes to place orders. You can still RSVP when ordering is closed.</p>
+              <div className="guest-rsvp-form rsvp-only-form">
                 <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
                   {([['yes', 'Yes, I’m going'], ['maybe', 'Maybe'], ['no', 'No, I can’t come']] as const).map(([value, label]) => (
                     <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} />{label}</label>
                   ))}
                 </div>
-                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
-            </div>
-          </section>
-          <GuestMenu
-            menu={menu}
-            categories={categories}
-            cart={cart}
-            reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
-            setQty={setQty}
-          />
+                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy} className="primary-button">{myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
+              </div>
+              {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
+            </section>
+          )}
+          {effectiveGuestProfile && myRsvp && !editingGuestProfile && (
+            <GuestMenu
+              menu={menu}
+              categories={categories}
+              cart={cart}
+              reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
+              canOrder={myRsvp.status === 'yes' && menu.accepting}
+              rsvpStatus={myRsvp.status}
+              setQty={setQty}
+            />
+          )}
         </>
       ) : (
         <HostWorkspace
@@ -1800,7 +2003,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {mode === 'guest' && !submitted && (
+      {mode === 'guest' && effectiveGuestProfile && myRsvp && !editingGuestProfile && !submitted && (
         <div className="guest-cart-bar fixed inset-x-0 bottom-0 z-40">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
             <div>
@@ -1972,12 +2175,16 @@ function GuestMenu({
   categories,
   cart,
   reserved,
+  canOrder,
+  rsvpStatus,
   setQty,
 }: {
   menu: EventMenu;
   categories: string[];
   cart: Record<string, number>;
   reserved: Order[];
+  canOrder: boolean;
+  rsvpStatus: Rsvp['status'];
   setQty: (id: string, delta: number) => void;
 }) {
   return (
@@ -2035,6 +2242,15 @@ function GuestMenu({
                 You can still browse the menu, but new selections are paused by
                 the host.
               </span>
+            </div>
+          </div>
+        )}
+        {menu.accepting && rsvpStatus !== 'yes' && (
+          <div className="ordering-closed-banner rsvp-required-banner">
+            <XCircle size={20} />
+            <div>
+              <strong>Your RSVP is {rsvpStatus === 'maybe' ? 'Maybe' : 'Not going'}.</strong>
+              <span>Menu browsing is available, but ordering requires a Yes RSVP.</span>
             </div>
           </div>
         )}
@@ -2113,7 +2329,7 @@ function GuestMenu({
                     <div className="qty">
                       <button
                         onClick={() => setQty(item.id, -1)}
-                        disabled={!cart[item.id] || !menu.accepting || unavailable}
+                        disabled={!cart[item.id] || !canOrder || unavailable}
                         aria-label={`Remove ${item.name}`}
                       >
                         <Minus size={15} />
@@ -2121,7 +2337,7 @@ function GuestMenu({
                       <span>{cart[item.id] || 0}</span>
                       <button
                         onClick={() => setQty(item.id, 1)}
-                        disabled={!menu.accepting || unavailable || remaining === 0 || atGuestLimit}
+                        disabled={!canOrder || unavailable || remaining === 0 || atGuestLimit}
                         aria-label={`Add ${item.name}`}
                       >
                         <Plus size={15} />

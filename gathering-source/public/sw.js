@@ -1,6 +1,6 @@
 // Keep the cache name deliberately versioned. A new release clears the old
 // HTML shell, so GitHub Pages never leaves a host looking at an older UI.
-const CACHE_NAME = 'gather-host-v4';
+const CACHE_NAME = 'gather-host-v5';
 const APP_SHELL = ['./', './manifest.webmanifest', './icons/gather-host-180.png', './icons/gather-host-192.png', './icons/gather-host-512.png'];
 
 self.addEventListener('install', event => {
