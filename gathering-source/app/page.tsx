@@ -28,7 +28,6 @@ import {
   SquarePlus,
   Trash2,
   UtensilsCrossed,
-  Users,
   XCircle,
 } from 'lucide-react';
 
@@ -90,7 +89,8 @@ type Order = {
 type Rsvp = {
   guestUid: string;
   guestName: string;
-  status: 'attending';
+  guestPhone: string;
+  status: 'yes' | 'maybe' | 'no';
   createdAt: number;
   updatedAt?: number;
 };
@@ -360,11 +360,13 @@ function scheduleWaitingTasks(
 
 type DemoUpdate =
   | { type: 'orders'; eventId: string; value: Order[] }
+  | { type: 'rsvps'; eventId: string; value: Rsvp[] }
   | { type: 'events'; value: EventMenu[] };
 
 function shareDemoUpdate(update: DemoUpdate) {
   const key =
-    update.type === 'orders' ? demoOrdersKey(update.eventId) : DEMO_EVENTS_KEY;
+    update.type === 'orders' ? demoOrdersKey(update.eventId)
+      : update.type === 'rsvps' ? `gather-demo-rsvps:${update.eventId}` : DEMO_EVENTS_KEY;
   const value = update.value;
   localStorage.setItem(key, JSON.stringify(value));
   if ('BroadcastChannel' in window) {
@@ -438,15 +440,15 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [editing, setEditing] = useState(false);
   const [hostUser, setHostUser] = useState<string | null>(null);
-  const [receipts, setReceipts] = useState<Receipt[]>([]);
+  const [, setReceipts] = useState<Receipt[]>([]);
   const [rememberedOrder, setRememberedOrder] = useState<Order | null>(null);
   const [rememberedOrders, setRememberedOrders] = useState<Order[]>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
-  const [nameConflict, setNameConflict] = useState<{
-    name: string;
-    resolve: (samePerson: boolean) => void;
-  } | null>(null);
+  const [myRsvp, setMyRsvp] = useState<Rsvp | null>(null);
+  const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
+  const [rsvpBusy, setRsvpBusy] = useState(false);
+  const [guestUid, setGuestUid] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<'created' | 'updated'>(
     'created',
   );
@@ -455,15 +457,6 @@ export default function Home() {
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
-  const [phoneCode, setPhoneCode] = useState('');
-  const [phoneStep, setPhoneStep] = useState<'idle' | 'code' | 'verified'>(
-    'idle',
-  );
-  const [phoneBusy, setPhoneBusy] = useState(false);
-  const phoneConfirmation = useRef<{
-    confirm: (code: string) => Promise<unknown>;
-  } | null>(null);
-  const phoneVerifier = useRef<{ clear: () => void } | null>(null);
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -490,7 +483,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=2', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=4', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -545,6 +538,9 @@ export default function Home() {
           ? sampleOrders
           : [];
       applyOrders(nextOrders);
+      const savedRsvps = JSON.parse(localStorage.getItem(`gather-demo-rsvps:${eventId}`) || '[]') as Rsvp[];
+      setRsvps(savedRsvps);
+      setMyRsvp(savedRsvps.find((entry) => entry.guestUid === 'preview-device') || null);
       if (!storedOrders)
         shareDemoUpdate({ type: 'orders', eventId, value: nextOrders });
       setEventReady(true);
@@ -554,6 +550,8 @@ export default function Home() {
         applyOrders(JSON.parse(event.newValue) as Order[]);
       if (event.key === DEMO_EVENTS_KEY && event.newValue)
         applyEvents(JSON.parse(event.newValue) as EventMenu[]);
+      if (event.key === `gather-demo-rsvps:${eventId}` && event.newValue)
+        setRsvps(JSON.parse(event.newValue) as Rsvp[]);
     };
     const channel =
       'BroadcastChannel' in window ? new BroadcastChannel(DEMO_CHANNEL) : null;
@@ -562,6 +560,8 @@ export default function Home() {
         if (event.data.type === 'orders' && event.data.eventId === eventId)
           applyOrders(event.data.value);
         if (event.data.type === 'events') applyEvents(event.data.value);
+        if (event.data.type === 'rsvps' && event.data.eventId === eventId)
+          setRsvps(event.data.value);
       };
     queueMicrotask(loadSharedPreview);
     window.addEventListener('storage', onStorage);
@@ -580,7 +580,7 @@ export default function Home() {
         import('firebase/auth'),
         import('firebase/firestore'),
       ]);
-      const app = appModule.getApps().length
+      const app = appModule.getApps().some((candidate) => candidate.name === '[DEFAULT]')
         ? appModule.getApp()
         : appModule.initializeApp({
             apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -589,19 +589,26 @@ export default function Home() {
             storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
             appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
           });
-      const auth = authModule.getAuth(app);
+      const guestApp = appModule.getApps().some((candidate) => candidate.name === 'gather-guest')
+        ? appModule.getApp('gather-guest')
+        : appModule.initializeApp(app.options, 'gather-guest');
+      const auth = authModule.getAuth(mode === 'guest' ? guestApp : app);
       await authModule.setPersistence(auth, authModule.browserLocalPersistence);
-      if (mode === 'guest' && auth.currentUser?.phoneNumber) {
-        setPhoneNumber(auth.currentUser.phoneNumber);
-        setPhoneStep('verified');
+      await auth.authStateReady();
+      if (mode === 'guest') {
+        if (auth.currentUser && !auth.currentUser.isAnonymous)
+          await authModule.signOut(auth);
+        if (!auth.currentUser) await authModule.signInAnonymously(auth);
+        setGuestUid(auth.currentUser!.uid);
       }
       if (
+        mode === 'host' &&
         auth.currentUser &&
         !auth.currentUser.isAnonymous &&
         (!HOST_EMAIL || auth.currentUser.email?.toLowerCase() === HOST_EMAIL)
       )
         setHostUser(auth.currentUser.email || auth.currentUser.uid);
-      const db = store.getFirestore(app);
+      const db = store.getFirestore(mode === 'guest' ? guestApp : app);
       const eventId =
         new URLSearchParams(location.search).get('event') || menu.id;
       const unsubMenu = store.onSnapshot(
@@ -613,19 +620,17 @@ export default function Home() {
       );
       let unsubOrders = () => {};
       let unsubRsvps = () => {};
+      let unsubMyRsvp = () => {};
       let unsubEvents = () => {};
       let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
       if (
         mode === 'host' &&
         auth.currentUser &&
-        !auth.currentUser.isAnonymous
+        auth.currentUser.email?.toLowerCase() === HOST_EMAIL
       ) {
         unsubEvents = store.onSnapshot(
-          store.query(
-            store.collection(db, 'events'),
-            store.where('ownerUid', '==', auth.currentUser.uid),
-          ),
+          store.collection(db, 'events'),
           (snap) => {
             const ownedEvents = snap.docs.map(
               (d) => ({ id: d.id, ...d.data() }) as EventMenu,
@@ -695,28 +700,41 @@ export default function Home() {
             ),
         );
       }
-      if (mode === 'guest' && receipts.length) {
-        receipts.forEach((receipt) => {
-          unsubRememberedOrders.push(
-            store.onSnapshot(
-              store.doc(db, 'events', eventId, 'orders', receipt.orderId),
-              (snap) =>
-                setRememberedOrders((current) => {
-                  const withoutThis = current.filter((order) => order.id !== receipt.orderId);
-                  if (!snap.exists()) return withoutThis;
-                  const order = {
-                    id: snap.id,
-                    ...snap.data(),
-                    createdAt: snap.data().createdAt?.toMillis?.() ?? receipt.createdAt,
-                    updatedAt: snap.data().updatedAt?.toMillis?.(),
-                    cancelledAt: snap.data().cancelledAt?.toMillis?.(),
-                    readyAt: snap.data().readyAt?.toMillis?.(),
-                  } as Order;
-                  return [...withoutThis, order].sort((a, b) => b.createdAt - a.createdAt);
-                }),
-            ),
-          );
-        });
+      if (mode === 'guest' && auth.currentUser?.isAnonymous) {
+        const uid = auth.currentUser.uid;
+        unsubMyRsvp = store.onSnapshot(
+          store.doc(db, 'events', eventId, 'rsvps', uid),
+          (snap) => {
+            const data = snap.data();
+            setMyRsvp(data ? {
+              ...data,
+              guestUid: uid,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.(),
+            } as Rsvp : null);
+            if (data) {
+              setGuestName(data.guestName);
+              setPhoneNumber(data.guestPhone || '');
+              setRsvpChoice(data.status);
+            } else setGuestName('');
+          },
+        );
+        unsubOrders = store.onSnapshot(
+          store.query(
+            store.collection(db, 'events', eventId, 'orders'),
+            store.where('guestUid', '==', uid),
+          ),
+          (snap) => setRememberedOrders(snap.docs.map((doc) => {
+            const data = doc.data();
+            return {
+              id: doc.id, ...data,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.(),
+              cancelledAt: data.cancelledAt?.toMillis?.(),
+              readyAt: data.readyAt?.toMillis?.(),
+            } as Order;
+          }).sort((a, b) => b.createdAt - a.createdAt)),
+        );
       }
       stop = () => {
         unsubMenu();
@@ -724,13 +742,14 @@ export default function Home() {
         unsubEventOrderCounts.forEach((unsubscribe) => unsubscribe());
         unsubOrders();
         unsubRsvps();
+        unsubMyRsvp();
         unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
     })().catch(() =>
       setToast('Could not connect to live orders. Showing the preview.'),
     );
     return () => stop();
-  }, [mode, hostUser, receipts, menu.id]);
+  }, [mode, hostUser, guestUid, menu.id]);
 
   useEffect(() => {
     const context = (document as Document & { modelContext?: ModelContext })
@@ -818,8 +837,6 @@ export default function Home() {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
   };
-  const confirmSameGuest = (name: string) =>
-    new Promise<boolean>((resolve) => setNameConflict({ name, resolve }));
   const switchMode = (next: 'guest' | 'host') => {
     setMode(next);
     history.replaceState(
@@ -938,7 +955,6 @@ export default function Home() {
     window.setTimeout(() => {
       setSubmitted(false);
       setCart({});
-      setGuestName('');
       setNote('');
     }, 2400);
   }
@@ -948,239 +964,154 @@ export default function Home() {
       notify('This event is not accepting orders right now');
       return;
     }
-    if (!guestName.trim() || count === 0) return;
-    if (firebaseConfigured && phoneStep !== 'verified') {
-      notify('Verify your phone number to identify this order and RSVP');
+    if (!myRsvp || myRsvp.status !== 'yes') {
+      notify('RSVP Yes before placing an order');
       return;
     }
-    // This browser already knows which orders it placed. A second order using
-    // the same name is therefore an amendment, not a possible name conflict.
-    if (!editingOrderId) {
-      const existingOrder = rememberedOrders
-        .filter(
-          (order) =>
-            order.status === 'new' &&
-            guestNameKey(order.guestName) === guestNameKey(guestName),
-        )
-        .sort((left, right) => right.createdAt - left.createdAt)[0];
-      if (existingOrder) {
-        const selections = { ...existingOrder.selections };
-        Object.entries(cart).forEach(([itemId, quantity]) => {
-          selections[itemId] = (selections[itemId] || 0) + quantity;
-        });
-        const amended: Order = {
-          ...existingOrder,
-          selections,
-          note: note.trim() || existingOrder.note,
-          updatedAt: Date.now(),
-          revision: (existingOrder.revision || 1) + 1,
-        };
-        if (firebaseConfigured) {
-          const [{ getApp }, store] = await Promise.all([
-            import('firebase/app'),
-            import('firebase/firestore'),
-          ]);
-          await store.updateDoc(
-            store.doc(
-              store.getFirestore(getApp()),
-              'events',
-              menu.id,
-              'orders',
-              existingOrder.id,
-            ),
-            {
-              selections,
-              note: amended.note,
-              updatedAt: store.serverTimestamp(),
-              revision: store.increment(1),
-            },
-          );
-        } else {
-          const next = orders.map((order) =>
-            order.id === amended.id ? amended : order,
-          );
-          setOrders(next);
-          shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
-        }
-        setRememberedOrder(amended);
-        setRememberedOrders((current) =>
-          current.map((order) => (order.id === amended.id ? amended : order)),
-        );
-        showSubmissionConfirmation('updated');
-        return;
-      }
-    }
-    if (editingOrderId && rememberedOrder) {
-      const updated: Order = {
-        ...rememberedOrder,
-        guestName: guestName.trim(),
-        selections: cart,
-        note: note.trim(),
-        updatedAt: Date.now(),
-        revision: (rememberedOrder.revision || 1) + 1,
-      };
+    if (count === 0) return;
+    const existing = !editingOrderId ? rememberedOrders.find((order) => order.status === 'new') : null;
+    const target = editingOrderId
+      ? rememberedOrders.find((order) => order.id === editingOrderId)
+      : existing;
+    const createdAt = Date.now();
+    const orderId = target?.id || crypto.randomUUID();
+    try {
       if (firebaseConfigured) {
-        const [{ getApp }, store] = await Promise.all([
-          import('firebase/app'),
-          import('firebase/firestore'),
+        const [{ getApp }, authModule, store] = await Promise.all([
+          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
         ]);
-        await store.updateDoc(
-          store.doc(
-            store.getFirestore(getApp()),
-            'events',
-            menu.id,
-            'orders',
-            editingOrderId,
-          ),
-          {
-            guestName: updated.guestName,
-            selections: updated.selections,
-            note: updated.note,
-            updatedAt: store.serverTimestamp(),
-            revision: store.increment(1),
-          },
-        );
+        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
+        if (!user?.isAnonymous || user.uid !== myRsvp.guestUid) throw new Error('identity');
+        const db = store.getFirestore(getApp('gather-guest'));
+        const orderRef = store.doc(db, 'events', menu.id, 'orders', orderId);
+        await store.runTransaction(db, async (transaction) => {
+          const rsvp = await transaction.get(store.doc(db, 'events', menu.id, 'rsvps', user.uid));
+          if (!rsvp.exists() || rsvp.data().status !== 'yes') throw new Error('rsvp');
+          const prior = target ? await transaction.get(orderRef) : null;
+          if (target && (!prior?.exists() || prior.data().status !== 'new' || prior.data().guestUid !== user.uid))
+            throw new Error('order-changed');
+          if (prior?.exists()) {
+            const selections = editingOrderId ? cart : { ...prior.data().selections } as Record<string, number>;
+            if (!editingOrderId) Object.entries(cart).forEach(([itemId, quantity]) => {
+              selections[itemId] = (selections[itemId] || 0) + quantity;
+            });
+            transaction.update(orderRef, {
+              selections,
+              note: editingOrderId ? note.trim() : [prior.data().note, note.trim()].filter(Boolean).join(' · ').slice(0, 500),
+              updatedAt: store.serverTimestamp(),
+              revision: (prior.data().revision || 1) + 1,
+            });
+          } else {
+            transaction.set(orderRef, {
+              id: orderId, guestUid: user.uid, guestName: rsvp.data().guestName,
+              selections: cart, note: note.trim(), status: 'new', revision: 1,
+              createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
+            });
+          }
+        });
       } else {
-        const next = orders.map((order) =>
-          order.id === editingOrderId ? updated : order,
-        );
+        const nextOrder: Order = target
+          ? {
+              ...target,
+              selections: editingOrderId ? cart : Object.fromEntries(
+                [...new Set([...Object.keys(target.selections), ...Object.keys(cart)])].map((id) =>
+                  [id, (target.selections[id] || 0) + (cart[id] || 0)]),
+              ),
+              note: editingOrderId ? note.trim() : [target.note, note.trim()].filter(Boolean).join(' · ').slice(0, 500),
+              updatedAt: createdAt,
+            }
+          : {
+              id: orderId, guestName: myRsvp.guestName, guestUid: myRsvp.guestUid,
+              selections: cart, note: note.trim(), status: 'new',
+              createdAt, updatedAt: createdAt, revision: 1,
+            };
+        const next = [nextOrder, ...orders.filter((order) => order.id !== orderId)];
         setOrders(next);
         shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
-        setRememberedOrder(updated);
+        setRememberedOrders([nextOrder, ...rememberedOrders.filter((order) => order.id !== orderId)]);
       }
-      showSubmissionConfirmation('updated');
+      const savedReceipt = saveReceipt(menu.id, orderId, createdAt);
+      setReceipts((current) => [...current.filter((entry) => entry.orderId !== orderId), savedReceipt]);
+      showSubmissionConfirmation(target ? 'updated' : 'created');
+    } catch (error) {
+      notify((error as Error).message === 'order-changed'
+        ? 'That order changed. Refresh and try again.'
+        : 'Order was not sent. Check your RSVP and try again.');
+    }
+  }
+  async function saveRsvp() {
+    const name = guestName.trim().replace(/\s+/g, ' ');
+    const phoneDigits = phoneNumber.replace(/\D/g, '');
+    const normalizedPhone = `+${phoneDigits.length === 10 ? `1${phoneDigits}` : phoneDigits}`;
+    if (name.length < 2 || name.length > 80) {
+      notify('Enter a name between 2 and 80 characters');
       return;
     }
-    const createdAt = Date.now();
-    const orderId = crypto.randomUUID();
-    let guestUid = 'preview-device';
-    if (firebaseConfigured) {
-      const [{ getApp }, authModule] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/auth'),
-      ]);
-      const auth = authModule.getAuth(getApp());
-      if (!auth.currentUser || auth.currentUser.isAnonymous) {
-        notify('Verify your phone number before sending an order');
-        return;
-      }
-      guestUid = auth.currentUser!.uid;
-      const store = await import('firebase/firestore');
-      const db = store.getFirestore(getApp());
-      const nameRef = store.doc(
-        db,
-        'events',
-        menu.id,
-        'name-index',
-        await guestNameIndexId(guestName),
-      );
-      const nameRecord = await store.getDoc(nameRef);
-      const guestUids = (nameRecord.data()?.guestUids || []) as string[];
-      if (guestUids.some((uid) => uid !== guestUid)) {
-        const sameGuest = await confirmSameGuest(guestName.trim());
-        if (!sameGuest) return;
-      }
-      await store.setDoc(
-        nameRef,
-        { guestUids: store.arrayUnion(guestUid), updatedAt: store.serverTimestamp() },
-        { merge: true },
-      );
+    if (normalizedPhone.length < 11 || normalizedPhone.length > 16) {
+      notify('Enter a complete phone number, including country code when outside the US');
+      return;
     }
-    const newOrder: Order = {
-      id: orderId,
-      guestName: guestName.trim(),
-      selections: cart,
-      note: note.trim(),
-      status: 'new',
-      createdAt,
-      updatedAt: createdAt,
-      guestUid,
-      revision: 1,
-    };
-    if (firebaseConfigured) {
-      const [{ getApp }, store] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/firestore'),
-      ]);
-      await store.setDoc(
-        store.doc(
-          store.getFirestore(getApp()),
-          'events',
-          menu.id,
-          'orders',
-          orderId,
-        ),
-        {
-          ...newOrder,
-          createdAt: store.serverTimestamp(),
-          updatedAt: store.serverTimestamp(),
-        },
-      );
-      await store.setDoc(
-        store.doc(store.getFirestore(getApp()), 'events', menu.id, 'rsvps', guestUid),
-        {
-          guestUid,
-          guestName: guestName.trim(),
-          status: 'attending',
-          createdAt: store.serverTimestamp(),
-          updatedAt: store.serverTimestamp(),
-        },
-        { merge: true },
-      );
-    } else {
-      const next = [newOrder, ...orders];
-      setOrders(next);
-      shareDemoUpdate({ type: 'orders', eventId: menu.id, value: next });
-      setRememberedOrders((current) => [newOrder, ...current]);
+    if (myRsvp?.status === 'yes' && rsvpChoice !== 'yes' && rememberedOrders.some((order) => order.status === 'new' || order.status === 'preparing')) {
+      notify('Cancel or finish your active order before changing your RSVP');
+      return;
     }
-    const savedReceipt = saveReceipt(menu.id, orderId, createdAt);
-    setReceipts((current) => [...current.filter((entry) => entry.orderId !== savedReceipt.orderId), savedReceipt]);
-    setRememberedOrder(newOrder);
-    setRememberedOrders((current) => [newOrder, ...current.filter((order) => order.id !== newOrder.id)]);
-    showSubmissionConfirmation('created');
-  }
-  async function sendPhoneCode() {
-    if (!firebaseConfigured || !phoneNumber.trim()) return;
-    setPhoneBusy(true);
+    setRsvpBusy(true);
     try {
-      const [{ getApp }, authModule] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/auth'),
-      ]);
-      const auth = authModule.getAuth(getApp());
-      if (!auth.currentUser) await authModule.signInAnonymously(auth);
-      phoneVerifier.current?.clear();
-      const verifier = new authModule.RecaptchaVerifier(
-        auth,
-        'phone-recaptcha',
-        { size: 'invisible' },
-      );
-      phoneVerifier.current = verifier;
-      phoneConfirmation.current = await authModule.linkWithPhoneNumber(
-        auth.currentUser!,
-        phoneNumber.trim(),
-        verifier,
-      );
-      setPhoneStep('code');
-      notify('A verification code was sent');
-    } catch {
-      phoneVerifier.current?.clear();
-      notify('Could not send a code. Check the number and try again.');
+      if (firebaseConfigured) {
+        const [{ getApp }, authModule, store] = await Promise.all([
+          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+        ]);
+        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
+        if (!user?.isAnonymous) throw new Error('guest-session');
+        const db = store.getFirestore(getApp('gather-guest'));
+        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', user.uid);
+        const nameRef = store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(name));
+        const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(normalizedPhone));
+        await store.runTransaction(db, async (transaction) => {
+          const prior = await transaction.get(rsvpRef);
+          const nameClaim = await transaction.get(nameRef);
+          const phoneClaim = await transaction.get(phoneRef);
+          const oldNameRef = prior.exists() && guestNameKey(prior.data().guestName) !== guestNameKey(name)
+            ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(prior.data().guestName)) : null;
+          const oldPhoneRef = prior.exists() && typeof prior.data().guestPhone === 'string' && prior.data().guestPhone !== normalizedPhone
+            ? store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(prior.data().guestPhone)) : null;
+          const oldClaim = oldNameRef ? await transaction.get(oldNameRef) : null;
+          const oldPhoneClaim = oldPhoneRef ? await transaction.get(oldPhoneRef) : null;
+          if (nameClaim.exists() && nameClaim.data().guestUid !== user.uid) throw new Error('name-taken');
+          if (phoneClaim.exists() && phoneClaim.data().guestUid !== user.uid) throw new Error('phone-taken');
+          if (!nameClaim.exists()) transaction.set(nameRef, {
+            guestUid: user.uid, guestName: name, createdAt: store.serverTimestamp(),
+          });
+          if (!phoneClaim.exists()) transaction.set(phoneRef, {
+            guestUid: user.uid, guestPhone: normalizedPhone, createdAt: store.serverTimestamp(),
+          });
+          if (oldNameRef && oldClaim?.data()?.guestUid === user.uid) transaction.delete(oldNameRef);
+          if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === user.uid) transaction.delete(oldPhoneRef);
+          transaction.set(rsvpRef, {
+            guestUid: user.uid, guestName: name, guestPhone: normalizedPhone, status: rsvpChoice,
+            createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
+            updatedAt: store.serverTimestamp(),
+          });
+        });
+      } else {
+        const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
+        if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
+        if (others.some((entry) => entry.guestPhone === normalizedPhone)) throw new Error('phone-taken');
+        const saved: Rsvp = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, status: rsvpChoice, createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now() };
+        const next = [saved, ...others];
+        setRsvps(next);
+        shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
+        setMyRsvp(saved);
+      }
+      notify(`RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
+    } catch (error) {
+      notify((error as Error).message === 'name-taken'
+        ? 'That name is already used for this event. Please choose a different name.'
+        : (error as Error).message === 'phone-taken'
+          ? 'That phone number already has an RSVP for this event.'
+          : 'RSVP was not saved. Please try again.');
     } finally {
-      setPhoneBusy(false);
-    }
-  }
-  async function verifyPhoneCode() {
-    if (!phoneConfirmation.current || !phoneCode.trim()) return;
-    setPhoneBusy(true);
-    try {
-      await phoneConfirmation.current.confirm(phoneCode.trim());
-      setPhoneStep('verified');
-      notify('Phone number verified for this order');
-    } catch {
-      notify('That verification code did not work. Try again.');
-    } finally {
-      setPhoneBusy(false);
+      setRsvpBusy(false);
     }
   }
   async function persistScheduledOrders(next: Order[]) {
@@ -1312,7 +1243,7 @@ export default function Home() {
       ]);
       await store.updateDoc(
         store.doc(
-          store.getFirestore(getApp()),
+          store.getFirestore(getApp('gather-guest')),
           'events',
           menu.id,
           'orders',
@@ -1540,13 +1471,16 @@ export default function Home() {
             }
           }),
       );
-      for (let index = 0; index < orders.length; index += 400) {
+      const eventDocuments = (await Promise.all(
+        ['orders', 'rsvps', 'guest-names', 'guest-phones', 'name-index'].map((collectionName) =>
+          store.getDocs(store.collection(db, 'events', event.id, collectionName)),
+        ),
+      )).flatMap((snapshot) => snapshot.docs);
+      for (let index = 0; index < eventDocuments.length; index += 400) {
         const batch = store.writeBatch(db);
-        orders
+        eventDocuments
           .slice(index, index + 400)
-          .forEach((order) =>
-            batch.delete(store.doc(db, 'events', event.id, 'orders', order.id)),
-          );
+          .forEach((document) => batch.delete(document.ref));
         await batch.commit();
       }
       await store.deleteDoc(store.doc(db, 'events', event.id));
@@ -1638,13 +1572,32 @@ export default function Home() {
       </header>
 
       {mode === 'guest' ? (
-        <GuestMenu
-          menu={menu}
-          categories={categories}
-          cart={cart}
-          reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
-          setQty={setQty}
-        />
+        <>
+          <section className="guest-rsvp-panel" aria-label="Your RSVP">
+            <div className="guest-rsvp-heading">
+              <div><p className="eyebrow">Your invitation</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
+              {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+            </div>
+            <p className="guest-rsvp-explainer">Enter your name and phone number so the host can identify your RSVP and orders. No verification code is sent. You can RSVP even when ordering is closed.</p>
+            <div className="guest-rsvp-form">
+                <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
+                <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" /></label>
+                <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
+                  {([['yes', 'Yes, I’m going'], ['maybe', 'Maybe'], ['no', 'No, I can’t come']] as const).map(([value, label]) => (
+                    <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} />{label}</label>
+                  ))}
+                </div>
+                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
+            </div>
+          </section>
+          <GuestMenu
+            menu={menu}
+            categories={categories}
+            cart={cart}
+            reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
+            setQty={setQty}
+          />
+        </>
       ) : (
         <HostWorkspace
           events={events}
@@ -1855,15 +1808,15 @@ export default function Home() {
                 Your table
               </p>
               <p className="font-display text-lg font-semibold">
-                {menu.accepting
+                {menu.accepting && myRsvp?.status === 'yes'
                   ? count
                     ? `${count} dish${count === 1 ? '' : 'es'} selected`
                     : 'Choose what calls to you'
-                  : 'Ordering is closed'}
+                  : !menu.accepting ? 'Ordering is closed' : 'RSVP Yes to order'}
               </p>
             </div>
             <button
-              disabled={!count || !menu.accepting}
+              disabled={!count || !menu.accepting || myRsvp?.status !== 'yes'}
               onClick={() =>
                 (
                   document.getElementById('checkout') as HTMLDialogElement
@@ -1885,23 +1838,14 @@ export default function Home() {
                 {editingOrderId ? 'Make a change' : 'Almost there'}
               </p>
               <h2 className="font-display mt-1 text-3xl font-semibold">
-                {editingOrderId ? 'Edit your order' : 'Who’s this for?'}
+                {editingOrderId ? 'Edit your order' : 'Review your order'}
               </h2>
             </div>
             <button className="icon-button" aria-label="Close">
               <ArrowLeft size={18} />
             </button>
           </div>
-          <label className="field-label">
-            Name for the order
-            <input
-              value={guestName}
-              onChange={(e) => setGuestName(e.target.value)}
-              className="field-input"
-              placeholder="e.g. Maya, or The Parkers"
-              autoFocus
-            />
-          </label>
+          <p className="text-sm text-black/60">Ordering as <strong className="text-black">{myRsvp?.guestName || guestName}</strong></p>
           <label className="field-label mt-5">
             Anything we should know?{' '}
             <span className="font-normal text-black/35">Optional</span>
@@ -1912,48 +1856,6 @@ export default function Home() {
               placeholder="Allergies, preferences, or a note for the host"
             />
           </label>
-          {firebaseConfigured && !editingOrderId && (
-            <section className="mt-5 rounded-2xl border border-black/8 bg-white/60 p-4">
-              <p className="text-sm font-semibold">Phone number <span className="font-normal text-black/40">Required</span></p>
-              <p className="mt-1 text-xs leading-5 text-black/50">
-                A text code creates a temporary guest identity for your orders and RSVP. Your number is not stored in the event.
-              </p>
-              {phoneStep === 'verified' ? (
-                <p className="mt-3 flex items-center gap-2 text-sm font-semibold text-emerald-700">
-                  <Check size={16} /> Number verified
-                </p>
-              ) : phoneStep === 'code' ? (
-                <div className="mt-3 flex gap-2">
-                  <input
-                    value={phoneCode}
-                    onChange={(e) => setPhoneCode(e.target.value)}
-                    className="field-input"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    placeholder="Verification code"
-                  />
-                  <button type="button" onClick={() => void verifyPhoneCode()} disabled={phoneBusy || !phoneCode.trim()} className="secondary-button whitespace-nowrap disabled:opacity-40">
-                    Verify
-                  </button>
-                </div>
-              ) : (
-                <div className="mt-3 flex gap-2">
-                  <input
-                    value={phoneNumber}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
-                    className="field-input"
-                    inputMode="tel"
-                    autoComplete="tel"
-                    placeholder="+1 555 555 5555"
-                  />
-                  <button type="button" onClick={() => void sendPhoneCode()} disabled={phoneBusy || !phoneNumber.trim()} className="secondary-button whitespace-nowrap disabled:opacity-40">
-                    Text code
-                  </button>
-                </div>
-              )}
-              <div id="phone-recaptcha" />
-            </section>
-          )}
           <div className="mt-6 rounded-2xl bg-black/[.035] p-4 text-sm">
             {menu.items
               .filter((i) => editingOrderId || cart[i.id])
@@ -1986,7 +1888,7 @@ export default function Home() {
           </div>
           <button
             type="button"
-            disabled={!guestName.trim() || count === 0}
+            disabled={myRsvp?.status !== 'yes' || count === 0}
             onClick={() => void submitOrder()}
             className="primary-button mt-6 w-full justify-center py-3.5 disabled:opacity-40"
           >
@@ -2050,44 +1952,6 @@ export default function Home() {
                 className="danger-button"
               >
                 Yes, cancel
-              </button>
-            </div>
-          </section>
-        </div>
-      )}
-      {nameConflict && (
-        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/45 p-5 backdrop-blur-sm">
-          <section className="w-full max-w-md rounded-3xl bg-[var(--cream)] p-7 text-center shadow-2xl">
-            <span className="mx-auto grid size-14 place-items-center rounded-full bg-[var(--orange)]/15 text-[var(--orange)]">
-              <Users size={25} />
-            </span>
-            <h2 className="font-display mt-5 text-3xl font-semibold">
-              Is this {nameConflict.name}?
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-black/55">
-              This name already has an order from another device. Confirm only
-              if it belongs to the same guest.
-            </p>
-            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-              <button
-                onClick={() => {
-                  const { resolve } = nameConflict;
-                  setNameConflict(null);
-                  resolve(true);
-                }}
-                className="primary-button justify-center"
-              >
-                I’m the same person
-              </button>
-              <button
-                onClick={() => {
-                  const { resolve } = nameConflict;
-                  setNameConflict(null);
-                  resolve(false);
-                }}
-                className="secondary-button justify-center"
-              >
-                Let me rename
               </button>
             </div>
           </section>
@@ -2743,7 +2607,7 @@ function SchedulerBoard({
         }
       >
     >((groups, order) => {
-      const key = guestNameKey(order.guestName) || 'unnamed guest';
+      const key = order.guestUid || guestNameKey(order.guestName) || 'unnamed guest';
       const ticket = groups[key] || {
         guestName: guestDisplayName(order),
         orders: [],
@@ -2783,7 +2647,7 @@ function SchedulerBoard({
         }
       >
     >((groups, order) => {
-      const key = guestDisplayName(order).trim().toLowerCase() || 'unnamed guest';
+      const key = order.guestUid || guestDisplayName(order).trim().toLowerCase() || 'unnamed guest';
       const group = groups[key] || {
         guestName: guestDisplayName(order),
         orders: [],
@@ -2867,18 +2731,18 @@ function SchedulerBoard({
             <p className="scheduler-label">Guest list</p>
             <h3 className="font-display">RSVPs</h3>
           </div>
-          <span>{rsvps.length} attending</span>
+          <span>{rsvps.filter((rsvp) => rsvp.status === 'yes').length} going · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
         </header>
         {rsvps.length ? (
           <div className="resource-meter-grid">
             {rsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>Phone-verified guest</span></div>
-                <Check size={18} aria-label="Attending" />
+                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}</span></div>
+                <span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span>
               </article>
             ))}
           </div>
-        ) : <p className="resource-empty-note">Verified guests appear here when they RSVP or place an order.</p>}
+        ) : <p className="resource-empty-note">Guests appear here as soon as they RSVP.</p>}
       </section>
       <section className="resource-rack">
         <header>

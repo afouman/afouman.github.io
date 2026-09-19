@@ -2177,6 +2177,50 @@ button:disabled {
   color: rgb(246 240 228/0.35);
   font-size: 0.58rem;
 }
+.resource-meter-grid .host-rsvp-badge {
+  border-radius: 999px;
+  padding: 0.3rem 0.6rem;
+  font-weight: 800;
+  color: #f7f2e8;
+  background: #55725b;
+}
+.resource-meter-grid .host-rsvp-badge.rsvp-maybe { background: #8a6533; }
+.resource-meter-grid .host-rsvp-badge.rsvp-no { background: #723e3d; }
+.guest-rsvp-panel {
+  max-width: 980px;
+  margin: 2rem auto;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  border: 1px solid rgb(32 35 31 / 0.1);
+  border-radius: 1.5rem;
+  background: #fffdf8;
+  box-shadow: 0 16px 45px rgb(53 43 29 / 0.08);
+}
+.guest-rsvp-heading, .guest-rsvp-phone, .guest-rsvp-form {
+  display: flex;
+  align-items: end;
+  gap: 1rem;
+}
+.guest-rsvp-heading { align-items: start; justify-content: space-between; }
+.guest-rsvp-heading h2 { font-size: clamp(1.5rem, 3vw, 2.2rem); line-height: 1.1; }
+.guest-rsvp-explainer { margin: 0.75rem 0 1.3rem; color: rgb(32 35 31 / 0.62); font-size: 0.85rem; }
+.guest-rsvp-phone .field-label, .guest-rsvp-form .field-label { flex: 1; min-width: 0; }
+.guest-rsvp-form { flex-wrap: wrap; }
+.rsvp-choices { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.rsvp-choices label {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.75rem 0.9rem; border: 1px solid rgb(32 35 31 / 0.15);
+  border-radius: 0.75rem; cursor: pointer; font-size: 0.8rem; font-weight: 700;
+}
+.rsvp-choices label.selected { border-color: var(--sage); background: var(--sage-light); }
+.rsvp-status { border-radius: 99px; padding: 0.4rem 0.8rem; color: white; background: var(--sage); font-size: 0.75rem; font-weight: 800; white-space: nowrap; }
+.rsvp-status.rsvp-maybe { background: #8a6533; }
+.rsvp-status.rsvp-no { background: #723e3d; }
+@media (max-width: 700px) {
+  .guest-rsvp-phone, .guest-rsvp-form { align-items: stretch; flex-direction: column; }
+  .guest-rsvp-phone .field-label, .guest-rsvp-form .field-label { width: 100%; }
+  .rsvp-choices { width: 100%; }
+  .rsvp-choices label { flex: 1 1 100%; }
+}
 .capacity-dots {
   display: flex;
   flex-wrap: wrap;
