@@ -239,6 +239,7 @@ const firebaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
 );
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
+const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
 const demoOrdersKey = (eventId: string) => `gather-demo-orders-v2:${eventId}`;
 const DEMO_CHANNEL = 'gather-demo-sync';
@@ -482,6 +483,8 @@ export default function Home() {
     const eventId =
       new URLSearchParams(window.location.search).get('event') || demoMenu.id;
     queueMicrotask(() => setReceipts(readReceipts(eventId)));
+    const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
+    if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
   }, []);
 
   useEffect(() => {
@@ -598,9 +601,8 @@ export default function Home() {
     if (!firebaseConfigured) return;
     let stop = () => {};
     (async () => {
-      const [appModule, authModule, store] = await Promise.all([
+      const [appModule, store] = await Promise.all([
         import('firebase/app'),
-        import('firebase/auth'),
         import('firebase/firestore'),
       ]);
       const app = appModule.getApps().some((candidate) => candidate.name === '[DEFAULT]')
@@ -612,26 +614,19 @@ export default function Home() {
             storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
             appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
           });
-      const guestApp = appModule.getApps().some((candidate) => candidate.name === 'gather-guest')
-        ? appModule.getApp('gather-guest')
-        : appModule.initializeApp(app.options, 'gather-guest');
-      const auth = authModule.getAuth(mode === 'guest' ? guestApp : app);
-      await authModule.setPersistence(auth, authModule.browserLocalPersistence);
-      await auth.authStateReady();
-      if (mode === 'guest') {
-        if (auth.currentUser && !auth.currentUser.isAnonymous)
-          await authModule.signOut(auth);
-        if (!auth.currentUser) await authModule.signInAnonymously(auth);
-        setGuestUid(auth.currentUser!.uid);
+      let hostAuthUser: { email: string | null; uid: string } | null = null;
+      if (mode === 'host') {
+        const authModule = await import('firebase/auth');
+        const auth = authModule.getAuth(app);
+        await authModule.setPersistence(auth, authModule.browserLocalPersistence);
+        await auth.authStateReady();
+        hostAuthUser = auth.currentUser;
+        if (
+          hostAuthUser &&
+          (!HOST_EMAIL || hostAuthUser.email?.toLowerCase() === HOST_EMAIL)
+        ) setHostUser(hostAuthUser.email || hostAuthUser.uid);
       }
-      if (
-        mode === 'host' &&
-        auth.currentUser &&
-        !auth.currentUser.isAnonymous &&
-        (!HOST_EMAIL || auth.currentUser.email?.toLowerCase() === HOST_EMAIL)
-      )
-        setHostUser(auth.currentUser.email || auth.currentUser.uid);
-      const db = store.getFirestore(mode === 'guest' ? guestApp : app);
+      const db = store.getFirestore(app);
       const eventId =
         new URLSearchParams(location.search).get('event') || menu.id;
       const unsubMenu = store.onSnapshot(
@@ -650,8 +645,8 @@ export default function Home() {
       const unsubRememberedOrders: (() => void)[] = [];
       if (
         mode === 'host' &&
-        auth.currentUser &&
-        auth.currentUser.email?.toLowerCase() === HOST_EMAIL
+        hostAuthUser &&
+        hostAuthUser.email?.toLowerCase() === HOST_EMAIL
       ) {
         unsubEvents = store.onSnapshot(
           store.collection(db, 'events'),
@@ -725,8 +720,8 @@ export default function Home() {
             ),
         );
       }
-      if (mode === 'guest' && auth.currentUser?.isAnonymous) {
-        const uid = auth.currentUser.uid;
+      if (mode === 'guest' && guestUid) {
+        const uid = guestUid;
         unsubGuestProfile = store.onSnapshot(
           store.doc(db, 'events', eventId, 'guests', uid),
           (snap) => {
@@ -908,6 +903,18 @@ export default function Home() {
       next === 'host' ? `?view=host&event=${menu.id}` : `?event=${menu.id}`,
     );
   };
+  const useAnotherGuestProfile = () => {
+    localStorage.removeItem(guestIdentityKey(menu.id));
+    setGuestUid(null);
+    setGuestProfile(null);
+    setMyRsvp(null);
+    setRememberedOrders([]);
+    setRememberedOrder(null);
+    setGuestName('');
+    setPhoneNumber('');
+    setCart({});
+    setEditingGuestProfile(false);
+  };
 
   function selectHostEvent(event: EventMenu) {
     setMenu(event);
@@ -1039,18 +1046,17 @@ export default function Home() {
     const orderId = target?.id || crypto.randomUUID();
     try {
       if (firebaseConfigured) {
-        const [{ getApp }, authModule, store] = await Promise.all([
-          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
         ]);
-        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
-        if (!user?.isAnonymous || user.uid !== myRsvp.guestUid) throw new Error('identity');
-        const db = store.getFirestore(getApp('gather-guest'));
+        const uid = myRsvp.guestUid;
+        const db = store.getFirestore(getApp());
         const orderRef = store.doc(db, 'events', menu.id, 'orders', orderId);
         await store.runTransaction(db, async (transaction) => {
-          const rsvp = await transaction.get(store.doc(db, 'events', menu.id, 'rsvps', user.uid));
+          const rsvp = await transaction.get(store.doc(db, 'events', menu.id, 'rsvps', uid));
           if (!rsvp.exists() || rsvp.data().status !== 'yes') throw new Error('rsvp');
           const prior = target ? await transaction.get(orderRef) : null;
-          if (target && (!prior?.exists() || prior.data().status !== 'new' || prior.data().guestUid !== user.uid))
+          if (target && (!prior?.exists() || prior.data().status !== 'new' || prior.data().guestUid !== uid))
             throw new Error('order-changed');
           if (prior?.exists()) {
             const selections = editingOrderId ? cart : { ...prior.data().selections } as Record<string, number>;
@@ -1065,11 +1071,11 @@ export default function Home() {
             });
           } else {
             transaction.set(orderRef, {
-              id: orderId, guestUid: user.uid, guestName: rsvp.data().guestName,
+              id: orderId, guestUid: uid, guestName: rsvp.data().guestName,
               selections: cart, note: note.trim(), status: 'new', revision: 1,
               createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
             });
-            transaction.update(store.doc(db, 'events', menu.id, 'rsvps', user.uid), {
+            transaction.update(store.doc(db, 'events', menu.id, 'rsvps', uid), {
               activeOrderCount: (rsvp.data().activeOrderCount || 0) + 1,
               updatedAt: store.serverTimestamp(),
             });
@@ -1121,14 +1127,14 @@ export default function Home() {
     setProfileBusy(true);
     try {
       if (firebaseConfigured) {
-        const [{ getApp }, authModule, store] = await Promise.all([
-          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
         ]);
-        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
-        if (!user?.isAnonymous) throw new Error('guest-session');
-        const db = store.getFirestore(getApp('gather-guest'));
-        const profileRef = store.doc(db, 'events', menu.id, 'guests', user.uid);
-        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', user.uid);
+        const uid = await guestNameIndexId(normalizedPhone);
+        if (guestProfile && guestProfile.guestUid !== uid) throw new Error('phone-locked');
+        const db = store.getFirestore(getApp());
+        const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
+        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
         const nameRef = store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(name));
         const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(normalizedPhone));
         await store.runTransaction(db, async (transaction) => {
@@ -1143,18 +1149,18 @@ export default function Home() {
             ? store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(previous.guestPhone)) : null;
           const oldClaim = oldNameRef ? await transaction.get(oldNameRef) : null;
           const oldPhoneClaim = oldPhoneRef ? await transaction.get(oldPhoneRef) : null;
-          if (nameClaim.exists() && nameClaim.data().guestUid !== user.uid) throw new Error('name-taken');
-          if (phoneClaim.exists() && phoneClaim.data().guestUid !== user.uid) throw new Error('phone-taken');
+          if (nameClaim.exists() && nameClaim.data().guestUid !== uid) throw new Error('name-taken');
+          if (phoneClaim.exists() && phoneClaim.data().guestUid !== uid) throw new Error('phone-taken');
           if (!nameClaim.exists()) transaction.set(nameRef, {
-            guestUid: user.uid, guestName: name, createdAt: store.serverTimestamp(),
+            guestUid: uid, guestName: name, createdAt: store.serverTimestamp(),
           });
           if (!phoneClaim.exists()) transaction.set(phoneRef, {
-            guestUid: user.uid, guestPhone: normalizedPhone, createdAt: store.serverTimestamp(),
+            guestUid: uid, guestPhone: normalizedPhone, createdAt: store.serverTimestamp(),
           });
-          if (oldNameRef && oldClaim?.data()?.guestUid === user.uid) transaction.delete(oldNameRef);
-          if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === user.uid) transaction.delete(oldPhoneRef);
+          if (oldNameRef && oldClaim?.data()?.guestUid === uid) transaction.delete(oldNameRef);
+          if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === uid) transaction.delete(oldPhoneRef);
           transaction.set(profileRef, {
-            guestUid: user.uid, guestName: name, guestPhone: normalizedPhone,
+            guestUid: uid, guestName: name, guestPhone: normalizedPhone,
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -1164,6 +1170,8 @@ export default function Home() {
             updatedAt: store.serverTimestamp(),
           });
         });
+        localStorage.setItem(guestIdentityKey(menu.id), uid);
+        setGuestUid(uid);
       } else {
         const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
@@ -1179,6 +1187,8 @@ export default function Home() {
         ? 'That name is already used for this event. Please choose a different name.'
         : (error as Error).message === 'phone-taken'
           ? 'That phone number already belongs to another guest for this event.'
+          : (error as Error).message === 'phone-locked'
+            ? 'This guest profile is tied to its phone number. Reload the page to use another number.'
           : 'Guest profile was not saved. Please try again.');
     } finally {
       setProfileBusy(false);
@@ -1200,25 +1210,24 @@ export default function Home() {
     setRsvpBusy(true);
     try {
       if (firebaseConfigured) {
-        const [{ getApp }, authModule, store] = await Promise.all([
-          import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
         ]);
-        const user = authModule.getAuth(getApp('gather-guest')).currentUser;
-        if (!user?.isAnonymous || user.uid !== profile.guestUid) throw new Error('guest-session');
-        const db = store.getFirestore(getApp('gather-guest'));
-        const profileRef = store.doc(db, 'events', menu.id, 'guests', user.uid);
-        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', user.uid);
+        const uid = profile.guestUid;
+        const db = store.getFirestore(getApp());
+        const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
+        const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
         await store.runTransaction(db, async (transaction) => {
           const [savedProfile, prior] = await Promise.all([transaction.get(profileRef), transaction.get(rsvpRef)]);
           if (!savedProfile.exists()) transaction.set(profileRef, {
-            guestUid: user.uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
+            guestUid: uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
             createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
           });
           const activeOrderCount = prior.exists() ? prior.data().activeOrderCount || 0 : 0;
           if (prior.exists() && prior.data().status === 'yes' && rsvpChoice !== 'yes' && activeOrderCount > 0)
             throw new Error('active-orders');
           transaction.set(rsvpRef, {
-            guestUid: user.uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
+            guestUid: uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
             status: rsvpChoice, activeOrderCount,
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
@@ -1409,7 +1418,7 @@ export default function Home() {
         import('firebase/app'),
         import('firebase/firestore'),
       ]);
-      const db = store.getFirestore(getApp('gather-guest'));
+      const db = store.getFirestore(getApp());
       const orderRef = store.doc(db, 'events', menu.id, 'orders', rememberedOrder.id);
       const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', rememberedOrder.guestUid!);
       await store.runTransaction(db, async (transaction) => {
@@ -1753,10 +1762,10 @@ export default function Home() {
               <div className="guest-rsvp-heading">
                 <div><p className="eyebrow">Step 1 of 3</p><h2 className="font-display">Create your guest profile</h2></div>
               </div>
-              <p className="guest-rsvp-explainer">Your profile keeps your RSVP and orders together on this browser. Enter a name and phone number; no verification code is sent.</p>
+              <p className="guest-rsvp-explainer">Your phone number identifies your temporary guest profile and keeps your RSVP and orders together. No verification code is sent and no sign-in is required.</p>
               <div className="guest-rsvp-form">
                 <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
-                <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" /></label>
+                <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile)} /></label>
                 <div className="guest-profile-actions">
                   {effectiveGuestProfile && <button type="button" className="secondary-button" onClick={() => {
                     setGuestName(effectiveGuestProfile.guestName);
@@ -1775,7 +1784,7 @@ export default function Home() {
               </div>
               <div className="guest-profile-summary">
                 <div><strong>{effectiveGuestProfile.guestName}</strong><span>{effectiveGuestProfile.guestPhone}</span></div>
-                <button type="button" onClick={() => setEditingGuestProfile(true)}>Edit profile</button>
+                <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
               </div>
               <p className="guest-rsvp-explainer">RSVP separately from your profile. Choose Yes to place orders. You can still RSVP when ordering is closed.</p>
               <div className="guest-rsvp-form rsvp-only-form">

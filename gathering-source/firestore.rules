@@ -2,56 +2,51 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isHost(eventId) {
-      return signedIn() &&
-        get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
-    }
-    function isRealAccount() {
-      return signedIn() && request.auth.token.firebase.sign_in_provider != 'anonymous';
-    }
     function isApprovedHost() {
-      return isRealAccount()
+      return signedIn()
         && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com';
     }
-    function canManageEvent(eventId) {
-      return isHost(eventId) || isApprovedHost();
+    function isHost(eventId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
     }
-    function isGuest() {
-      return signedIn() && request.auth.token.firebase.sign_in_provider == 'anonymous';
+    function canManageEvent(eventId) {
+      return isApprovedHost() || isHost(eventId);
     }
     function activeOrders(data) {
       return data.keys().hasAny(['activeOrderCount']) ? data.activeOrderCount : 0;
     }
-    function isGoing(eventId) {
-      return isGuest()
-        && exists(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid))
-        && exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid))
-        && get(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid)).data.status == 'yes';
+    function guestProfile(eventId, guestUid) {
+      return get(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid));
+    }
+    function guestRsvp(eventId, guestUid) {
+      return get(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid));
     }
 
     match /events/{eventId} {
       allow read: if true;
       allow create: if isApprovedHost() && request.resource.data.ownerUid == request.auth.uid;
-      // The approved host can administer events created before the host
-      // account was moved to its current email. The original owner ID stays
-      // immutable, so a guest cannot claim an event.
       allow update: if canManageEvent(eventId)
         && request.resource.data.ownerUid == resource.data.ownerUid;
       allow delete: if canManageEvent(eventId);
 
       match /orders/{orderId} {
-        allow create: if isGoing(eventId)
-          && get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
+        allow get, list: if true;
+        allow create: if
+          get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
           && request.resource.data.keys().hasOnly([
             'id', 'guestName', 'selections', 'note', 'status', 'createdAt',
             'updatedAt', 'guestUid', 'guestLabel', 'revision'
           ])
           && request.resource.data.id == orderId
           && request.resource.data.status == 'new'
-          && request.resource.data.guestUid == request.auth.uid
-          && request.resource.data.guestName == get(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid)).data.guestName
-          && getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid)).data.activeOrderCount
-            == activeOrders(get(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid)).data) + 1
+          && request.resource.data.guestUid is string
+          && exists(/databases/$(database)/documents/events/$(eventId)/guests/$(request.resource.data.guestUid))
+          && exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.resource.data.guestUid))
+          && guestRsvp(eventId, request.resource.data.guestUid).data.status == 'yes'
+          && request.resource.data.guestName == guestProfile(eventId, request.resource.data.guestUid).data.guestName
+          && getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.resource.data.guestUid)).data.activeOrderCount
+            == activeOrders(guestRsvp(eventId, request.resource.data.guestUid).data) + 1
           && request.resource.data.revision == 1
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time
@@ -61,23 +56,20 @@ service cloud.firestore {
           && request.resource.data.note is string
           && request.resource.data.note.size() <= 500
           && request.resource.data.selections is map;
-        allow get, list: if canManageEvent(eventId) || (isGuest() && resource.data.guestUid == request.auth.uid);
         allow update: if canManageEvent(eventId) || (
-          isGuest()
-          && resource.data.guestUid == request.auth.uid
-          && resource.data.status == 'new'
+          resource.data.status == 'new'
           && request.resource.data.guestUid == resource.data.guestUid
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.status in ['new', 'cancelled']
           && (
             request.resource.data.status == 'cancelled'
-            || (get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true && isGoing(eventId))
+            || (
+              get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
+              && guestRsvp(eventId, resource.data.guestUid).data.status == 'yes'
+            )
           )
           && request.resource.data.revision == resource.data.revision + 1
           && request.resource.data.updatedAt == request.time
-          && request.resource.data.guestName is string
-          && request.resource.data.guestName.size() > 0
-          && request.resource.data.guestName.size() <= 80
           && request.resource.data.note is string
           && request.resource.data.note.size() <= 500
           && request.resource.data.selections is map
@@ -85,58 +77,54 @@ service cloud.firestore {
             request.resource.data.status == 'new'
             || (
               request.resource.data.cancelledAt == request.time
-              && getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid)).data.activeOrderCount
-                == activeOrders(get(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.auth.uid)).data) - 1
+              && getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(resource.data.guestUid)).data.activeOrderCount
+                == activeOrders(guestRsvp(eventId, resource.data.guestUid).data) - 1
             )
           )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestName', 'guestLabel', 'selections', 'note', 'status', 'updatedAt', 'cancelledAt', 'revision'
+            'guestName', 'guestLabel', 'selections', 'note', 'status',
+            'updatedAt', 'cancelledAt', 'revision'
           ])
         );
         allow delete: if canManageEvent(eventId);
       }
 
       match /name-index/{nameHash} {
-        allow get: if isGuest() || canManageEvent(eventId);
-        allow list: if canManageEvent(eventId);
-        allow delete: if canManageEvent(eventId);
+        allow get: if true;
+        allow list, delete: if canManageEvent(eventId);
       }
 
       match /guest-names/{nameHash} {
-        allow get: if isGuest() || canManageEvent(eventId);
+        allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if isGuest()
-          && request.resource.data.keys().hasOnly(['guestUid', 'guestName', 'createdAt'])
-          && request.resource.data.guestUid == request.auth.uid
+        allow create: if request.resource.data.keys().hasOnly(['guestUid', 'guestName', 'createdAt'])
+          && request.resource.data.guestUid is string
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
           && request.resource.data.createdAt == request.time;
-        allow delete: if canManageEvent(eventId) || (isGuest() && resource.data.guestUid == request.auth.uid);
+        allow delete: if true;
       }
 
       match /guest-phones/{phoneHash} {
-        allow get: if isGuest() || canManageEvent(eventId);
+        allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if isGuest()
-          && request.resource.data.keys().hasOnly(['guestUid', 'guestPhone', 'createdAt'])
-          && request.resource.data.guestUid == request.auth.uid
+        allow create: if request.resource.data.keys().hasOnly(['guestUid', 'guestPhone', 'createdAt'])
+          && request.resource.data.guestUid is string
           && request.resource.data.guestPhone is string
           && request.resource.data.guestPhone.size() >= 11
           && request.resource.data.guestPhone.size() <= 16
           && request.resource.data.createdAt == request.time;
-        allow delete: if canManageEvent(eventId) || (isGuest() && resource.data.guestUid == request.auth.uid);
+        allow delete: if true;
       }
 
       match /guests/{guestUid} {
-        allow get: if canManageEvent(eventId) || (isGuest() && guestUid == request.auth.uid);
+        allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if isGuest()
-          && guestUid == request.auth.uid
-          && request.resource.data.keys().hasOnly([
+        allow create: if request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'createdAt', 'updatedAt'
           ])
-          && request.resource.data.guestUid == request.auth.uid
+          && request.resource.data.guestUid == guestUid
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
@@ -145,57 +133,39 @@ service cloud.firestore {
           && request.resource.data.guestPhone.size() <= 16
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
-        allow update: if canManageEvent(eventId) || (
-          isGuest()
-          && guestUid == request.auth.uid
-          && request.resource.data.guestUid == resource.data.guestUid
+        allow update: if request.resource.data.guestUid == resource.data.guestUid
+          && request.resource.data.guestPhone == resource.data.guestPhone
+          && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
-          && request.resource.data.guestPhone is string
-          && request.resource.data.guestPhone.size() >= 11
-          && request.resource.data.guestPhone.size() <= 16
-          && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedAt == request.time
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestName', 'guestPhone', 'updatedAt'
-          ])
-        );
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestName', 'updatedAt']);
         allow delete: if canManageEvent(eventId);
       }
 
       match /rsvps/{guestUid} {
-        allow create: if isGuest()
-          && guestUid == request.auth.uid
-          && request.resource.data.keys().hasOnly([
-            'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount', 'createdAt', 'updatedAt'
+        allow get: if true;
+        allow list: if canManageEvent(eventId);
+        allow create: if request.resource.data.keys().hasOnly([
+            'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
+            'createdAt', 'updatedAt'
           ])
-          && request.resource.data.guestUid == request.auth.uid
+          && request.resource.data.guestUid == guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
-          && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid))
-          && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid)).data.guestName
-          && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid)).data.guestPhone
-          && request.resource.data.guestName is string
-          && request.resource.data.guestName.size() >= 2
-          && request.resource.data.guestName.size() <= 80
-          && request.resource.data.guestPhone is string
-          && request.resource.data.guestPhone.size() >= 11
-          && request.resource.data.guestPhone.size() <= 16
+          && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid))
+          && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
+          && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestPhone
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
-        allow get: if canManageEvent(eventId)
-          || (isGuest() && guestUid == request.auth.uid);
-        allow list: if canManageEvent(eventId);
         allow update: if canManageEvent(eventId) || (
-          isGuest()
-          && guestUid == request.auth.uid
-          && request.resource.data.guestUid == resource.data.guestUid
+          request.resource.data.guestUid == resource.data.guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount is int
           && request.resource.data.activeOrderCount >= 0
-          && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid)).data.guestName
-          && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(request.auth.uid)).data.guestPhone
+          && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
+          && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestPhone
           && (
             request.resource.data.activeOrderCount == activeOrders(resource.data)
             || (
@@ -212,12 +182,6 @@ service cloud.firestore {
             || resource.data.status != 'yes'
             || activeOrders(resource.data) == 0
           )
-          && request.resource.data.guestName is string
-          && request.resource.data.guestName.size() >= 2
-          && request.resource.data.guestName.size() <= 80
-          && request.resource.data.guestPhone is string
-          && request.resource.data.guestPhone.size() >= 11
-          && request.resource.data.guestPhone.size() <= 16
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedAt == request.time
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
