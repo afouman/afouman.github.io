@@ -9,6 +9,7 @@ import {
   Check,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
   Flame,
   GripVertical,
@@ -28,6 +29,7 @@ import {
   SquarePlus,
   Trash2,
   UtensilsCrossed,
+  UsersRound,
   XCircle,
 } from 'lucide-react';
 
@@ -54,6 +56,7 @@ type EventMenu = {
   startsAt?: string;
   welcome: string;
   accepting: boolean;
+  rsvpOpen?: boolean;
   categories?: string[];
   resources?: EventResource[];
   ownerUid?: string;
@@ -951,6 +954,7 @@ export default function Home() {
       startsAt: newEvent.date,
       welcome: newEvent.welcome.trim(),
       accepting: false,
+      rsvpOpen: true,
       categories: ['Main plates'],
       resources: [],
       items: [
@@ -1199,6 +1203,10 @@ export default function Home() {
     const profile = effectiveGuestProfile;
     if (!profile) {
       notify('Create your guest profile before responding');
+      return;
+    }
+    if (menu.rsvpOpen === false) {
+      notify('RSVPs are closed for this event');
       return;
     }
     const activeOrders = rememberedOrders.filter((order) => order.status === 'new' || order.status === 'preparing');
@@ -1583,6 +1591,38 @@ export default function Home() {
     }
   }
 
+  async function setEventRsvpOpen(rsvpOpen: boolean) {
+    const previousMenu = menu;
+    const previousEvents = events;
+    const updatedMenu = { ...menu, rsvpOpen };
+    const updatedEvents = events.map((event) =>
+      event.id === menu.id ? updatedMenu : event,
+    );
+    setMenu(updatedMenu);
+    setEvents(updatedEvents);
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        await store.updateDoc(
+          store.doc(store.getFirestore(getApp()), 'events', menu.id),
+          { rsvpOpen },
+        );
+      } else shareDemoUpdate({ type: 'events', value: updatedEvents });
+      notify(
+        rsvpOpen
+          ? 'RSVPs are open — guests can respond now'
+          : 'RSVPs are locked — existing responses are preserved',
+      );
+    } catch {
+      setMenu(previousMenu);
+      setEvents(previousEvents);
+      notify('Could not change RSVP status');
+    }
+  }
+
   async function uploadItemImage(itemId: string, file: File) {
     if (!file.type.startsWith('image/')) {
       notify('Please choose an image file');
@@ -1790,11 +1830,12 @@ export default function Home() {
               <div className="guest-rsvp-form rsvp-only-form">
                 <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
                   {([['yes', 'Yes, I’m going'], ['maybe', 'Maybe'], ['no', 'No, I can’t come']] as const).map(([value, label]) => (
-                    <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} />{label}</label>
+                    <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} disabled={menu.rsvpOpen === false} />{label}</label>
                   ))}
                 </div>
-                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy} className="primary-button">{myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
+                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
               </div>
+              {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
               {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
             </section>
           )}
@@ -1832,6 +1873,7 @@ export default function Home() {
           finishTask={finishTask}
           serveTask={serveTask}
           setAccepting={setEventAccepting}
+          setRsvpOpen={setEventRsvpOpen}
           notify={notify}
         />
       )}
@@ -2385,6 +2427,7 @@ function HostWorkspace({
   finishTask,
   serveTask,
   setAccepting,
+  setRsvpOpen,
   notify,
 }: {
   events: EventMenu[];
@@ -2407,6 +2450,7 @@ function HostWorkspace({
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
   setAccepting: (accepting: boolean) => Promise<void>;
+  setRsvpOpen: (rsvpOpen: boolean) => Promise<void>;
   notify: (message: string) => void;
 }) {
   const activeOrders = orders.filter(
@@ -2486,33 +2530,27 @@ function HostWorkspace({
                   <span>Code · {menu.id}</span>
                 </div>
               </div>
-              <div
-                className={`order-gate ${menu.accepting ? 'open' : 'closed'}`}
-              >
-                <div>
-                  <span className="order-gate-light" />
-                  <p>
-                    {menu.accepting
-                      ? 'Guest ordering is live'
-                      : 'Guest ordering is paused'}
-                  </p>
-                  <small>
-                    {menu.accepting
-                      ? 'New orders appear here instantly.'
-                      : 'Existing tickets stay active.'}
-                  </small>
+              <div className="event-gates">
+                <div className={`order-gate ${menu.accepting ? 'open' : 'closed'}`}>
+                  <div>
+                    <span className="order-gate-light" />
+                    <p>{menu.accepting ? 'Guest ordering is live' : 'Guest ordering is paused'}</p>
+                    <small>{menu.accepting ? 'New orders appear instantly.' : 'Existing tickets stay active.'}</small>
+                  </div>
+                  <button onClick={() => void setAccepting(!menu.accepting)}>
+                    {menu.accepting ? <><XCircle size={17} /> Stop orders</> : <><Sparkles size={17} /> Open orders</>}
+                  </button>
                 </div>
-                <button onClick={() => void setAccepting(!menu.accepting)}>
-                  {menu.accepting ? (
-                    <>
-                      <XCircle size={17} /> Stop orders
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles size={17} /> Open orders
-                    </>
-                  )}
-                </button>
+                <div className={`order-gate rsvp-gate ${menu.rsvpOpen === false ? 'closed' : 'open'}`}>
+                  <div>
+                    <span className="order-gate-light" />
+                    <p>{menu.rsvpOpen === false ? 'RSVPs are locked' : 'RSVPs are open'}</p>
+                    <small>{menu.rsvpOpen === false ? 'Saved responses stay visible.' : 'Guests can respond or update.'}</small>
+                  </div>
+                  <button onClick={() => void setRsvpOpen(menu.rsvpOpen === false)}>
+                    {menu.rsvpOpen === false ? <><UsersRound size={17} /> Open RSVPs</> : <><XCircle size={17} /> Lock RSVPs</>}
+                  </button>
+                </div>
               </div>
               <div className="host-actions">
                 <a href={`?event=${menu.id}`} target="_blank" rel="noreferrer">
@@ -2806,12 +2844,56 @@ function SchedulerBoard({
   serveTask: (orderId: string, taskId: string) => Promise<void>;
 }) {
   const [now, setNow] = useState(0);
+  const [guestListOpen, setGuestListOpen] = useState(false);
+  const [guestListNotice, setGuestListNotice] = useState('');
   useEffect(() => {
     queueMicrotask(() => setNow(Date.now()));
     const timer = window.setInterval(() => setNow(Date.now()), 15000);
     return () => window.clearInterval(timer);
   }, []);
   const usage = resourceUsage(orders, menu);
+  const sortedRsvps = [...rsvps].sort((left, right) => {
+    const statusOrder = { yes: 0, maybe: 1, no: 2 };
+    return statusOrder[left.status] - statusOrder[right.status]
+      || left.guestName.localeCompare(right.guestName);
+  });
+  const downloadGuestFile = (content: string, extension: 'csv' | 'vcf', type: string) => {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${menu.id}-guest-list.${extension}`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setGuestListNotice(extension === 'csv' ? 'Guest CSV downloaded' : 'Contact file downloaded');
+  };
+  const downloadGuestCsv = () => {
+    const escapeCell = (value: string | number) => {
+      const raw = String(value);
+      const safe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+      return `"${safe.replaceAll('"', '""')}"`;
+    };
+    downloadGuestFile([
+      ['Name', 'Phone', 'RSVP', 'Active orders'].map(escapeCell).join(','),
+      ...sortedRsvps.map((rsvp) => [
+        rsvp.guestName,
+        rsvp.guestPhone,
+        rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going',
+        rsvp.activeOrderCount || 0,
+      ].map(escapeCell).join(',')),
+    ].join('\n'), 'csv', 'text/csv;charset=utf-8');
+  };
+  const downloadGuestContacts = () => downloadGuestFile(sortedRsvps.map((rsvp) => [
+    'BEGIN:VCARD',
+    'VERSION:3.0',
+    `FN:${rsvp.guestName.replaceAll('\n', ' ')}`,
+    `TEL;TYPE=CELL:${rsvp.guestPhone}`,
+    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}`,
+    'END:VCARD',
+  ].join('\n')).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
+  const copyGuestPhones = async () => {
+    await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => rsvp.guestPhone).join(', '));
+    setGuestListNotice('Phone numbers copied');
+  };
   const incoming = orders
     .filter(
       (order) =>
@@ -2956,11 +3038,14 @@ function SchedulerBoard({
             <p className="scheduler-label">Guest list</p>
             <h3 className="font-display">RSVPs</h3>
           </div>
-          <span>{rsvps.filter((rsvp) => rsvp.status === 'yes').length} going · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
+          <div className="rsvp-header-actions">
+            <span>{rsvps.filter((rsvp) => rsvp.status === 'yes').length} going · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
+            <button type="button" onClick={() => setGuestListOpen(true)} disabled={!rsvps.length}><ListChecks size={15} /> Open guest list</button>
+          </div>
         </header>
         {rsvps.length ? (
-          <div className="resource-meter-grid">
-            {rsvps.map((rsvp) => (
+          <div className="resource-meter-grid rsvp-card-strip">
+            {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
                 <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}</span></div>
                 <span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span>
@@ -2969,6 +3054,32 @@ function SchedulerBoard({
           </div>
         ) : <p className="resource-empty-note">Guests appear here as soon as they RSVP.</p>}
       </section>
+      {guestListOpen && (
+        <div className="guest-list-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.currentTarget === event.target) setGuestListOpen(false);
+        }}>
+          <dialog open className="guest-list-dialog" aria-labelledby="guest-list-title">
+            <header>
+              <div><p className="scheduler-label">{menu.title}</p><h3 id="guest-list-title" className="font-display">Guest list</h3></div>
+              <button type="button" className="guest-list-close" onClick={() => setGuestListOpen(false)} aria-label="Close guest list"><XCircle size={22} /></button>
+            </header>
+            <div className="guest-list-toolbar">
+              <button type="button" onClick={downloadGuestCsv}><Download size={15} /> Download CSV</button>
+              <button type="button" onClick={downloadGuestContacts}><UsersRound size={15} /> Download contacts</button>
+              <button type="button" onClick={() => void copyGuestPhones()}><Copy size={15} /> Copy numbers</button>
+            </div>
+            {guestListNotice && <output className="guest-list-notice">{guestListNotice}</output>}
+            <div className="guest-list-scroll">
+              {sortedRsvps.map((rsvp) => (
+                <article key={rsvp.guestUid}>
+                  <div><strong>{rsvp.guestName}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a></div>
+                  <span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>
+                </article>
+              ))}
+            </div>
+          </dialog>
+        </div>
+      )}
       <section className="resource-rack">
         <header>
           <div>

@@ -22,6 +22,10 @@ service cloud.firestore {
     function guestRsvp(eventId, guestUid) {
       return get(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid));
     }
+    function rsvpIsOpen(eventId) {
+      return !get(/databases/$(database)/documents/events/$(eventId)).data.keys().hasAny(['rsvpOpen'])
+        || get(/databases/$(database)/documents/events/$(eventId)).data.rsvpOpen == true;
+    }
 
     match /events/{eventId} {
       allow read: if true;
@@ -147,7 +151,8 @@ service cloud.firestore {
       match /rsvps/{guestUid} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if request.resource.data.keys().hasOnly([
+        allow create: if rsvpIsOpen(eventId)
+          && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
             'createdAt', 'updatedAt'
           ])
@@ -179,8 +184,10 @@ service cloud.firestore {
           )
           && (
             request.resource.data.status == resource.data.status
-            || resource.data.status != 'yes'
-            || activeOrders(resource.data) == 0
+            || (
+              rsvpIsOpen(eventId)
+              && (resource.data.status != 'yes' || activeOrders(resource.data) == 0)
+            )
           )
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedAt == request.time
