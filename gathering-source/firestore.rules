@@ -126,7 +126,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if canManageEvent(eventId);
         allow create: if request.resource.data.keys().hasOnly([
-            'guestUid', 'guestName', 'guestPhone', 'createdAt', 'updatedAt'
+            'guestUid', 'guestName', 'guestPhone', 'pinHash', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.guestUid == guestUid
           && request.resource.data.guestName is string
@@ -135,6 +135,8 @@ service cloud.firestore {
           && request.resource.data.guestPhone is string
           && request.resource.data.guestPhone.size() >= 11
           && request.resource.data.guestPhone.size() <= 16
+          && request.resource.data.pinHash is string
+          && request.resource.data.pinHash.size() == 64
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
         allow update: if request.resource.data.guestUid == resource.data.guestUid
@@ -143,8 +145,14 @@ service cloud.firestore {
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
+          && request.resource.data.pinHash is string
+          && request.resource.data.pinHash.size() == 64
+          && (
+            !resource.data.keys().hasAny(['pinHash'])
+            || request.resource.data.pinHash == resource.data.pinHash
+          )
           && request.resource.data.updatedAt == request.time
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestName', 'updatedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestName', 'pinHash', 'updatedAt']);
         allow delete: if canManageEvent(eventId);
       }
 

@@ -102,6 +102,7 @@ type GuestProfile = {
   guestUid: string;
   guestName: string;
   guestPhone: string;
+  pinHash?: string;
   createdAt: number;
   updatedAt?: number;
 };
@@ -439,6 +440,10 @@ async function guestNameIndexId(name: string) {
   ).join('');
 }
 
+async function guestPinHash(guestUid: string, pin: string) {
+  return guestNameIndexId(`${guestUid}:${pin}`);
+}
+
 export default function Home() {
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
@@ -476,6 +481,7 @@ export default function Home() {
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
+  const [guestPin, setGuestPin] = useState('');
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -500,6 +506,7 @@ export default function Home() {
       setChangingGuestPhone(false);
       setGuestName('');
       setPhoneNumber('');
+      setGuestPin('');
       setRsvpChoice('yes');
       setGuestProfile(null);
       setMyRsvp(null);
@@ -887,6 +894,7 @@ export default function Home() {
   const openRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
     setChangingGuestPhone(false);
     setEditingGuestProfile(!effectiveGuestProfile);
@@ -895,6 +903,7 @@ export default function Home() {
   const closeRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
     setChangingGuestPhone(false);
     setEditingGuestProfile(false);
@@ -946,6 +955,7 @@ export default function Home() {
     setChangingGuestPhone(true);
     setGuestName('');
     setPhoneNumber('');
+    setGuestPin('');
     setEditingGuestProfile(true);
   };
 
@@ -1158,12 +1168,19 @@ export default function Home() {
       notify('Enter a complete phone number, including country code when outside the US');
       return;
     }
+    if (!/^\d{4}$/.test(guestPin)) {
+      notify('Enter a 4-digit PIN');
+      return;
+    }
     setProfileBusy(true);
     try {
+      const uid = await guestNameIndexId(normalizedPhone);
+      const pinHash = await guestPinHash(uid, guestPin);
       const savedProfile: GuestProfile = {
-        guestUid: await guestNameIndexId(normalizedPhone),
+        guestUid: uid,
         guestName: name,
         guestPhone: normalizedPhone,
+        pinHash,
         createdAt: changingGuestPhone ? Date.now() : guestProfile?.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
@@ -1171,7 +1188,6 @@ export default function Home() {
         const [{ getApp }, store] = await Promise.all([
           import('firebase/app'), import('firebase/firestore'),
         ]);
-        const uid = await guestNameIndexId(normalizedPhone);
         if (guestProfile && !changingGuestPhone && guestProfile.guestUid !== uid) throw new Error('phone-locked');
         const db = store.getFirestore(getApp());
         const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
@@ -1184,6 +1200,8 @@ export default function Home() {
           const nameClaim = await transaction.get(nameRef);
           const phoneClaim = await transaction.get(phoneRef);
           const previous = prior.exists() ? prior.data() : priorRsvp.data();
+          if (prior.exists() && prior.data().pinHash && prior.data().pinHash !== pinHash)
+            throw new Error('invalid-pin');
           const oldNameRef = previous && guestNameKey(previous.guestName) !== guestNameKey(name)
             ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(previous.guestName)) : null;
           const oldPhoneRef = previous && typeof previous.guestPhone === 'string' && previous.guestPhone !== normalizedPhone
@@ -1201,7 +1219,7 @@ export default function Home() {
           if (oldNameRef && oldClaim?.data()?.guestUid === uid) transaction.delete(oldNameRef);
           if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === uid) transaction.delete(oldPhoneRef);
           transaction.set(profileRef, {
-            guestUid: uid, guestName: name, guestPhone: normalizedPhone,
+            guestUid: uid, guestName: name, guestPhone: normalizedPhone, pinHash,
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -1218,7 +1236,8 @@ export default function Home() {
         const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
         if (others.some((entry) => entry.guestPhone === normalizedPhone)) throw new Error('phone-taken');
-        const saved: GuestProfile = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
+        if (guestProfile?.pinHash && guestProfile.pinHash !== pinHash) throw new Error('invalid-pin');
+        const saved: GuestProfile = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, pinHash, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
         setGuestProfile(saved);
         shareDemoUpdate({ type: 'profile', eventId: menu.id, value: saved });
       }
@@ -1230,12 +1249,15 @@ export default function Home() {
       }
       setChangingGuestPhone(false);
       setEditingGuestProfile(false);
+      setGuestPin('');
       notify(guestProfile && !changingGuestPhone ? 'Guest profile updated' : 'Guest profile created — now RSVP');
     } catch (error) {
       notify((error as Error).message === 'name-taken'
         ? 'That name is already used for this event. Please choose a different name.'
         : (error as Error).message === 'phone-taken'
           ? 'That phone number already belongs to another guest for this event.'
+          : (error as Error).message === 'invalid-pin'
+            ? 'That PIN does not match this guest profile.'
           : (error as Error).message === 'phone-locked'
             ? 'This guest profile is tied to its phone number. Reload the page to use another number.'
           : 'Guest profile was not saved. Please try again.');
@@ -1408,6 +1430,40 @@ export default function Home() {
     setOrders([]);
     setRememberedOrders([]);
     notify('Order history cleared');
+  }
+
+  async function deleteGuest(rsvp: Rsvp) {
+    if ((rsvp.activeOrderCount || 0) > 0) {
+      notify('Finish or clear this guest’s active orders before deleting them');
+      return;
+    }
+    if (!window.confirm(`Delete ${rsvp.guestName} from this event? Their RSVP and temporary guest profile will be removed.`)) return;
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
+        ]);
+        const db = store.getFirestore(getApp());
+        const batch = store.writeBatch(db);
+        batch.delete(store.doc(db, 'events', menu.id, 'rsvps', rsvp.guestUid));
+        batch.delete(store.doc(db, 'events', menu.id, 'guests', rsvp.guestUid));
+        batch.delete(store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(rsvp.guestName)));
+        batch.delete(store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(rsvp.guestPhone)));
+        await batch.commit();
+      } else {
+        const next = rsvps.filter((entry) => entry.guestUid !== rsvp.guestUid);
+        setRsvps(next);
+        shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
+        if (guestProfile?.guestUid === rsvp.guestUid) {
+          setGuestProfile(null);
+          setMyRsvp(null);
+          shareDemoUpdate({ type: 'profile', eventId: menu.id, value: null });
+        }
+      }
+      notify(`${rsvp.guestName} was removed from this event`);
+    } catch {
+      notify('Guest could not be deleted');
+    }
   }
 
   async function finishTask(orderId: string, taskId: string) {
@@ -1881,6 +1937,7 @@ export default function Home() {
           acceptOrder={acceptOrder}
           rejectOrder={rejectOrder}
           clearOrderHistory={clearOrderHistory}
+          deleteGuest={deleteGuest}
           finishTask={finishTask}
           serveTask={serveTask}
           setAccepting={setEventAccepting}
@@ -2113,19 +2170,21 @@ export default function Home() {
                 <div className="guest-rsvp-heading">
                   <div><p className="eyebrow">Your details</p><h2 className="font-display">{changingGuestPhone ? 'Use another guest profile' : effectiveGuestProfile ? 'Edit your guest profile' : 'Tell us who you are'}</h2></div>
                 </div>
-                <p className="guest-rsvp-explainer">Your phone number keeps your RSVP and orders together. No verification code or sign-in is required.</p>
+                <p className="guest-rsvp-explainer">Your phone number and temporary 4-digit PIN let you reopen this RSVP on another device. No verification code or permanent account is created.</p>
                 <div className="guest-rsvp-form">
                   <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
                   <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
+                  <label className="field-label guest-pin-field">Temporary PIN<input value={guestPin} onChange={(event) => setGuestPin(event.target.value.replace(/\D/g, '').slice(0, 4))} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" /></label>
                   <div className="guest-profile-actions">
                     <button type="button" className="secondary-button" onClick={() => {
                       setGuestName(effectiveGuestProfile?.guestName || '');
                       setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+                      setGuestPin('');
                       setChangingGuestPhone(false);
                       if (effectiveGuestProfile) setEditingGuestProfile(false);
                       else closeRsvpPanel();
                     }}>Cancel</button>
-                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue to RSVP'}</button>
+                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim() || !/^\d{4}$/.test(guestPin)} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue to RSVP'}</button>
                   </div>
                 </div>
               </div>
@@ -2495,6 +2554,7 @@ function HostWorkspace({
   acceptOrder,
   rejectOrder,
   clearOrderHistory,
+  deleteGuest,
   finishTask,
   serveTask,
   setAccepting,
@@ -2518,6 +2578,7 @@ function HostWorkspace({
   acceptOrder: (order: Order) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
+  deleteGuest: (rsvp: Rsvp) => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
   setAccepting: (accepting: boolean) => Promise<void>;
@@ -2684,6 +2745,7 @@ function HostWorkspace({
                   acceptOrder={acceptOrder}
                   rejectOrder={rejectOrder}
                   clearOrderHistory={clearOrderHistory}
+                  deleteGuest={deleteGuest}
                   finishTask={finishTask}
                   serveTask={serveTask}
                 />
@@ -2902,6 +2964,7 @@ function SchedulerBoard({
   acceptOrder,
   rejectOrder,
   clearOrderHistory,
+  deleteGuest,
   finishTask,
   serveTask,
 }: {
@@ -2911,6 +2974,7 @@ function SchedulerBoard({
   acceptOrder: (order: Order) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
+  deleteGuest: (rsvp: Rsvp) => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
 }) {
@@ -3119,7 +3183,7 @@ function SchedulerBoard({
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
                 <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}</span></div>
-                <span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span>
+                <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
           </div>
@@ -3144,7 +3208,7 @@ function SchedulerBoard({
               {sortedRsvps.map((rsvp) => (
                 <article key={rsvp.guestUid}>
                   <div><strong>{rsvp.guestName}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a></div>
-                  <span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>
+                  <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
                 </article>
               ))}
             </div>

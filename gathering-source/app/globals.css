@@ -2276,6 +2276,27 @@ button:disabled {
   width: 260px;
   height: 78px;
 }
+.rsvp-card-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.45rem;
+}
+.rsvp-card-actions button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 0.12);
+  border-radius: 999px;
+  color: rgb(246 240 228 / 0.48);
+  transition: 150ms ease;
+}
+.rsvp-card-actions button:hover {
+  border-color: rgb(255 150 125 / 0.45);
+  color: var(--peach);
+  background: rgb(255 150 125 / 0.08);
+}
 .guest-list-backdrop {
   position: fixed;
   inset: 0;
@@ -2411,6 +2432,7 @@ button:disabled {
 .guest-rsvp-heading h2 { font-size: clamp(1.5rem, 3vw, 2.2rem); line-height: 1.1; }
 .guest-rsvp-explainer { margin: 0.75rem 0 1.3rem; color: rgb(32 35 31 / 0.62); font-size: 0.85rem; }
 .guest-rsvp-phone .field-label, .guest-rsvp-form .field-label { flex: 1; min-width: 0; }
+.guest-rsvp-form .guest-pin-field { flex: 0 0 150px; }
 .guest-rsvp-form { flex-wrap: wrap; }
 .guest-account-panel { border-top: 4px solid var(--wine); }
 .guest-profile-summary {
@@ -2455,6 +2477,7 @@ button:disabled {
   }
   .guest-rsvp-phone, .guest-rsvp-form { align-items: stretch; flex-direction: column; }
   .guest-rsvp-phone .field-label, .guest-rsvp-form .field-label { width: 100%; }
+  .guest-rsvp-form .guest-pin-field { flex-basis: auto; }
   .rsvp-choices { width: 100%; }
   .rsvp-choices label { flex: 1 1 100%; }
   .guest-profile-summary, .guest-profile-actions { align-items: stretch; flex-direction: column; }
