@@ -462,6 +462,7 @@ export default function Home() {
   const [myRsvp, setMyRsvp] = useState<Rsvp | null>(null);
   const [guestProfile, setGuestProfile] = useState<GuestProfile | null>(null);
   const [editingGuestProfile, setEditingGuestProfile] = useState(false);
+  const [changingGuestPhone, setChangingGuestPhone] = useState(false);
   const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
@@ -490,6 +491,21 @@ export default function Home() {
     const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
     if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
   }, []);
+
+  useEffect(() => {
+    const savedGuestUid = localStorage.getItem(guestIdentityKey(menu.id));
+    queueMicrotask(() => {
+      setRsvpPanelOpen(false);
+      setEditingGuestProfile(false);
+      setChangingGuestPhone(false);
+      setGuestName('');
+      setPhoneNumber('');
+      setRsvpChoice('yes');
+      setGuestProfile(null);
+      setMyRsvp(null);
+      setGuestUid(savedGuestUid);
+    });
+  }, [menu.id]);
 
   useEffect(() => {
     const installed =
@@ -872,6 +888,7 @@ export default function Home() {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setRsvpChoice(myRsvp?.status || 'yes');
+    setChangingGuestPhone(false);
     setEditingGuestProfile(!effectiveGuestProfile);
     setRsvpPanelOpen(true);
   };
@@ -879,6 +896,7 @@ export default function Home() {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setRsvpChoice(myRsvp?.status || 'yes');
+    setChangingGuestPhone(false);
     setEditingGuestProfile(false);
     setRsvpPanelOpen(false);
   };
@@ -925,15 +943,9 @@ export default function Home() {
     );
   };
   const useAnotherGuestProfile = () => {
-    localStorage.removeItem(guestIdentityKey(menu.id));
-    setGuestUid(null);
-    setGuestProfile(null);
-    setMyRsvp(null);
-    setRememberedOrders([]);
-    setRememberedOrder(null);
+    setChangingGuestPhone(true);
     setGuestName('');
     setPhoneNumber('');
-    setCart({});
     setEditingGuestProfile(true);
   };
 
@@ -1152,7 +1164,7 @@ export default function Home() {
         guestUid: await guestNameIndexId(normalizedPhone),
         guestName: name,
         guestPhone: normalizedPhone,
-        createdAt: guestProfile?.createdAt || Date.now(),
+        createdAt: changingGuestPhone ? Date.now() : guestProfile?.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
       if (firebaseConfigured) {
@@ -1160,7 +1172,7 @@ export default function Home() {
           import('firebase/app'), import('firebase/firestore'),
         ]);
         const uid = await guestNameIndexId(normalizedPhone);
-        if (guestProfile && guestProfile.guestUid !== uid) throw new Error('phone-locked');
+        if (guestProfile && !changingGuestPhone && guestProfile.guestUid !== uid) throw new Error('phone-locked');
         const db = store.getFirestore(getApp());
         const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
@@ -1210,8 +1222,15 @@ export default function Home() {
         setGuestProfile(saved);
         shareDemoUpdate({ type: 'profile', eventId: menu.id, value: saved });
       }
+      if (changingGuestPhone) {
+        setMyRsvp(null);
+        setRememberedOrders([]);
+        setRememberedOrder(null);
+        setCart({});
+      }
+      setChangingGuestPhone(false);
       setEditingGuestProfile(false);
-      notify(guestProfile ? 'Guest profile updated' : 'Guest profile created — now RSVP');
+      notify(guestProfile && !changingGuestPhone ? 'Guest profile updated' : 'Guest profile created — now RSVP');
     } catch (error) {
       notify((error as Error).message === 'name-taken'
         ? 'That name is already used for this event. Please choose a different name.'
@@ -2092,20 +2111,21 @@ export default function Home() {
             {(!effectiveGuestProfile || editingGuestProfile) ? (
               <div className="guest-rsvp-panel guest-account-panel">
                 <div className="guest-rsvp-heading">
-                  <div><p className="eyebrow">Your details</p><h2 className="font-display">{effectiveGuestProfile ? 'Edit your guest profile' : 'Tell us who you are'}</h2></div>
+                  <div><p className="eyebrow">Your details</p><h2 className="font-display">{changingGuestPhone ? 'Use another guest profile' : effectiveGuestProfile ? 'Edit your guest profile' : 'Tell us who you are'}</h2></div>
                 </div>
                 <p className="guest-rsvp-explainer">Your phone number keeps your RSVP and orders together. No verification code or sign-in is required.</p>
                 <div className="guest-rsvp-form">
                   <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
-                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile)} /></label>
+                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
                   <div className="guest-profile-actions">
                     <button type="button" className="secondary-button" onClick={() => {
                       setGuestName(effectiveGuestProfile?.guestName || '');
                       setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+                      setChangingGuestPhone(false);
                       if (effectiveGuestProfile) setEditingGuestProfile(false);
                       else closeRsvpPanel();
                     }}>Cancel</button>
-                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile ? 'Save details' : 'Continue to RSVP'}</button>
+                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue to RSVP'}</button>
                   </div>
                 </div>
               </div>
