@@ -54,6 +54,7 @@ type EventMenu = {
   title: string;
   date: string;
   startsAt?: string;
+  address?: string;
   welcome: string;
   accepting: boolean;
   rsvpOpen?: boolean;
@@ -131,6 +132,7 @@ const demoMenu: EventMenu = {
   title: 'A Garden Supper',
   date: 'Saturday, Oct 17 · 6:30 PM',
   startsAt: '2026-10-17T18:30',
+  address: 'The garden table',
   welcome: 'Choose your favorites and we’ll have your plate ready.',
   accepting: true,
   categories: ['To begin', 'Main plates', 'Something sweet'],
@@ -485,6 +487,7 @@ export default function Home() {
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
+    address: '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
@@ -992,6 +995,7 @@ export default function Home() {
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
       startsAt: newEvent.date,
+      address: newEvent.address.trim(),
       welcome: newEvent.welcome.trim(),
       accepting: false,
       rsvpOpen: true,
@@ -1047,6 +1051,7 @@ export default function Home() {
     setNewEvent({
       title: '',
       date: '',
+      address: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     history.replaceState({}, '', `?view=host&event=${event.id}`);
@@ -2018,13 +2023,26 @@ export default function Home() {
               />
             </label>
             <label className="field-label mt-5">
+              Address
+              <input
+                value={newEvent.address}
+                onChange={(e) =>
+                  setNewEvent({ ...newEvent, address: e.target.value })
+                }
+                className="field-input"
+                placeholder="123 Main Street, Los Angeles, CA"
+                autoComplete="street-address"
+              />
+            </label>
+            <label className="field-label mt-5">
               Guest welcome message
               <textarea
                 value={newEvent.welcome}
                 onChange={(e) =>
                   setNewEvent({ ...newEvent, welcome: e.target.value })
                 }
-                className="field-input min-h-24 resize-none"
+                className="field-input min-h-32 resize-y"
+                placeholder="Add a welcome message for your guests…"
               />
             </label>
             <button
@@ -2382,10 +2400,16 @@ function GuestMenu({
           <h1 className="font-display">{menu.title}</h1>
           <p className="guest-welcome">{menu.welcome}</p>
           <div className="guest-event-meta">
-            <div>
+            <div className="guest-event-detail">
               <span>When</span>
               <strong>{menu.date}</strong>
             </div>
+            {menu.address && (
+              <div className="guest-event-detail">
+                <span>Where</span>
+                <strong>{menu.address}</strong>
+              </div>
+            )}
             <div
               className={`guest-order-state ${menu.accepting ? 'open' : 'closed'}`}
             >
@@ -3851,11 +3875,22 @@ function MenuEditor({
         </label>
       </div>
       <label className="field-label mt-5">
-        Welcome message
+        Address
         <input
           className="field-input"
+          value={menu.address || ''}
+          onChange={(e) => setMenu({ ...menu, address: e.target.value })}
+          placeholder="123 Main Street, Los Angeles, CA"
+          autoComplete="street-address"
+        />
+      </label>
+      <label className="field-label mt-5">
+        Welcome message
+        <textarea
+          className="field-input min-h-32 resize-y"
           value={menu.welcome}
           onChange={(e) => setMenu({ ...menu, welcome: e.target.value })}
+          placeholder="Add a welcome message for your guests…"
         />
       </label>
       <div className="my-8 flex items-center justify-between border-b border-black/10 pb-3">
