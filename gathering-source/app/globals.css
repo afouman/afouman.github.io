@@ -1450,6 +1450,32 @@ button:disabled {
   background: var(--wine-deep);
   color: white;
 }
+.guest-cart-actions {
+  display: flex;
+  align-items: stretch;
+  gap: 0.65rem;
+  margin-left: auto;
+}
+.guest-rsvp-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 1px solid rgb(255 248 235 / 0.32);
+  border-radius: 0.75rem;
+  padding: 0.72rem 1rem;
+  color: #fff8eb;
+  font-size: 0.8rem;
+  font-weight: 800;
+  white-space: nowrap;
+  transition: 160ms ease;
+}
+.guest-rsvp-button:hover {
+  border-color: var(--peach);
+  background: rgb(255 248 235 / 0.08);
+  transform: translateY(-1px);
+}
 @keyframes hero-breathe {
   from {
     transform: scale(1.015);
@@ -2335,6 +2361,47 @@ button:disabled {
   background: #fffdf8;
   box-shadow: 0 16px 45px rgb(53 43 29 / 0.08);
 }
+.guest-rsvp-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+  background: rgb(18 11 10 / 0.66);
+  backdrop-filter: blur(10px);
+}
+.guest-rsvp-dialog {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100dvh - 2.5rem));
+  overflow-y: auto;
+  border-radius: 1.6rem;
+  background: #fffdf8;
+  box-shadow: 0 32px 90px rgb(18 11 10 / 0.35);
+}
+.guest-rsvp-dialog .guest-rsvp-panel {
+  max-width: none;
+  margin: 0;
+  border: 0;
+  border-radius: inherit;
+  box-shadow: none;
+}
+.guest-rsvp-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 2;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgb(32 35 31 / 0.12);
+  border-radius: 999px;
+  background: #fffdf8;
+  color: rgb(32 35 31 / 0.62);
+}
+.guest-rsvp-close:hover { color: var(--wine); }
 .guest-rsvp-heading, .guest-rsvp-phone, .guest-rsvp-form {
   display: flex;
   align-items: end;
@@ -2375,6 +2442,17 @@ button:disabled {
 .rsvp-status.rsvp-maybe { background: #8a6533; }
 .rsvp-status.rsvp-no { background: #723e3d; }
 @media (max-width: 700px) {
+  .guest-cart-bar > div { gap: 0.7rem; }
+  .guest-cart-bar > div > div:first-child { display: none; }
+  .guest-cart-actions { width: 100%; max-width: none !important; margin-left: 0; }
+  .guest-cart-actions > button { min-width: 0; flex: 1 1 0; padding-inline: 0.7rem; }
+  .guest-rsvp-backdrop { align-items: end; padding: 0; }
+  .guest-rsvp-dialog {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+    border-radius: 1.5rem 1.5rem 0 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
   .guest-rsvp-phone, .guest-rsvp-form { align-items: stretch; flex-direction: column; }
   .guest-rsvp-phone .field-label, .guest-rsvp-form .field-label { width: 100%; }
   .rsvp-choices { width: 100%; }

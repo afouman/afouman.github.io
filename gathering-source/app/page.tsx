@@ -462,6 +462,7 @@ export default function Home() {
   const [myRsvp, setMyRsvp] = useState<Rsvp | null>(null);
   const [guestProfile, setGuestProfile] = useState<GuestProfile | null>(null);
   const [editingGuestProfile, setEditingGuestProfile] = useState(false);
+  const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpBusy, setRsvpBusy] = useState(false);
@@ -864,6 +865,23 @@ export default function Home() {
     createdAt: myRsvp.createdAt,
     updatedAt: myRsvp.updatedAt,
   } : null);
+  const rsvpButtonLabel = myRsvp
+    ? `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
+    : 'RSVP';
+  const openRsvpPanel = () => {
+    setGuestName(effectiveGuestProfile?.guestName || '');
+    setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setRsvpChoice(myRsvp?.status || 'yes');
+    setEditingGuestProfile(!effectiveGuestProfile);
+    setRsvpPanelOpen(true);
+  };
+  const closeRsvpPanel = () => {
+    setGuestName(effectiveGuestProfile?.guestName || '');
+    setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setRsvpChoice(myRsvp?.status || 'yes');
+    setEditingGuestProfile(false);
+    setRsvpPanelOpen(false);
+  };
   const categories = useMemo(
     () => [...new Set(menu.items.map((i) => i.category))],
     [menu.items],
@@ -916,7 +934,7 @@ export default function Home() {
     setGuestName('');
     setPhoneNumber('');
     setCart({});
-    setEditingGuestProfile(false);
+    setEditingGuestProfile(true);
   };
 
   function selectHostEvent(event: EventMenu) {
@@ -1130,6 +1148,13 @@ export default function Home() {
     }
     setProfileBusy(true);
     try {
+      const savedProfile: GuestProfile = {
+        guestUid: await guestNameIndexId(normalizedPhone),
+        guestName: name,
+        guestPhone: normalizedPhone,
+        createdAt: guestProfile?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      };
       if (firebaseConfigured) {
         const [{ getApp }, store] = await Promise.all([
           import('firebase/app'), import('firebase/firestore'),
@@ -1176,6 +1201,7 @@ export default function Home() {
         });
         localStorage.setItem(guestIdentityKey(menu.id), uid);
         setGuestUid(uid);
+        setGuestProfile(savedProfile);
       } else {
         const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
@@ -1253,6 +1279,16 @@ export default function Home() {
         setMyRsvp(saved);
         shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
       }
+      setMyRsvp({
+        guestUid: profile.guestUid,
+        guestName: profile.guestName,
+        guestPhone: profile.guestPhone,
+        status: rsvpChoice,
+        activeOrderCount: myRsvp?.activeOrderCount || 0,
+        createdAt: myRsvp?.createdAt || Date.now(),
+        updatedAt: Date.now(),
+      });
+      setRsvpPanelOpen(false);
       notify(`RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
     } catch (error) {
       if ((error as Error).message === 'active-orders' && myRsvp) setRsvpChoice(myRsvp.status);
@@ -1797,59 +1833,15 @@ export default function Home() {
 
       {mode === 'guest' ? (
         <>
-          {(!effectiveGuestProfile || editingGuestProfile) ? (
-            <section className="guest-rsvp-panel guest-account-panel" aria-label="Guest profile">
-              <div className="guest-rsvp-heading">
-                <div><p className="eyebrow">Step 1 of 3</p><h2 className="font-display">Create your guest profile</h2></div>
-              </div>
-              <p className="guest-rsvp-explainer">Your phone number identifies your temporary guest profile and keeps your RSVP and orders together. No verification code is sent and no sign-in is required.</p>
-              <div className="guest-rsvp-form">
-                <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
-                <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile)} /></label>
-                <div className="guest-profile-actions">
-                  {effectiveGuestProfile && <button type="button" className="secondary-button" onClick={() => {
-                    setGuestName(effectiveGuestProfile.guestName);
-                    setPhoneNumber(effectiveGuestProfile.guestPhone);
-                    setEditingGuestProfile(false);
-                  }}>Cancel</button>}
-                  <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile ? 'Save profile' : 'Continue to RSVP'}</button>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <section className="guest-rsvp-panel" aria-label="Your RSVP">
-              <div className="guest-rsvp-heading">
-                <div><p className="eyebrow">Step 2 of 3</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
-                {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
-              </div>
-              <div className="guest-profile-summary">
-                <div><strong>{effectiveGuestProfile.guestName}</strong><span>{effectiveGuestProfile.guestPhone}</span></div>
-                <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
-              </div>
-              <p className="guest-rsvp-explainer">RSVP separately from your profile. Choose Yes to place orders. You can still RSVP when ordering is closed.</p>
-              <div className="guest-rsvp-form rsvp-only-form">
-                <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
-                  {([['yes', 'Yes, I’m going'], ['maybe', 'Maybe'], ['no', 'No, I can’t come']] as const).map(([value, label]) => (
-                    <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} disabled={menu.rsvpOpen === false} />{label}</label>
-                  ))}
-                </div>
-                <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
-              </div>
-              {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
-              {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
-            </section>
-          )}
-          {effectiveGuestProfile && myRsvp && !editingGuestProfile && (
-            <GuestMenu
-              menu={menu}
-              categories={categories}
-              cart={cart}
-              reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
-              canOrder={myRsvp.status === 'yes' && menu.accepting}
-              rsvpStatus={myRsvp.status}
-              setQty={setQty}
-            />
-          )}
+          <GuestMenu
+            menu={menu}
+            categories={categories}
+            cart={cart}
+            reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
+            canOrder={myRsvp?.status === 'yes' && menu.accepting}
+            rsvpStatus={myRsvp?.status || null}
+            setQty={setQty}
+          />
         </>
       ) : (
         <HostWorkspace
@@ -2054,7 +2046,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {mode === 'guest' && effectiveGuestProfile && myRsvp && !editingGuestProfile && !submitted && (
+      {mode === 'guest' && !submitted && (
         <div className="guest-cart-bar fixed inset-x-0 bottom-0 z-40">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
             <div>
@@ -2066,22 +2058,81 @@ export default function Home() {
                   ? count
                     ? `${count} dish${count === 1 ? '' : 'es'} selected`
                     : 'Choose what calls to you'
-                  : !menu.accepting ? 'Ordering is closed' : 'RSVP Yes to order'}
+                  : !menu.accepting ? 'Ordering is closed' : myRsvp ? 'RSVP Going to order' : 'RSVP to order'}
               </p>
             </div>
-            <button
-              disabled={!count || !menu.accepting || myRsvp?.status !== 'yes'}
-              onClick={() =>
-                (
-                  document.getElementById('checkout') as HTMLDialogElement
-                )?.showModal()
-              }
-              className="primary-button ml-auto min-w-48 justify-center disabled:opacity-40"
-            >
-              <ShoppingBag size={17} /> Review order{' '}
-              {count > 0 && <span className="count-badge">{count}</span>}
-            </button>
+            <div className="guest-cart-actions">
+              <button type="button" onClick={openRsvpPanel} className="guest-rsvp-button">
+                <ListChecks size={17} /> {rsvpButtonLabel}
+              </button>
+              <button
+                disabled={!count || !menu.accepting || myRsvp?.status !== 'yes'}
+                onClick={() =>
+                  (
+                    document.getElementById('checkout') as HTMLDialogElement
+                  )?.showModal()
+                }
+                className="primary-button min-w-48 justify-center disabled:opacity-40"
+              >
+                <ShoppingBag size={17} /> Review order{' '}
+                {count > 0 && <span className="count-badge">{count}</span>}
+              </button>
+            </div>
           </div>
+        </div>
+      )}
+      {mode === 'guest' && rsvpPanelOpen && (
+        <div className="guest-rsvp-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeRsvpPanel();
+        }}>
+          <dialog open className="guest-rsvp-dialog" aria-label="Your RSVP">
+            <button type="button" className="guest-rsvp-close" onClick={closeRsvpPanel} aria-label="Close RSVP">
+              <XCircle size={22} />
+            </button>
+            {(!effectiveGuestProfile || editingGuestProfile) ? (
+              <div className="guest-rsvp-panel guest-account-panel">
+                <div className="guest-rsvp-heading">
+                  <div><p className="eyebrow">Your details</p><h2 className="font-display">{effectiveGuestProfile ? 'Edit your guest profile' : 'Tell us who you are'}</h2></div>
+                </div>
+                <p className="guest-rsvp-explainer">Your phone number keeps your RSVP and orders together. No verification code or sign-in is required.</p>
+                <div className="guest-rsvp-form">
+                  <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
+                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile)} /></label>
+                  <div className="guest-profile-actions">
+                    <button type="button" className="secondary-button" onClick={() => {
+                      setGuestName(effectiveGuestProfile?.guestName || '');
+                      setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+                      if (effectiveGuestProfile) setEditingGuestProfile(false);
+                      else closeRsvpPanel();
+                    }}>Cancel</button>
+                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim()} className="primary-button">{effectiveGuestProfile ? 'Save details' : 'Continue to RSVP'}</button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="guest-rsvp-panel">
+                <div className="guest-rsvp-heading">
+                  <div><p className="eyebrow">Your response</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
+                  {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+                </div>
+                <div className="guest-profile-summary">
+                  <div><strong>{effectiveGuestProfile.guestName}</strong><span>{effectiveGuestProfile.guestPhone}</span></div>
+                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
+                </div>
+                <p className="guest-rsvp-explainer">Choose Going to place orders. You can still update your RSVP when ordering is closed.</p>
+                <div className="guest-rsvp-form rsvp-only-form">
+                  <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
+                    {([['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([value, label]) => (
+                      <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} disabled={menu.rsvpOpen === false} />{label}</label>
+                    ))}
+                  </div>
+                  <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
+                </div>
+                {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
+                {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
+              </div>
+            )}
+          </dialog>
         </div>
       )}
       <dialog id="checkout" className="checkout-dialog">
@@ -2235,7 +2286,7 @@ function GuestMenu({
   cart: Record<string, number>;
   reserved: Order[];
   canOrder: boolean;
-  rsvpStatus: Rsvp['status'];
+  rsvpStatus: Rsvp['status'] | null;
   setQty: (id: string, delta: number) => void;
 }) {
   return (
@@ -2300,8 +2351,8 @@ function GuestMenu({
           <div className="ordering-closed-banner rsvp-required-banner">
             <XCircle size={20} />
             <div>
-              <strong>Your RSVP is {rsvpStatus === 'maybe' ? 'Maybe' : 'Not going'}.</strong>
-              <span>Menu browsing is available, but ordering requires a Yes RSVP.</span>
+              <strong>{rsvpStatus ? `Your RSVP is ${rsvpStatus === 'maybe' ? 'Maybe' : 'Not going'}.` : 'RSVP when you’re ready to order.'}</strong>
+              <span>Menu browsing is available, but ordering requires a Going RSVP.</span>
             </div>
           </div>
         )}
