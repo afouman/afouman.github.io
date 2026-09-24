@@ -789,9 +789,11 @@ button:disabled {
   line-height: 1.45;
 }
 .prep-input {
-  position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 34px;
   align-items: center;
+  min-height: 56px;
+  overflow: hidden;
   border: 1px solid transparent;
   border-radius: 0.7rem;
   background: #f8f5ef;
@@ -801,31 +803,39 @@ button:disabled {
   width: 100%;
   border: 0;
   background: transparent;
-  padding: 0.7rem 3.25rem 0.7rem 0.7rem;
+  padding: 0.7rem;
   outline: 0;
   font: inherit;
   font-weight: 700;
 }
-.prep-input button {
-  position: absolute;
-  right: 1.7rem;
-  z-index: 1;
+.prep-input b {
+  padding: 0 0.6rem 0 0.25rem;
+  color: rgb(0 0 0/0.4);
+  font-size: 0.7rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+.prep-stepper {
+  align-self: stretch;
   display: grid;
-  width: 27px;
-  height: 24px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  min-width: 34px;
+  border-left: 1px solid rgb(75 17 29/0.08);
+}
+.prep-stepper button {
+  display: grid;
+  width: 34px;
+  min-height: 27px;
   place-items: center;
   border: 0;
-  border-radius: 0.48rem;
+  border-radius: 0;
   background: rgb(75 17 29/0.08);
   color: var(--wine);
 }
-.prep-input button:first-child { top: 3px; }
-.prep-input button:nth-of-type(2) { bottom: 3px; }
-.prep-input b {
-  position: absolute;
-  right: 0.45rem;
+.prep-stepper button + button {
+  border-top: 1px solid rgb(75 17 29/0.08);
 }
-.prep-input button:hover {
+.prep-stepper button:hover {
   background: var(--wine);
   color: white;
 }
@@ -837,11 +847,6 @@ button:disabled {
 .prep-input input[type='number']::-webkit-outer-spin-button {
   margin: 0;
   -webkit-appearance: none;
-}
-.prep-input b {
-  padding-right: 0.75rem;
-  color: rgb(0 0 0/0.4);
-  font-size: 0.7rem;
 }
 .new-category-row {
   display: flex;

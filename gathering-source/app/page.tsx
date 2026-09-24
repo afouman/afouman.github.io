@@ -4033,11 +4033,6 @@ function MenuEditor({
                 <label>
                   <span>Preparation time</span>
                   <div className="prep-input">
-                    <button
-                      type="button"
-                      onClick={() => updateItem(item.id, 'prepMinutes', Math.max(1, (item.prepMinutes ?? 10) - 1))}
-                      aria-label={`Decrease ${item.name || 'dish'} preparation time`}
-                    ><Minus size={14} /></button>
                     <input
                       aria-label={`Dish ${index + 1} preparation minutes`}
                       type="number"
@@ -4062,22 +4057,24 @@ function MenuEditor({
                         updateItem(item.id, 'prepMinutes', 10)
                       }
                     />
-                    <button
-                      type="button"
-                      onClick={() => updateItem(item.id, 'prepMinutes', Math.min(240, (item.prepMinutes ?? 10) + 1))}
-                      aria-label={`Increase ${item.name || 'dish'} preparation time`}
-                    ><Plus size={14} /></button>
                     <b>min</b>
+                    <div className="prep-stepper">
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'prepMinutes', Math.min(240, (item.prepMinutes ?? 10) + 1))}
+                        aria-label={`Increase ${item.name || 'dish'} preparation time`}
+                      ><Plus size={14} /></button>
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'prepMinutes', Math.max(1, (item.prepMinutes ?? 10) - 1))}
+                        aria-label={`Decrease ${item.name || 'dish'} preparation time`}
+                      ><Minus size={14} /></button>
+                    </div>
                   </div>
                 </label>
                 <label>
                   <span>Total servings for this event</span>
                   <div className="prep-input">
-                    <button
-                      type="button"
-                      onClick={() => updateItem(item.id, 'maxServings', Math.max(0, (item.maxServings ?? 0) - 1))}
-                      aria-label={`Decrease ${item.name || 'dish'} servings`}
-                    ><Minus size={14} /></button>
                     <input
                       aria-label={`Dish ${index + 1} servings available`}
                       type="number"
@@ -4096,12 +4093,19 @@ function MenuEditor({
                         )
                       }
                     />
-                    <button
-                      type="button"
-                      onClick={() => updateItem(item.id, 'maxServings', Math.min(999, (item.maxServings ?? 0) + 1))}
-                      aria-label={`Increase ${item.name || 'dish'} servings`}
-                    ><Plus size={14} /></button>
                     <b>max</b>
+                    <div className="prep-stepper">
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'maxServings', Math.min(999, (item.maxServings ?? 0) + 1))}
+                        aria-label={`Increase ${item.name || 'dish'} servings`}
+                      ><Plus size={14} /></button>
+                      <button
+                        type="button"
+                        onClick={() => updateItem(item.id, 'maxServings', Math.max(0, (item.maxServings ?? 0) - 1))}
+                        aria-label={`Decrease ${item.name || 'dish'} servings`}
+                      ><Minus size={14} /></button>
+                    </div>
                   </div>
                   {item.maxServings != null && (
                     <small className="inventory-note">
