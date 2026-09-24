@@ -309,10 +309,11 @@ function resourceUsage(orders: Order[], menu: EventMenu) {
   return usage;
 }
 
-function scheduleWaitingTasks(
+function planResourceQueue(
   source: Order[],
   menu: EventMenu,
   now = Date.now(),
+  startAcceptedTasks = true,
 ) {
   const next = source.map((order) => ({
     ...order,
@@ -323,18 +324,21 @@ function scheduleWaitingTasks(
   const resources = Object.fromEntries(
     (menu.resources || []).map((resource) => [resource.id, resource]),
   );
-  const waiting = next
+  const queued = next
     .flatMap((order) =>
-      (order.tasks || [])
-        .filter((task) => task.status === 'waiting')
-        .map((task) => ({ order, task })),
+      order.status === 'new'
+        ? createOrderTasks(order).map((task) => ({ order, task, pending: true }))
+        : (order.tasks || [])
+            .filter((task) => task.status === 'waiting')
+            .map((task) => ({ order, task, pending: false })),
     )
     .sort(
       (a, b) =>
         a.order.createdAt - b.order.createdAt ||
         a.task.sequence - b.task.sequence,
     );
-  for (const { task } of waiting) {
+  const availablePendingTaskIds = new Set<string>();
+  for (const { task, pending } of queued) {
     const item = menu.items.find((entry) => entry.id === task.itemId);
     const requirements = Object.entries(item?.requirements || {}).filter(
       ([, units]) => units > 0,
@@ -364,13 +368,30 @@ function scheduleWaitingTasks(
         }
       continue;
     }
-    task.status = 'preparing';
-    task.startedAt = now;
-    task.estimatedReadyAt = now + itemPrepMinutes(item) * 60000;
-    for (const [resourceId, units] of requirements)
-      usage[resourceId] = (usage[resourceId] || 0) + units;
+    if (pending) {
+      availablePendingTaskIds.add(task.id);
+      for (const [resourceId, units] of requirements)
+        reserved[resourceId] = (reserved[resourceId] || 0) + units;
+    } else if (startAcceptedTasks) {
+      task.status = 'preparing';
+      task.startedAt = now;
+      task.estimatedReadyAt = now + itemPrepMinutes(item) * 60000;
+      for (const [resourceId, units] of requirements)
+        usage[resourceId] = (usage[resourceId] || 0) + units;
+    } else {
+      for (const [resourceId, units] of requirements)
+        reserved[resourceId] = (reserved[resourceId] || 0) + units;
+    }
   }
-  return next;
+  return { orders: next, availablePendingTaskIds };
+}
+
+function scheduleWaitingTasks(
+  source: Order[],
+  menu: EventMenu,
+  now = Date.now(),
+) {
+  return planResourceQueue(source, menu, now).orders;
 }
 
 type DemoUpdate =
@@ -689,13 +710,27 @@ export default function Home() {
             unsubEventOrderCounts = ownedEvents.map((event) =>
               store.onSnapshot(
                 store.collection(db, 'events', event.id, 'orders'),
-                (ordersSnapshot) =>
+                (ordersSnapshot) => {
+                  const eventOrders = ordersSnapshot.docs.map(
+                    (entry) => ({ id: entry.id, ...entry.data() }) as Order,
+                  );
+                  const eventQueue = planResourceQueue(
+                    eventOrders,
+                    event,
+                    0,
+                    false,
+                  );
                   setEventIncomingCounts((current) => ({
                     ...current,
-                    [event.id]: ordersSnapshot.docs.filter(
-                      (entry) => entry.data().status === 'new',
+                    [event.id]: eventOrders.filter(
+                      (order) =>
+                        order.status === 'new' &&
+                        createOrderTasks(order).some((task) =>
+                          eventQueue.availablePendingTaskIds.has(task.id),
+                        ),
                     ).length,
-                  })),
+                  }));
+                },
               ),
             );
             if (
@@ -1368,9 +1403,13 @@ export default function Home() {
     await batch.commit();
   }
 
-  async function acceptOrder(order: Order) {
+  async function acceptOrder(orderOrOrders: Order | Order[]) {
+    const ordersToAccept = Array.isArray(orderOrOrders)
+      ? orderOrOrders
+      : [orderOrOrders];
+    const acceptedIds = new Set(ordersToAccept.map((order) => order.id));
     const accepted = orders.map((entry) =>
-      entry.id === order.id
+      acceptedIds.has(entry.id)
         ? {
             ...entry,
             status: 'preparing' as OrderStatus,
@@ -1379,7 +1418,7 @@ export default function Home() {
         : entry,
     );
     await persistScheduledOrders(scheduleWaitingTasks(accepted, menu));
-    notify(`${order.guestName}'s items were added to the production queue`);
+    notify(`${guestDisplayName(ordersToAccept[0])}'s available items are now in progress`);
   }
 
   async function rejectOrder(order: Order) {
@@ -1489,7 +1528,7 @@ export default function Home() {
         : order,
     );
     await persistScheduledOrders(scheduleWaitingTasks(released, menu));
-    notify('Item ready — the next available task has been started');
+    notify('Item ready — resources released and the queue updated');
   }
 
   async function serveTask(orderId: string, taskId: string) {
@@ -2599,7 +2638,7 @@ function HostWorkspace({
   saveMenu: () => Promise<void>;
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
-  acceptOrder: (order: Order) => Promise<void>;
+  acceptOrder: (order: Order | Order[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
@@ -2995,7 +3034,7 @@ function SchedulerBoard({
   orders: Order[];
   rsvps: Rsvp[];
   menu: EventMenu;
-  acceptOrder: (order: Order) => Promise<void>;
+  acceptOrder: (order: Order | Order[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
@@ -3011,6 +3050,7 @@ function SchedulerBoard({
     return () => window.clearInterval(timer);
   }, []);
   const usage = resourceUsage(orders, menu);
+  const queuePlan = planResourceQueue(orders, menu, 0, false);
   const sortedRsvps = [...rsvps].sort((left, right) => {
     const statusOrder = { yes: 0, maybe: 1, no: 2 };
     return statusOrder[left.status] - statusOrder[right.status]
@@ -3053,13 +3093,23 @@ function SchedulerBoard({
     await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => rsvp.guestPhone).join(', '));
     setGuestListNotice('Phone numbers copied');
   };
-  const incoming = orders
-    .filter(
-      (order) =>
-        order.status === 'new' ||
-        (order.status === 'preparing' && !order.tasks?.length),
-    )
+  const pendingOrders = orders
+    .filter((order) => order.status === 'new')
     .sort((a, b) => a.createdAt - b.createdAt);
+  const incomingPendingOrders = pendingOrders.filter((order) =>
+    createOrderTasks(order).some((task) =>
+      queuePlan.availablePendingTaskIds.has(task.id),
+    ),
+  );
+  const waitingPendingOrders = pendingOrders.filter(
+    (order) => !incomingPendingOrders.some((entry) => entry.id === order.id),
+  );
+  const incoming = [
+    ...incomingPendingOrders,
+    ...orders.filter(
+      (order) => order.status === 'preparing' && !order.tasks?.length,
+    ),
+  ].sort((a, b) => a.createdAt - b.createdAt);
   const incomingTickets = Object.values(
     incoming.reduce<
       Record<
@@ -3091,13 +3141,23 @@ function SchedulerBoard({
       return groups;
     }, {}),
   ).sort((left, right) => left.createdAt - right.createdAt);
-  const taskViews = orders.flatMap((order) =>
+  const activeTaskViews = orders.flatMap((order) =>
     (order.tasks || []).map((task) => ({
       order,
       task,
       item: menu.items.find((item) => item.id === task.itemId),
+      pending: false,
     })),
   );
+  const pendingWaitingTaskViews = waitingPendingOrders.flatMap((order) =>
+    createOrderTasks(order).map((task) => ({
+      order,
+      task,
+      item: menu.items.find((item) => item.id === task.itemId),
+      pending: true,
+    })),
+  );
+  const taskViews = [...activeTaskViews, ...pendingWaitingTaskViews];
   const orderHistory = [...orders].sort(
     (left, right) => right.createdAt - left.createdAt,
   );
@@ -3146,13 +3206,13 @@ function SchedulerBoard({
     {
       status: 'preparing',
       label: 'In progress',
-      hint: 'Resources assigned',
+      hint: 'Accepted · actively preparing',
       icon: Flame,
     },
     {
       status: 'waiting',
       label: 'Waiting',
-      hint: 'FCFS when capacity opens',
+      hint: 'Resources unavailable · first come, first served',
       icon: Clock3,
     },
     {
@@ -3181,13 +3241,18 @@ function SchedulerBoard({
         units,
       }));
   const waitReason = (item?: MenuItem) => {
+    const impossible = resourcesFor(item).filter(
+      ({ resource, units }) => !resource || units > resource.capacity,
+    );
+    if (impossible.length)
+      return `Needs more ${impossible.map(({ resource }) => resource?.name || 'resource capacity').join(' + ')}`;
     const blocked = resourcesFor(item).filter(
       ({ resource, units }) =>
         !resource || resource.capacity - (usage[resource.id] || 0) < units,
     );
     return blocked.length
       ? `Waiting for ${blocked.map(({ resource }) => resource?.name || 'a removed resource').join(' + ')}`
-      : 'Next in first-come order';
+      : 'Waiting behind an earlier order';
   };
   return (
     <div className="scheduler-shell">
@@ -3294,7 +3359,7 @@ function SchedulerBoard({
             <p className="scheduler-label">01 · Accept</p>
             <h3 className="font-display">Incoming orders</h3>
           </div>
-          <span>{incomingTickets.length} waiting</span>
+          <span>{incomingTickets.length} ready to accept</span>
         </header>
         {incomingTickets.length ? (
           <div className="incoming-grid">
@@ -3325,9 +3390,7 @@ function SchedulerBoard({
                 </ul>
                 {ticket.notes.map((note) => <p key={note}>“{note}”</p>)}
                 <div className="incoming-actions">
-                  <button onClick={() => void (async () => {
-                    for (const order of ticket.orders) await acceptOrder(order);
-                  })()}>
+                  <button onClick={() => void acceptOrder(ticket.orders)}>
                     <Sparkles size={15} /> Accept
                   </button>
                   <button
@@ -3344,7 +3407,8 @@ function SchedulerBoard({
           </div>
         ) : (
           <div className="pipeline-empty compact">
-            New guest orders will appear here automatically.
+            Orders will appear here automatically when their required resources
+            are available.
           </div>
         )}
       </section>
@@ -3367,8 +3431,10 @@ function SchedulerBoard({
                 <b>{tasks.length}</b>
               </header>
               <div className="pipeline-stack">
-                {tasks.map(({ order, task, item }) => {
-                  const siblings = (order.tasks || []).filter(
+                {tasks.map(({ order, task, item, pending }) => {
+                  const siblings = (
+                    pending ? createOrderTasks(order) : order.tasks || []
+                  ).filter(
                     (entry) => entry.itemId === task.itemId,
                   );
                   const unit =
@@ -3425,7 +3491,7 @@ function SchedulerBoard({
                       {lane.status === 'waiting' && (
                         <p className="wait-reason">
                           <Clock3 size={13} />
-                          {waitReason(item)}
+                          {waitReason(item)}{pending ? ' · Not accepted yet' : ''}
                         </p>
                       )}
                       {lane.status === 'ready' && (
