@@ -26,6 +26,18 @@ service cloud.firestore {
       return !get(/databases/$(database)/documents/events/$(eventId)).data.keys().hasAny(['rsvpOpen'])
         || get(/databases/$(database)/documents/events/$(eventId)).data.rsvpOpen == true;
     }
+    function companionCount(data) {
+      return data.keys().hasAny(['companions']) ? data.companions.size() : 0;
+    }
+    function maxAdditionalGuests(eventId) {
+      let event = get(/databases/$(database)/documents/events/$(eventId)).data;
+      return event.keys().hasAny(['maxAdditionalGuests']) ? event.maxAdditionalGuests : 0;
+    }
+    function companionsAreValid(eventId, data) {
+      return (!data.keys().hasAny(['companions']) || data.companions is list)
+        && companionCount(data) <= maxAdditionalGuests(eventId)
+        && (data.status != 'no' || companionCount(data) == 0);
+    }
 
     match /events/{eventId} {
       allow read: if true;
@@ -162,11 +174,12 @@ service cloud.firestore {
         allow create: if rsvpIsOpen(eventId)
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
-            'createdAt', 'updatedAt'
+            'companions', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.guestUid == guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
+          && companionsAreValid(eventId, request.resource.data)
           && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid))
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
           && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestPhone
@@ -177,6 +190,7 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount is int
           && request.resource.data.activeOrderCount >= 0
+          && companionsAreValid(eventId, request.resource.data)
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
           && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestPhone
           && (
@@ -200,7 +214,7 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedAt == request.time
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestName', 'guestPhone', 'status', 'activeOrderCount', 'updatedAt'
+            'guestName', 'guestPhone', 'status', 'companions', 'activeOrderCount', 'updatedAt'
           ])
         );
         allow delete: if canManageEvent(eventId);

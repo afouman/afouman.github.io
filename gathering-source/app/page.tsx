@@ -58,6 +58,7 @@ type EventMenu = {
   welcome: string;
   accepting: boolean;
   rsvpOpen?: boolean;
+  maxAdditionalGuests?: number;
   categories?: string[];
   resources?: EventResource[];
   ownerUid?: string;
@@ -96,6 +97,7 @@ type Rsvp = {
   guestName: string;
   guestPhone: string;
   status: 'yes' | 'maybe' | 'no';
+  companions?: string[];
   activeOrderCount: number;
   createdAt: number;
   updatedAt?: number;
@@ -485,6 +487,7 @@ export default function Home() {
   const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
+  const [rsvpCompanionNames, setRsvpCompanionNames] = useState<string[]>([]);
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [guestUid, setGuestUid] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<'created' | 'updated'>(
@@ -500,6 +503,7 @@ export default function Home() {
     title: '',
     date: '',
     address: '',
+    maxAdditionalGuests: 0,
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
@@ -922,6 +926,7 @@ export default function Home() {
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
+    setRsvpCompanionNames((myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0));
     setChangingGuestPhone(false);
     setEditingGuestProfile(!effectiveGuestProfile);
     setRsvpPanelOpen(true);
@@ -931,6 +936,7 @@ export default function Home() {
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
+    setRsvpCompanionNames((myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0));
     setChangingGuestPhone(false);
     setEditingGuestProfile(false);
     setRsvpPanelOpen(false);
@@ -1022,6 +1028,7 @@ export default function Home() {
       welcome: newEvent.welcome.trim(),
       accepting: false,
       rsvpOpen: true,
+      maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
       resources: [],
       items: [
@@ -1075,6 +1082,7 @@ export default function Home() {
       title: '',
       date: '',
       address: '',
+      maxAdditionalGuests: 0,
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     history.replaceState({}, '', `?view=host&event=${event.id}`);
@@ -1304,6 +1312,14 @@ export default function Home() {
       notify('RSVPs are closed for this event');
       return;
     }
+    const maxCompanions = Math.max(0, menu.maxAdditionalGuests || 0);
+    const companions = rsvpChoice === 'no'
+      ? []
+      : rsvpCompanionNames.slice(0, maxCompanions).map((name) => name.trim());
+    if (companions.some((name) => name.length < 2 || name.length > 80)) {
+      notify('Enter a name between 2 and 80 characters for each additional guest');
+      return;
+    }
     const activeOrders = rememberedOrders.filter((order) => order.status === 'new' || order.status === 'preparing');
     if (myRsvp?.status === 'yes' && rsvpChoice !== 'yes' && activeOrders.length) {
       setRsvpChoice(myRsvp.status);
@@ -1331,7 +1347,7 @@ export default function Home() {
             throw new Error('active-orders');
           transaction.set(rsvpRef, {
             guestUid: uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
-            status: rsvpChoice, activeOrderCount,
+            status: rsvpChoice, companions, activeOrderCount,
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -1340,7 +1356,7 @@ export default function Home() {
         const others = rsvps.filter((entry) => entry.guestUid !== profile.guestUid);
         const saved: Rsvp = {
           guestUid: profile.guestUid, guestName: profile.guestName, guestPhone: profile.guestPhone,
-          status: rsvpChoice, activeOrderCount: myRsvp?.activeOrderCount || 0,
+          status: rsvpChoice, companions, activeOrderCount: myRsvp?.activeOrderCount || 0,
           createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now(),
         };
         const next = [saved, ...others];
@@ -1353,6 +1369,7 @@ export default function Home() {
         guestName: profile.guestName,
         guestPhone: profile.guestPhone,
         status: rsvpChoice,
+        companions,
         activeOrderCount: myRsvp?.activeOrderCount || 0,
         createdAt: myRsvp?.createdAt || Date.now(),
         updatedAt: Date.now(),
@@ -2104,6 +2121,23 @@ export default function Home() {
               />
             </label>
             <label className="field-label mt-5">
+              Maximum friends per guest
+              <input
+                type="number"
+                min="0"
+                max="20"
+                value={newEvent.maxAdditionalGuests}
+                onChange={(event) =>
+                  setNewEvent({
+                    ...newEvent,
+                    maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
+                  })
+                }
+                className="field-input"
+              />
+              <small className="date-preview">Use 0 for invitations that do not include additional guests.</small>
+            </label>
+            <label className="field-label mt-5">
               Guest welcome message
               <textarea
                 value={newEvent.welcome}
@@ -2292,6 +2326,56 @@ export default function Home() {
                       <label key={value} className={rsvpChoice === value ? 'selected' : ''}><input type="radio" name="rsvp-status" value={value} checked={rsvpChoice === value} onChange={() => setRsvpChoice(value)} disabled={menu.rsvpOpen === false} />{label}</label>
                     ))}
                   </div>
+                  {rsvpChoice !== 'no' && (
+                    <section className="rsvp-companions" aria-label="Additional guests">
+                      {(menu.maxAdditionalGuests || 0) > 0 ? (
+                        <>
+                          <label className="field-label">
+                            Friends you’re bringing
+                            <select
+                              className="field-input"
+                              value={rsvpCompanionNames.length}
+                              disabled={menu.rsvpOpen === false}
+                              onChange={(event) => {
+                                const count = Number(event.target.value);
+                                setRsvpCompanionNames((current) =>
+                                  Array.from({ length: count }, (_, index) => current[index] || ''),
+                                );
+                              }}
+                            >
+                              {Array.from({ length: (menu.maxAdditionalGuests || 0) + 1 }, (_, count) => (
+                                <option key={count} value={count}>
+                                  {count === 0 ? 'Just me' : `${count} friend${count === 1 ? '' : 's'}`}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {rsvpCompanionNames.map((name, index) => (
+                            <label className="field-label" key={index}>
+                              Friend {index + 1} name
+                              <input
+                                className="field-input"
+                                value={name}
+                                disabled={menu.rsvpOpen === false}
+                                maxLength={80}
+                                placeholder="Full name"
+                                autoComplete="off"
+                                onChange={(event) =>
+                                  setRsvpCompanionNames((current) =>
+                                    current.map((entry, nameIndex) =>
+                                      nameIndex === index ? event.target.value : entry,
+                                    ),
+                                  )
+                                }
+                              />
+                            </label>
+                          ))}
+                        </>
+                      ) : (
+                        <p>This invitation is for you only.</p>
+                      )}
+                    </section>
+                  )}
                   <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
                 </div>
                 {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
@@ -3109,6 +3193,11 @@ function SchedulerBoard({
     return statusOrder[left.status] - statusOrder[right.status]
       || left.guestName.localeCompare(right.guestName);
   });
+  const partySize = (rsvp: Rsvp) =>
+    rsvp.status === 'no' ? 0 : 1 + (rsvp.companions?.length || 0);
+  const attendingCount = sortedRsvps
+    .filter((rsvp) => rsvp.status === 'yes')
+    .reduce((total, rsvp) => total + partySize(rsvp), 0);
   const downloadGuestFile = (content: string, extension: 'csv' | 'vcf', type: string) => {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement('a');
@@ -3125,11 +3214,13 @@ function SchedulerBoard({
       return `"${safe.replaceAll('"', '""')}"`;
     };
     downloadGuestFile([
-      ['Name', 'Phone', 'RSVP', 'Active orders'].map(escapeCell).join(','),
+      ['Name', 'Phone', 'RSVP', 'Party size', 'Additional guests', 'Active orders'].map(escapeCell).join(','),
       ...sortedRsvps.map((rsvp) => [
         rsvp.guestName,
         rsvp.guestPhone,
         rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going',
+        partySize(rsvp),
+        (rsvp.companions || []).join('; '),
         rsvp.activeOrderCount || 0,
       ].map(escapeCell).join(',')),
     ].join('\n'), 'csv', 'text/csv;charset=utf-8');
@@ -3139,7 +3230,7 @@ function SchedulerBoard({
     'VERSION:3.0',
     `FN:${rsvp.guestName.replaceAll('\n', ' ')}`,
     `TEL;TYPE=CELL:${rsvp.guestPhone}`,
-    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}`,
+    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}${rsvp.companions?.length ? ` — Bringing: ${rsvp.companions.join(', ')}` : ''}`,
     'END:VCARD',
   ].join('\n')).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
   const copyGuestPhones = async () => {
@@ -3343,7 +3434,7 @@ function SchedulerBoard({
             <h3 className="font-display">RSVPs</h3>
           </div>
           <div className="rsvp-header-actions">
-            <span>{rsvps.filter((rsvp) => rsvp.status === 'yes').length} going · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
+            <span>{attendingCount} attending · {rsvps.filter((rsvp) => rsvp.status === 'yes').length} going RSVPs · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
             <button type="button" onClick={() => setGuestListOpen(true)} disabled={!rsvps.length}><ListChecks size={15} /> Open guest list</button>
           </div>
         </header>
@@ -3351,7 +3442,7 @@ function SchedulerBoard({
           <div className="resource-meter-grid rsvp-card-strip">
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}</span></div>
+                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.join(', ')}</small> : null}</div>
                 <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
@@ -3376,7 +3467,7 @@ function SchedulerBoard({
             <div className="guest-list-scroll">
               {sortedRsvps.map((rsvp) => (
                 <article key={rsvp.guestUid}>
-                  <div><strong>{rsvp.guestName}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a></div>
+                  <div><strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.join(', ')}</small> : null}</div>
                   <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
                 </article>
               ))}
@@ -4061,6 +4152,23 @@ function MenuEditor({
           placeholder="123 Main Street, Los Angeles, CA"
           autoComplete="street-address"
         />
+      </label>
+      <label className="field-label mt-5">
+        Maximum friends each guest can bring
+        <input
+          type="number"
+          min="0"
+          max="20"
+          className="field-input"
+          value={menu.maxAdditionalGuests || 0}
+          onChange={(event) =>
+            setMenu({
+              ...menu,
+              maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
+            })
+          }
+        />
+        <small className="date-preview">Guests will enter one name for every friend they include.</small>
       </label>
       <label className="field-label mt-5">
         Welcome message
