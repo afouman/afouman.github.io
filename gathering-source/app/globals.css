@@ -2825,6 +2825,14 @@ button:disabled {
 .task-action.finish:hover {
   background: var(--tomato);
 }
+.task-action.reject {
+  border: 1px solid rgb(120 45 43/0.14);
+  background: #eadbd0;
+  color: #782d2b;
+}
+.task-action.reject:hover {
+  background: #e4c4be;
+}
 .task-action.serve {
   background: #456a47;
   color: white;

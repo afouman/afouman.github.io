@@ -64,7 +64,7 @@ type EventMenu = {
   items: MenuItem[];
 };
 type OrderStatus = 'new' | 'preparing' | 'served' | 'cancelled' | 'rejected';
-type TaskStatus = 'waiting' | 'preparing' | 'ready' | 'served';
+type TaskStatus = 'waiting' | 'preparing' | 'ready' | 'served' | 'rejected';
 type OrderTask = {
   id: string;
   itemId: string;
@@ -738,10 +738,7 @@ export default function Home() {
           },
         );
         unsubOrders = store.onSnapshot(
-          store.query(
-            store.collection(db, 'events', eventId, 'orders'),
-            store.orderBy('createdAt', 'desc'),
-          ),
+          store.collection(db, 'events', eventId, 'orders'),
           (snap) =>
             setOrders(
               snap.docs.map(
@@ -754,7 +751,7 @@ export default function Home() {
                     cancelledAt: d.data().cancelledAt?.toMillis?.(),
                     readyAt: d.data().readyAt?.toMillis?.(),
                   }) as Order,
-              ),
+              ).sort((left, right) => right.createdAt - left.createdAt),
             ),
         );
         unsubRsvps = store.onSnapshot(
@@ -1448,6 +1445,36 @@ export default function Home() {
     notify(`${order.guestName}'s order was rejected`);
   }
 
+  async function rejectWaitingItems(order: Order, itemId: string) {
+    const storedTasks = order.tasks || [];
+    if (
+      order.status === 'new' ||
+      !storedTasks.length ||
+      storedTasks.every((task) => task.status === 'waiting')
+    ) {
+      await rejectOrder(order);
+      return;
+    }
+    const rejectedCount = storedTasks.filter(
+      (task) => task.itemId === itemId && task.status === 'waiting',
+    ).length;
+    if (!rejectedCount) return;
+    const next = orders.map((entry) =>
+      entry.id === order.id
+        ? {
+            ...entry,
+            tasks: (entry.tasks || []).map((task) =>
+              task.itemId === itemId && task.status === 'waiting'
+                ? { ...task, status: 'rejected' as TaskStatus }
+                : task,
+            ),
+          }
+        : entry,
+    );
+    await persistScheduledOrders(next);
+    notify(`${rejectedCount} waiting item${rejectedCount === 1 ? '' : 's'} rejected`);
+  }
+
   async function clearOrderHistory() {
     if (!window.confirm(`Clear all ${orders.length} orders for ${menu.title}? This keeps the menu but permanently removes the order history.`)) return;
     if (firebaseConfigured) {
@@ -1547,7 +1574,7 @@ export default function Home() {
         ...order,
         tasks,
         status:
-          tasks.length > 0 && tasks.every((task) => task.status === 'served')
+          tasks.length > 0 && tasks.every((task) => task.status === 'served' || task.status === 'rejected')
             ? ('served' as OrderStatus)
             : order.status,
       };
@@ -1982,6 +2009,7 @@ export default function Home() {
           uploadItemImage={uploadItemImage}
           acceptTasks={acceptTasks}
           rejectOrder={rejectOrder}
+          rejectWaitingItems={rejectWaitingItems}
           clearOrderHistory={clearOrderHistory}
           deleteGuest={deleteGuest}
           finishTask={finishTask}
@@ -2618,6 +2646,7 @@ function HostWorkspace({
   uploadItemImage,
   acceptTasks,
   rejectOrder,
+  rejectWaitingItems,
   clearOrderHistory,
   deleteGuest,
   finishTask,
@@ -2642,6 +2671,7 @@ function HostWorkspace({
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
   acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
+  rejectWaitingItems: (order: Order, itemId: string) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
@@ -2809,6 +2839,7 @@ function HostWorkspace({
                   menu={menu}
                   acceptTasks={acceptTasks}
                   rejectOrder={rejectOrder}
+                  rejectWaitingItems={rejectWaitingItems}
                   clearOrderHistory={clearOrderHistory}
                   deleteGuest={deleteGuest}
                   finishTask={finishTask}
@@ -2975,6 +3006,7 @@ function RememberedOrderCard({
               preparing: 'Cooking',
               ready: 'Ready',
               served: 'Served',
+              rejected: 'Not accepted',
             };
             return (
               <li key={task.id} className={`item-status-${task.status}`}>
@@ -3028,6 +3060,7 @@ function SchedulerBoard({
   menu,
   acceptTasks,
   rejectOrder,
+  rejectWaitingItems,
   clearOrderHistory,
   deleteGuest,
   finishTask,
@@ -3038,6 +3071,7 @@ function SchedulerBoard({
   menu: EventMenu;
   acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
+  rejectWaitingItems: (order: Order, itemId: string) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
@@ -3488,6 +3522,14 @@ function SchedulerBoard({
                       <Clock3 size={13} />
                       {waitReason(item)}{pending ? ' · Not accepted yet' : ''}
                     </p>
+                    <button
+                      type="button"
+                      className="task-action reject"
+                      onClick={() => void rejectWaitingItems(order, item?.id || waitingTasks[0].itemId)}
+                    >
+                      <XCircle size={15} />
+                      {order.status === 'new' ? 'Reject order' : 'Reject remaining'}
+                    </button>
                   </article>
                 ))}
                 {tasks.map(({ order, task, item, pending }) => {
