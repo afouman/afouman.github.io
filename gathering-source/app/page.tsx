@@ -293,6 +293,17 @@ function createOrderTasks(order: Order): OrderTask[] {
   );
 }
 
+function orderResourceRequirements(order: Order, menu: EventMenu) {
+  const totals: Record<string, number> = {};
+  for (const [itemId, quantity] of Object.entries(order.selections)) {
+    const item = menu.items.find((entry) => entry.id === itemId);
+    for (const [resourceId, units] of Object.entries(item?.requirements || {}))
+      if (units > 0 && quantity > 0)
+        totals[resourceId] = (totals[resourceId] || 0) + units * quantity;
+  }
+  return totals;
+}
+
 function resourceUsage(orders: Order[], menu: EventMenu) {
   const usage: Record<string, number> = Object.fromEntries(
     (menu.resources || []).map((resource) => [resource.id, 0]),
@@ -324,25 +335,58 @@ function planResourceQueue(
   const resources = Object.fromEntries(
     (menu.resources || []).map((resource) => [resource.id, resource]),
   );
+  type QueueEntry =
+    | {
+        kind: 'pending-order';
+        order: Order;
+        tasks: OrderTask[];
+        requirements: [string, number][];
+        sequence: number;
+      }
+    | {
+        kind: 'accepted-task';
+        order: Order;
+        task: OrderTask;
+        item?: MenuItem;
+        requirements: [string, number][];
+        sequence: number;
+      };
   const queued = next
-    .flatMap((order) =>
-      order.status === 'new'
-        ? createOrderTasks(order).map((task) => ({ order, task, pending: true }))
-        : (order.tasks || [])
-            .filter((task) => task.status === 'waiting')
-            .map((task) => ({ order, task, pending: false })),
-    )
+    .flatMap<QueueEntry>((order) => {
+      if (order.status === 'new') {
+        const tasks = createOrderTasks(order);
+        return [{
+          kind: 'pending-order' as const,
+          order,
+          tasks,
+          requirements: Object.entries(orderResourceRequirements(order, menu)),
+          sequence: -1,
+        }];
+      }
+      return (order.tasks || [])
+        .filter((task) => task.status === 'waiting')
+        .map((task) => {
+          const item = menu.items.find((entry) => entry.id === task.itemId);
+          return {
+            kind: 'accepted-task' as const,
+            order,
+            task,
+            item,
+            requirements: Object.entries(item?.requirements || {}).filter(
+              ([, units]) => units > 0,
+            ),
+            sequence: task.sequence,
+          };
+        });
+    })
     .sort(
       (a, b) =>
         a.order.createdAt - b.order.createdAt ||
-        a.task.sequence - b.task.sequence,
+        a.sequence - b.sequence,
     );
   const availablePendingTaskIds = new Set<string>();
-  for (const { task, pending } of queued) {
-    const item = menu.items.find((entry) => entry.id === task.itemId);
-    const requirements = Object.entries(item?.requirements || {}).filter(
-      ([, units]) => units > 0,
-    );
+  for (const entry of queued) {
+    const { requirements } = entry;
     const possible = requirements.every(
       ([resourceId, units]) =>
         resources[resourceId] && units <= resources[resourceId].capacity,
@@ -368,14 +412,15 @@ function planResourceQueue(
         }
       continue;
     }
-    if (pending) {
-      availablePendingTaskIds.add(task.id);
+    if (entry.kind === 'pending-order') {
+      entry.tasks.forEach((task) => availablePendingTaskIds.add(task.id));
       for (const [resourceId, units] of requirements)
         reserved[resourceId] = (reserved[resourceId] || 0) + units;
     } else if (startAcceptedTasks) {
-      task.status = 'preparing';
-      task.startedAt = now;
-      task.estimatedReadyAt = now + itemPrepMinutes(item) * 60000;
+      entry.task.status = 'preparing';
+      entry.task.startedAt = now;
+      entry.task.estimatedReadyAt =
+        now + itemPrepMinutes(entry.item) * 60000;
       for (const [resourceId, units] of requirements)
         usage[resourceId] = (usage[resourceId] || 0) + units;
     } else {
@@ -723,11 +768,13 @@ export default function Home() {
                   setEventIncomingCounts((current) => ({
                     ...current,
                     [event.id]: eventOrders.filter(
-                      (order) =>
-                        order.status === 'new' &&
-                        createOrderTasks(order).some((task) =>
+                      (order) => {
+                        const tasks = createOrderTasks(order);
+                        return order.status === 'new' && tasks.length > 0 &&
+                          tasks.every((task) =>
                           eventQueue.availablePendingTaskIds.has(task.id),
-                        ),
+                          );
+                      },
                     ).length,
                   }));
                 },
@@ -3096,11 +3143,12 @@ function SchedulerBoard({
   const pendingOrders = orders
     .filter((order) => order.status === 'new')
     .sort((a, b) => a.createdAt - b.createdAt);
-  const incomingPendingOrders = pendingOrders.filter((order) =>
-    createOrderTasks(order).some((task) =>
+  const incomingPendingOrders = pendingOrders.filter((order) => {
+    const tasks = createOrderTasks(order);
+    return tasks.length > 0 && tasks.every((task) =>
       queuePlan.availablePendingTaskIds.has(task.id),
-    ),
-  );
+    );
+  });
   const waitingPendingOrders = pendingOrders.filter(
     (order) => !incomingPendingOrders.some((entry) => entry.id === order.id),
   );
@@ -3240,13 +3288,21 @@ function SchedulerBoard({
         resource: menu.resources?.find((entry) => entry.id === resourceId),
         units,
       }));
-  const waitReason = (item?: MenuItem) => {
-    const impossible = resourcesFor(item).filter(
+  const waitReason = (item?: MenuItem, order?: Order, pending = false) => {
+    const needed = pending && order
+      ? Object.entries(orderResourceRequirements(order, menu)).map(
+          ([resourceId, units]) => ({
+            resource: menu.resources?.find((entry) => entry.id === resourceId),
+            units,
+          }),
+        )
+      : resourcesFor(item);
+    const impossible = needed.filter(
       ({ resource, units }) => !resource || units > resource.capacity,
     );
     if (impossible.length)
-      return `Needs more ${impossible.map(({ resource }) => resource?.name || 'resource capacity').join(' + ')}`;
-    const blocked = resourcesFor(item).filter(
+      return `Order needs more ${impossible.map(({ resource, units }) => `${resource?.name || 'resource capacity'} (${units} needed, ${resource?.capacity || 0} available)`).join(' + ')}`;
+    const blocked = needed.filter(
       ({ resource, units }) =>
         !resource || resource.capacity - (usage[resource.id] || 0) < units,
     );
@@ -3491,7 +3547,7 @@ function SchedulerBoard({
                       {lane.status === 'waiting' && (
                         <p className="wait-reason">
                           <Clock3 size={13} />
-                          {waitReason(item)}{pending ? ' · Not accepted yet' : ''}
+                          {waitReason(item, order, pending)}{pending ? ' · Not accepted yet' : ''}
                         </p>
                       )}
                       {lane.status === 'ready' && (
