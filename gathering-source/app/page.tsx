@@ -75,6 +75,7 @@ type OrderTask = {
   finishedAt?: number;
   servedAt?: number;
 };
+type OrderTaskRef = { orderId: string; taskId: string };
 type Order = {
   id: string;
   guestName: string;
@@ -293,17 +294,6 @@ function createOrderTasks(order: Order): OrderTask[] {
   );
 }
 
-function orderResourceRequirements(order: Order, menu: EventMenu) {
-  const totals: Record<string, number> = {};
-  for (const [itemId, quantity] of Object.entries(order.selections)) {
-    const item = menu.items.find((entry) => entry.id === itemId);
-    for (const [resourceId, units] of Object.entries(item?.requirements || {}))
-      if (units > 0 && quantity > 0)
-        totals[resourceId] = (totals[resourceId] || 0) + units * quantity;
-  }
-  return totals;
-}
-
 function resourceUsage(orders: Order[], menu: EventMenu) {
   const usage: Record<string, number> = Object.fromEntries(
     (menu.resources || []).map((resource) => [resource.id, 0]),
@@ -323,8 +313,6 @@ function resourceUsage(orders: Order[], menu: EventMenu) {
 function planResourceQueue(
   source: Order[],
   menu: EventMenu,
-  now = Date.now(),
-  startAcceptedTasks = true,
 ) {
   const next = source.map((order) => ({
     ...order,
@@ -335,56 +323,34 @@ function planResourceQueue(
   const resources = Object.fromEntries(
     (menu.resources || []).map((resource) => [resource.id, resource]),
   );
-  type QueueEntry =
-    | {
-        kind: 'pending-order';
-        order: Order;
-        tasks: OrderTask[];
-        requirements: [string, number][];
-        sequence: number;
-      }
-    | {
-        kind: 'accepted-task';
-        order: Order;
-        task: OrderTask;
-        item?: MenuItem;
-        requirements: [string, number][];
-        sequence: number;
-      };
+  type QueueEntry = {
+    order: Order;
+    task: OrderTask;
+    requirements: [string, number][];
+  };
   const queued = next
     .flatMap<QueueEntry>((order) => {
-      if (order.status === 'new') {
-        const tasks = createOrderTasks(order);
-        return [{
-          kind: 'pending-order' as const,
-          order,
-          tasks,
-          requirements: Object.entries(orderResourceRequirements(order, menu)),
-          sequence: -1,
-        }];
-      }
-      return (order.tasks || [])
+      if (order.status !== 'new' && order.status !== 'preparing') return [];
+      const tasks = order.tasks?.length ? order.tasks : createOrderTasks(order);
+      return tasks
         .filter((task) => task.status === 'waiting')
         .map((task) => {
           const item = menu.items.find((entry) => entry.id === task.itemId);
           return {
-            kind: 'accepted-task' as const,
             order,
             task,
-            item,
             requirements: Object.entries(item?.requirements || {}).filter(
               ([, units]) => units > 0,
             ),
-            sequence: task.sequence,
           };
         });
     })
     .sort(
       (a, b) =>
         a.order.createdAt - b.order.createdAt ||
-        a.sequence - b.sequence,
+        a.task.sequence - b.task.sequence,
     );
-  const availablePendingTaskIds = new Set<string>();
+  const availableTaskIds = new Set<string>();
   for (const entry of queued) {
     const { requirements } = entry;
     const possible = requirements.every(
@@ -412,31 +378,11 @@ function planResourceQueue(
         }
       continue;
     }
-    if (entry.kind === 'pending-order') {
-      entry.tasks.forEach((task) => availablePendingTaskIds.add(task.id));
-      for (const [resourceId, units] of requirements)
-        reserved[resourceId] = (reserved[resourceId] || 0) + units;
-    } else if (startAcceptedTasks) {
-      entry.task.status = 'preparing';
-      entry.task.startedAt = now;
-      entry.task.estimatedReadyAt =
-        now + itemPrepMinutes(entry.item) * 60000;
-      for (const [resourceId, units] of requirements)
-        usage[resourceId] = (usage[resourceId] || 0) + units;
-    } else {
-      for (const [resourceId, units] of requirements)
-        reserved[resourceId] = (reserved[resourceId] || 0) + units;
-    }
+    availableTaskIds.add(entry.task.id);
+    for (const [resourceId, units] of requirements)
+      reserved[resourceId] = (reserved[resourceId] || 0) + units;
   }
-  return { orders: next, availablePendingTaskIds };
-}
-
-function scheduleWaitingTasks(
-  source: Order[],
-  menu: EventMenu,
-  now = Date.now(),
-) {
-  return planResourceQueue(source, menu, now).orders;
+  return { orders: next, availableTaskIds };
 }
 
 type DemoUpdate =
@@ -762,18 +708,16 @@ export default function Home() {
                   const eventQueue = planResourceQueue(
                     eventOrders,
                     event,
-                    0,
-                    false,
                   );
                   setEventIncomingCounts((current) => ({
                     ...current,
                     [event.id]: eventOrders.filter(
                       (order) => {
-                        const tasks = createOrderTasks(order);
-                        return order.status === 'new' && tasks.length > 0 &&
-                          tasks.every((task) =>
-                          eventQueue.availablePendingTaskIds.has(task.id),
-                          );
+                        if (order.status !== 'new' && order.status !== 'preparing') return false;
+                        const tasks = order.tasks?.length ? order.tasks : createOrderTasks(order);
+                        return tasks.some((task) =>
+                          task.status === 'waiting' && eventQueue.availableTaskIds.has(task.id),
+                        );
                       },
                     ).length,
                   }));
@@ -1450,22 +1394,34 @@ export default function Home() {
     await batch.commit();
   }
 
-  async function acceptOrder(orderOrOrders: Order | Order[]) {
-    const ordersToAccept = Array.isArray(orderOrOrders)
-      ? orderOrOrders
-      : [orderOrOrders];
-    const acceptedIds = new Set(ordersToAccept.map((order) => order.id));
-    const accepted = orders.map((entry) =>
-      acceptedIds.has(entry.id)
-        ? {
-            ...entry,
-            status: 'preparing' as OrderStatus,
-            tasks: entry.tasks?.length ? entry.tasks : createOrderTasks(entry),
-          }
-        : entry,
-    );
-    await persistScheduledOrders(scheduleWaitingTasks(accepted, menu));
-    notify(`${guestDisplayName(ordersToAccept[0])}'s available items are now in progress`);
+  async function acceptTasks(taskRefs: OrderTaskRef[]) {
+    const eligible = planResourceQueue(orders, menu).availableTaskIds;
+    const selectedByOrder = taskRefs.reduce<Record<string, Set<string>>>((groups, ref) => {
+      if (eligible.has(ref.taskId)) (groups[ref.orderId] ||= new Set()).add(ref.taskId);
+      return groups;
+    }, {});
+    const startedAt = Date.now();
+    const accepted = orders.map((entry) => {
+      const selected = selectedByOrder[entry.id];
+      if (!selected?.size) return entry;
+      const tasks = entry.tasks?.length ? entry.tasks : createOrderTasks(entry);
+      return {
+        ...entry,
+        status: 'preparing' as OrderStatus,
+        tasks: tasks.map((task) => {
+          if (!selected.has(task.id) || task.status !== 'waiting') return task;
+          const item = menu.items.find((menuItem) => menuItem.id === task.itemId);
+          return {
+            ...task,
+            status: 'preparing' as TaskStatus,
+            startedAt,
+            estimatedReadyAt: startedAt + itemPrepMinutes(item) * 60000,
+          };
+        }),
+      };
+    });
+    await persistScheduledOrders(accepted);
+    notify('Accepted items are now in progress');
   }
 
   async function rejectOrder(order: Order) {
@@ -1574,8 +1530,8 @@ export default function Home() {
           }
         : order,
     );
-    await persistScheduledOrders(scheduleWaitingTasks(released, menu));
-    notify('Item ready — resources released and the queue updated');
+    await persistScheduledOrders(released);
+    notify('Item ready — the next eligible item moved to Incoming');
   }
 
   async function serveTask(orderId: string, taskId: string) {
@@ -1709,14 +1665,13 @@ export default function Home() {
             event.id === cleanedMenu.id ? cleanedMenu : event,
           )
         : [...events, cleanedMenu];
-      const scheduledOrders = scheduleWaitingTasks(orders, cleanedMenu);
       setEvents(nextEvents);
-      setOrders(scheduledOrders);
+      setOrders(orders);
       shareDemoUpdate({ type: 'events', value: nextEvents });
       shareDemoUpdate({
         type: 'orders',
         eventId: cleanedMenu.id,
-        value: scheduledOrders,
+        value: orders,
       });
       setEditing(false);
       notify('Event and menu saved for every open tab');
@@ -1734,7 +1689,7 @@ export default function Home() {
       { ...cleanedMenu, ownerUid: user.uid },
       { merge: true },
     );
-    await persistScheduledOrders(scheduleWaitingTasks(orders, cleanedMenu));
+    await persistScheduledOrders(orders);
     setEditing(false);
     notify('Menu saved');
   }
@@ -2025,7 +1980,7 @@ export default function Home() {
           saveMenu={saveMenu}
           cancelMenuEdits={cancelMenuEdits}
           uploadItemImage={uploadItemImage}
-          acceptOrder={acceptOrder}
+          acceptTasks={acceptTasks}
           rejectOrder={rejectOrder}
           clearOrderHistory={clearOrderHistory}
           deleteGuest={deleteGuest}
@@ -2661,7 +2616,7 @@ function HostWorkspace({
   saveMenu,
   cancelMenuEdits,
   uploadItemImage,
-  acceptOrder,
+  acceptTasks,
   rejectOrder,
   clearOrderHistory,
   deleteGuest,
@@ -2685,7 +2640,7 @@ function HostWorkspace({
   saveMenu: () => Promise<void>;
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
-  acceptOrder: (order: Order | Order[]) => Promise<void>;
+  acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
@@ -2852,7 +2807,7 @@ function HostWorkspace({
                   orders={orders}
                   rsvps={rsvps}
                   menu={menu}
-                  acceptOrder={acceptOrder}
+                  acceptTasks={acceptTasks}
                   rejectOrder={rejectOrder}
                   clearOrderHistory={clearOrderHistory}
                   deleteGuest={deleteGuest}
@@ -3071,7 +3026,7 @@ function SchedulerBoard({
   orders,
   rsvps,
   menu,
-  acceptOrder,
+  acceptTasks,
   rejectOrder,
   clearOrderHistory,
   deleteGuest,
@@ -3081,7 +3036,7 @@ function SchedulerBoard({
   orders: Order[];
   rsvps: Rsvp[];
   menu: EventMenu;
-  acceptOrder: (order: Order | Order[]) => Promise<void>;
+  acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
@@ -3097,7 +3052,7 @@ function SchedulerBoard({
     return () => window.clearInterval(timer);
   }, []);
   const usage = resourceUsage(orders, menu);
-  const queuePlan = planResourceQueue(orders, menu, 0, false);
+  const queuePlan = planResourceQueue(orders, menu);
   const sortedRsvps = [...rsvps].sort((left, right) => {
     const statusOrder = { yes: 0, maybe: 1, no: 2 };
     return statusOrder[left.status] - statusOrder[right.status]
@@ -3140,72 +3095,97 @@ function SchedulerBoard({
     await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => rsvp.guestPhone).join(', '));
     setGuestListNotice('Phone numbers copied');
   };
-  const pendingOrders = orders
-    .filter((order) => order.status === 'new')
-    .sort((a, b) => a.createdAt - b.createdAt);
-  const incomingPendingOrders = pendingOrders.filter((order) => {
-    const tasks = createOrderTasks(order);
-    return tasks.length > 0 && tasks.every((task) =>
-      queuePlan.availablePendingTaskIds.has(task.id),
+  const queuedTaskViews = orders
+    .filter((order) => order.status === 'new' || order.status === 'preparing')
+    .flatMap((order) => {
+      const tasks = order.tasks?.length ? order.tasks : createOrderTasks(order);
+      return tasks
+        .filter((task) => task.status === 'waiting')
+        .map((task) => ({
+          order,
+          task,
+          item: menu.items.find((item) => item.id === task.itemId),
+          pending: order.status === 'new',
+        }));
+    })
+    .sort((left, right) =>
+      left.order.createdAt - right.order.createdAt ||
+      left.task.sequence - right.task.sequence,
     );
-  });
-  const waitingPendingOrders = pendingOrders.filter(
-    (order) => !incomingPendingOrders.some((entry) => entry.id === order.id),
+  const incomingTaskViews = queuedTaskViews.filter((view) =>
+    queuePlan.availableTaskIds.has(view.task.id),
   );
-  const incoming = [
-    ...incomingPendingOrders,
-    ...orders.filter(
-      (order) => order.status === 'preparing' && !order.tasks?.length,
-    ),
-  ].sort((a, b) => a.createdAt - b.createdAt);
+  const waitingTaskViews = queuedTaskViews.filter((view) =>
+    !queuePlan.availableTaskIds.has(view.task.id),
+  );
   const incomingTickets = Object.values(
-    incoming.reduce<
+    incomingTaskViews.reduce<
       Record<
         string,
         {
           guestName: string;
           orders: Order[];
+          taskRefs: OrderTaskRef[];
           selections: Record<string, number>;
           createdAt: number;
           notes: string[];
         }
       >
-    >((groups, order) => {
+    >((groups, view) => {
+      const { order, task } = view;
       const key = order.guestUid || guestNameKey(order.guestName) || 'unnamed guest';
       const ticket = groups[key] || {
         guestName: guestDisplayName(order),
         orders: [],
+        taskRefs: [],
         selections: {},
         createdAt: order.createdAt,
         notes: [],
       };
-      ticket.orders.push(order);
+      if (!ticket.orders.some((entry) => entry.id === order.id)) ticket.orders.push(order);
+      ticket.taskRefs.push({ orderId: order.id, taskId: task.id });
       ticket.createdAt = Math.min(ticket.createdAt, order.createdAt);
       if (order.note && !ticket.notes.includes(order.note)) ticket.notes.push(order.note);
-      Object.entries(order.selections).forEach(([itemId, quantity]) => {
-        ticket.selections[itemId] = (ticket.selections[itemId] || 0) + quantity;
-      });
+      ticket.selections[task.itemId] = (ticket.selections[task.itemId] || 0) + 1;
       groups[key] = ticket;
       return groups;
     }, {}),
   ).sort((left, right) => left.createdAt - right.createdAt);
   const activeTaskViews = orders.flatMap((order) =>
-    (order.tasks || []).map((task) => ({
-      order,
-      task,
-      item: menu.items.find((item) => item.id === task.itemId),
-      pending: false,
-    })),
+    (order.tasks || [])
+      .filter((task) => task.status !== 'waiting')
+      .map((task) => ({
+        order,
+        task,
+        item: menu.items.find((item) => item.id === task.itemId),
+        pending: false,
+      })),
   );
-  const pendingWaitingTaskViews = waitingPendingOrders.flatMap((order) =>
-    createOrderTasks(order).map((task) => ({
-      order,
-      task,
-      item: menu.items.find((item) => item.id === task.itemId),
-      pending: true,
-    })),
+  const taskViews = [...activeTaskViews, ...waitingTaskViews];
+  const waitingGroups = Object.values(
+    waitingTaskViews.reduce<
+      Record<string, {
+        order: Order;
+        item?: MenuItem;
+        tasks: OrderTask[];
+        pending: boolean;
+      }>
+    >((groups, view) => {
+      const key = `${view.order.id}:${view.task.itemId}`;
+      const group = groups[key] || {
+        order: view.order,
+        item: view.item,
+        tasks: [],
+        pending: view.pending,
+      };
+      group.tasks.push(view.task);
+      groups[key] = group;
+      return groups;
+    }, {}),
+  ).sort((left, right) =>
+    left.order.createdAt - right.order.createdAt ||
+    left.tasks[0].sequence - right.tasks[0].sequence,
   );
-  const taskViews = [...activeTaskViews, ...pendingWaitingTaskViews];
   const orderHistory = [...orders].sort(
     (left, right) => right.createdAt - left.createdAt,
   );
@@ -3288,20 +3268,13 @@ function SchedulerBoard({
         resource: menu.resources?.find((entry) => entry.id === resourceId),
         units,
       }));
-  const waitReason = (item?: MenuItem, order?: Order, pending = false) => {
-    const needed = pending && order
-      ? Object.entries(orderResourceRequirements(order, menu)).map(
-          ([resourceId, units]) => ({
-            resource: menu.resources?.find((entry) => entry.id === resourceId),
-            units,
-          }),
-        )
-      : resourcesFor(item);
+  const waitReason = (item?: MenuItem) => {
+    const needed = resourcesFor(item);
     const impossible = needed.filter(
       ({ resource, units }) => !resource || units > resource.capacity,
     );
     if (impossible.length)
-      return `Order needs more ${impossible.map(({ resource, units }) => `${resource?.name || 'resource capacity'} (${units} needed, ${resource?.capacity || 0} available)`).join(' + ')}`;
+      return `Needs more ${impossible.map(({ resource, units }) => `${resource?.name || 'resource capacity'} (${units} needed, ${resource?.capacity || 0} available)`).join(' + ')}`;
     const blocked = needed.filter(
       ({ resource, units }) =>
         !resource || resource.capacity - (usage[resource.id] || 0) < units,
@@ -3446,17 +3419,19 @@ function SchedulerBoard({
                 </ul>
                 {ticket.notes.map((note) => <p key={note}>“{note}”</p>)}
                 <div className="incoming-actions">
-                  <button onClick={() => void acceptOrder(ticket.orders)}>
+                  <button onClick={() => void acceptTasks(ticket.taskRefs)}>
                     <Sparkles size={15} /> Accept
                   </button>
-                  <button
-                    className="reject-order"
-                    onClick={() => void (async () => {
-                      for (const order of ticket.orders) await rejectOrder(order);
-                    })()}
-                  >
-                    <XCircle size={15} /> Reject
-                  </button>
+                  {ticket.orders.every((order) => order.status === 'new') && (
+                    <button
+                      className="reject-order"
+                      onClick={() => void (async () => {
+                        for (const order of ticket.orders) await rejectOrder(order);
+                      })()}
+                    >
+                      <XCircle size={15} /> Reject
+                    </button>
+                  )}
                 </div>
               </article>
             ))}
@@ -3470,7 +3445,8 @@ function SchedulerBoard({
       </section>
       <div className="pipeline-grid">
         {lanes.map((lane) => {
-          const tasks = sortedTasks(lane.status);
+          const tasks = lane.status === 'waiting' ? [] : sortedTasks(lane.status);
+          const laneCount = lane.status === 'waiting' ? waitingTaskViews.length : tasks.length;
           return (
             <section
               key={lane.status}
@@ -3484,9 +3460,36 @@ function SchedulerBoard({
                     <span>{lane.hint}</span>
                   </div>
                 </div>
-                <b>{tasks.length}</b>
+                <b>{laneCount}</b>
               </header>
               <div className="pipeline-stack">
+                {lane.status === 'waiting' && waitingGroups.map(({ order, item, tasks: waitingTasks, pending }) => (
+                  <article key={`${order.id}:${item?.id || waitingTasks[0].itemId}`} className="task-ticket waiting-ticket">
+                    <div className="task-priority">
+                      <span>{guestDisplayName(order)}</span>
+                      <b>#{String(waitingTasks[0].sequence + 1).padStart(2, '0')}</b>
+                    </div>
+                    <div className="waiting-ticket-title">
+                      <h4 className="font-display">{item?.name || 'Menu item'}</h4>
+                      <strong>{waitingTasks.length} waiting</strong>
+                    </div>
+                    <div className="task-resources">
+                      {resourcesFor(item).length ? (
+                        resourcesFor(item).map(({ resource, units }) => (
+                          <span key={resource?.id || 'missing'}>
+                            {units}× {resource?.name || 'Missing resource'}
+                          </span>
+                        ))
+                      ) : (
+                        <span>No constrained resource</span>
+                      )}
+                    </div>
+                    <p className="wait-reason">
+                      <Clock3 size={13} />
+                      {waitReason(item)}{pending ? ' · Not accepted yet' : ''}
+                    </p>
+                  </article>
+                ))}
                 {tasks.map(({ order, task, item, pending }) => {
                   const siblings = (
                     pending ? createOrderTasks(order) : order.tasks || []
@@ -3544,12 +3547,6 @@ function SchedulerBoard({
                           </button>
                         </>
                       )}
-                      {lane.status === 'waiting' && (
-                        <p className="wait-reason">
-                          <Clock3 size={13} />
-                          {waitReason(item, order, pending)}{pending ? ' · Not accepted yet' : ''}
-                        </p>
-                      )}
                       {lane.status === 'ready' && (
                         <>
                           <p className="ready-note">
@@ -3567,7 +3564,7 @@ function SchedulerBoard({
                     </article>
                   );
                 })}
-                {!tasks.length && (
+                {!laneCount && (
                   <div className="pipeline-empty">Nothing {lane.status}.</div>
                 )}
               </div>

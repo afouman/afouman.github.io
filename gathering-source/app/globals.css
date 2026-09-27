@@ -2738,6 +2738,26 @@ button:disabled {
   font-size: 0.58rem;
   font-weight: 800;
 }
+.waiting-ticket-title {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.waiting-ticket-title h4 {
+  min-width: 0;
+}
+.waiting-ticket-title strong {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--wine);
+  color: white;
+  padding: 0.36rem 0.55rem;
+  font-size: 0.58rem;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+}
 .task-resources {
   display: flex;
   flex-wrap: wrap;
