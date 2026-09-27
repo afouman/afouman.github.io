@@ -454,6 +454,8 @@ button:disabled {
   padding-bottom: 0.15rem;
 }
 .guest-order-tabs button {
+  display: grid;
+  gap: 0.08rem;
   flex: 0 0 auto;
   border: 1px solid rgb(29 29 25/0.12);
   border-radius: 999px;
@@ -462,6 +464,13 @@ button:disabled {
   padding: 0.35rem 0.58rem;
   font-size: 0.68rem;
   font-weight: 800;
+  line-height: 1.15;
+  text-align: left;
+}
+.guest-order-tabs button small {
+  font-size: 0.55rem;
+  font-weight: 700;
+  opacity: 0.66;
 }
 .guest-order-tabs button.active {
   border-color: var(--wine);

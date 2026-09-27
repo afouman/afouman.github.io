@@ -2919,6 +2919,17 @@ function RememberedOrderCard({
     setAcknowledgedTasks(next);
     localStorage.setItem(acknowledgementKey, JSON.stringify(next));
   };
+  const orderTabLabel = (entry: Order) => {
+    const name = entry.guestName || 'Guest';
+    const identity = entry.guestUid || guestNameKey(name);
+    const guestOrders = orders
+      .filter((candidate) =>
+        (candidate.guestUid || guestNameKey(candidate.guestName || 'Guest')) === identity,
+      )
+      .sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    if (guestOrders.length < 2) return name;
+    return `${name} #${guestOrders.findIndex((candidate) => candidate.id === entry.id) + 1}`;
+  };
   if (minimized) {
     return (
       <button
@@ -2945,7 +2956,13 @@ function RememberedOrderCard({
                 className={entry.id === order.id ? 'active' : ''}
                 onClick={() => setActiveOrderId(entry.id)}
               >
-                {entry.guestName || 'Guest'}
+                <span>{orderTabLabel(entry)}</span>
+                <small suppressHydrationWarning>
+                  {new Date(entry.createdAt).toLocaleTimeString([], {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                  })}
+                </small>
               </button>
             ))}
           </div>
