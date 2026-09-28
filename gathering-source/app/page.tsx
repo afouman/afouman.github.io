@@ -104,17 +104,36 @@ type Rsvp = {
 };
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
+const phoneDigits = (value: string) => {
+  const digits = value.replace(/\D/g, '');
+  return digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+};
+const formatPhone = (value: string) => {
+  const digits = phoneDigits(value);
+  return digits.length === 10
+    ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+    : value;
+};
+const formatPhoneInput = (value: string) => {
+  let digits = value.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  digits = digits.slice(0, 10);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
 const companionPhone = (companion: string | { name: string; phone?: string }) =>
-  typeof companion === 'string' ? '' : companion.phone || '';
+  typeof companion === 'string' ? '' : formatPhone(companion.phone || '');
 const companionSummary = (companion: string | { name: string; phone?: string }) => {
   const phone = companionPhone(companion);
   return `${companionName(companion)}${phone ? ` (${phone})` : ''}`;
 };
 const normalizeOptionalPhone = (value: string) => {
   if (!value.trim()) return '';
-  const digits = value.replace(/\D/g, '');
-  const normalized = `+${digits.length === 10 ? `1${digits}` : digits}`;
-  return normalized.length >= 12 && normalized.length <= 16 ? normalized : null;
+  const digits = phoneDigits(value);
+  return digits.length === 10
+    ? `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+    : null;
 };
 type GuestProfile = {
   guestUid: string;
@@ -622,7 +641,7 @@ export default function Home() {
       setGuestProfile(savedProfile);
       if (savedProfile) {
         setGuestName(savedProfile.guestName);
-        setPhoneNumber(savedProfile.guestPhone);
+        setPhoneNumber(formatPhone(savedProfile.guestPhone));
       }
       if (!storedOrders)
         shareDemoUpdate({ type: 'orders', eventId, value: nextOrders });
@@ -807,7 +826,7 @@ export default function Home() {
             setGuestProfile(profile);
             if (profile) {
               setGuestName(profile.guestName);
-              setPhoneNumber(profile.guestPhone);
+              setPhoneNumber(formatPhone(profile.guestPhone));
               setEditingGuestProfile(false);
             }
           },
@@ -938,7 +957,7 @@ export default function Home() {
     : 'RSVP';
   const openRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
-    setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
     const companions = (myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0);
@@ -950,7 +969,7 @@ export default function Home() {
   };
   const closeRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
-    setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+    setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
     const companions = (myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0);
@@ -1213,14 +1232,14 @@ export default function Home() {
   }
   async function saveGuestProfile() {
     const name = guestName.trim().replace(/\s+/g, ' ');
-    const phoneDigits = phoneNumber.replace(/\D/g, '');
-    const normalizedPhone = `+${phoneDigits.length === 10 ? `1${phoneDigits}` : phoneDigits}`;
+    const enteredPhone = normalizeOptionalPhone(phoneNumber);
+    const normalizedPhone = enteredPhone ? `+1${phoneDigits(enteredPhone)}` : '';
     if (name.length < 2 || name.length > 80) {
       notify('Enter a name between 2 and 80 characters');
       return;
     }
-    if (normalizedPhone.length < 11 || normalizedPhone.length > 16) {
-      notify('Enter a complete phone number, including country code when outside the US');
+    if (!enteredPhone) {
+      notify('Enter a 10-digit phone number, like 555-555-5555');
       return;
     }
     if (!/^\d{4}$/.test(guestPin)) {
@@ -2326,12 +2345,12 @@ export default function Home() {
                 <p className="guest-rsvp-explainer">Your phone number and temporary 4-digit PIN let you reopen this RSVP on another device. No verification code or permanent account is created.</p>
                 <div className="guest-rsvp-form">
                   <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
-                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="(555) 555-5555" readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
+                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(formatPhoneInput(event.target.value))} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
                   <label className="field-label guest-pin-field">Temporary PIN<input value={guestPin} onChange={(event) => setGuestPin(event.target.value.replace(/\D/g, '').slice(0, 4))} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" /></label>
                   <div className="guest-profile-actions">
                     <button type="button" className="secondary-button" onClick={() => {
                       setGuestName(effectiveGuestProfile?.guestName || '');
-                      setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
+                      setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
                       setGuestPin('');
                       setChangingGuestPhone(false);
                       if (effectiveGuestProfile) setEditingGuestProfile(false);
@@ -2348,7 +2367,7 @@ export default function Home() {
                   {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
                 </div>
                 <div className="guest-profile-summary">
-                  <div><strong>{effectiveGuestProfile.guestName}</strong><span>{effectiveGuestProfile.guestPhone}</span></div>
+                  <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
                   <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
                 </div>
                 <p className="guest-rsvp-explainer">Choose Going to place orders. You can still update your RSVP when ordering is closed.</p>
@@ -2411,15 +2430,15 @@ export default function Home() {
                                   className="field-input"
                                   value={rsvpCompanionPhones[index] || ''}
                                   disabled={menu.rsvpOpen === false}
-                                  maxLength={30}
-                                  placeholder="(555) 555-5555"
+                                  maxLength={12}
+                                  placeholder="555-555-5555"
                                   inputMode="tel"
                                   autoComplete="off"
                                   onChange={(event) =>
                                     setRsvpCompanionPhones((current) =>
                                       current.map((entry, phoneIndex) =>
                                         phoneIndex === index
-                                          ? event.target.value.replace(/[^\d+().\-\s]/g, '')
+                                          ? formatPhoneInput(event.target.value)
                                           : entry,
                                       ),
                                     )
@@ -3275,7 +3294,7 @@ function SchedulerBoard({
       ['Name', 'Phone', 'RSVP', 'Party size', 'Additional guests', 'Active orders'].map(escapeCell).join(','),
       ...sortedRsvps.map((rsvp) => [
         rsvp.guestName,
-        rsvp.guestPhone,
+        formatPhone(rsvp.guestPhone),
         rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going',
         partySize(rsvp),
         (rsvp.companions || []).map(companionSummary).join('; '),
@@ -3287,12 +3306,12 @@ function SchedulerBoard({
     'BEGIN:VCARD',
     'VERSION:3.0',
     `FN:${rsvp.guestName.replaceAll('\n', ' ')}`,
-    `TEL;TYPE=CELL:${rsvp.guestPhone}`,
+    `TEL;TYPE=CELL:${formatPhone(rsvp.guestPhone)}`,
     `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}${rsvp.companions?.length ? ` — Bringing: ${rsvp.companions.map(companionSummary).join(', ')}` : ''}`,
     'END:VCARD',
   ].join('\n')).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
   const copyGuestPhones = async () => {
-    await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => rsvp.guestPhone).join(', '));
+    await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => formatPhone(rsvp.guestPhone)).join(', '));
     setGuestListNotice('Phone numbers copied');
   };
   const queuedTaskViews = orders
@@ -3500,7 +3519,7 @@ function SchedulerBoard({
           <div className="resource-meter-grid rsvp-card-strip">
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}</div>
+                <div><strong>{rsvp.guestName}</strong><span>{formatPhone(rsvp.guestPhone)} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}</div>
                 <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
@@ -3527,7 +3546,7 @@ function SchedulerBoard({
                 <article key={rsvp.guestUid}>
                   <div>
                     <strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong>
-                    <a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>
+                    <a href={`tel:${phoneDigits(rsvp.guestPhone)}`}>{formatPhone(rsvp.guestPhone)}</a>
                     {rsvp.companions?.length ? (
                       <details className="guest-companion-details">
                         <summary>Bringing: {rsvp.companions.map(companionName).join(', ')}</summary>
@@ -3537,7 +3556,7 @@ function SchedulerBoard({
                             return (
                               <div key={`${companionName(companion)}-${index}`}>
                                 <strong>{companionName(companion)}</strong>
-                                {phone ? <a href={`tel:${phone}`}>{phone}</a> : <span>No phone provided</span>}
+                                {phone ? <a href={`tel:${phoneDigits(phone)}`}>{formatPhone(phone)}</a> : <span>No phone provided</span>}
                               </div>
                             );
                           })}
