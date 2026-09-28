@@ -2440,6 +2440,41 @@ button:disabled {
 .guest-list-scroll a { display: block; }
 .guest-list-scroll strong { font-size: 0.88rem; }
 .guest-list-scroll a { margin-top: 0.25rem; color: rgb(246 240 228/0.46); font-size: 0.75rem; }
+.guest-companion-details {
+  margin-top: 0.55rem;
+}
+.guest-companion-details summary {
+  cursor: pointer;
+  color: rgb(246 240 228/0.62);
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.guest-companion-details[open] summary {
+  color: var(--peach);
+}
+.guest-companion-details > div {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  border-left: 2px solid rgb(242 166 142/0.25);
+  padding-left: 0.7rem;
+}
+.guest-companion-details > div > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+}
+.guest-companion-details > div strong {
+  font-size: 0.72rem;
+}
+.guest-companion-details > div a,
+.guest-companion-details > div span {
+  margin: 0;
+  color: rgb(246 240 228/0.46);
+  font-size: 0.68rem;
+}
 .guest-list-scroll .host-rsvp-badge {
   flex: none;
   border-radius: 999px;
@@ -2456,6 +2491,10 @@ button:disabled {
   .rsvp-header-actions button { width: 100%; }
   .rsvp-card-strip article { flex-basis: 240px; width: 240px; }
   .guest-list-toolbar button { flex: 1 1 100%; }
+  .guest-companion-details > div > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
 }
 .guest-rsvp-panel {
   max-width: 980px;

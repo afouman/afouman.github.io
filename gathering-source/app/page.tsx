@@ -110,6 +110,12 @@ const companionSummary = (companion: string | { name: string; phone?: string }) 
   const phone = companionPhone(companion);
   return `${companionName(companion)}${phone ? ` (${phone})` : ''}`;
 };
+const normalizeOptionalPhone = (value: string) => {
+  if (!value.trim()) return '';
+  const digits = value.replace(/\D/g, '');
+  const normalized = `+${digits.length === 10 ? `1${digits}` : digits}`;
+  return normalized.length >= 12 && normalized.length <= 16 ? normalized : null;
+};
 type GuestProfile = {
   guestUid: string;
   guestName: string;
@@ -1333,8 +1339,16 @@ export default function Home() {
       notify('Enter a name between 2 and 80 characters for each additional guest');
       return;
     }
+    const companionPhones = rsvpCompanionPhones
+      .slice(0, companionNames.length)
+      .map((phone) => normalizeOptionalPhone(phone));
+    const invalidPhoneIndex = companionPhones.findIndex((phone) => phone === null);
+    if (invalidPhoneIndex >= 0) {
+      notify(`Enter a complete phone number for friend ${invalidPhoneIndex + 1}`);
+      return;
+    }
     const companions = companionNames.map((name, index) => {
-      const phone = (rsvpCompanionPhones[index] || '').trim().slice(0, 30);
+      const phone = companionPhones[index] || '';
       return phone ? { name, phone } : { name };
     });
     const activeOrders = rememberedOrders.filter((order) => order.status === 'new' || order.status === 'preparing');
@@ -2392,7 +2406,7 @@ export default function Home() {
                                 />
                               </label>
                               <label className="field-label">
-                                Phone <em>optional</em>
+                                Phone <em>(optional)</em>
                                 <input
                                   className="field-input"
                                   value={rsvpCompanionPhones[index] || ''}
@@ -2404,7 +2418,9 @@ export default function Home() {
                                   onChange={(event) =>
                                     setRsvpCompanionPhones((current) =>
                                       current.map((entry, phoneIndex) =>
-                                        phoneIndex === index ? event.target.value : entry,
+                                        phoneIndex === index
+                                          ? event.target.value.replace(/[^\d+().\-\s]/g, '')
+                                          : entry,
                                       ),
                                     )
                                   }
@@ -3484,7 +3500,7 @@ function SchedulerBoard({
           <div className="resource-meter-grid rsvp-card-strip">
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionSummary).join(', ')}</small> : null}</div>
+                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}</div>
                 <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
@@ -3509,7 +3525,26 @@ function SchedulerBoard({
             <div className="guest-list-scroll">
               {sortedRsvps.map((rsvp) => (
                 <article key={rsvp.guestUid}>
-                  <div><strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionSummary).join(', ')}</small> : null}</div>
+                  <div>
+                    <strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong>
+                    <a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>
+                    {rsvp.companions?.length ? (
+                      <details className="guest-companion-details">
+                        <summary>Bringing: {rsvp.companions.map(companionName).join(', ')}</summary>
+                        <div>
+                          {rsvp.companions.map((companion, index) => {
+                            const phone = companionPhone(companion);
+                            return (
+                              <div key={`${companionName(companion)}-${index}`}>
+                                <strong>{companionName(companion)}</strong>
+                                {phone ? <a href={`tel:${phone}`}>{phone}</a> : <span>No phone provided</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    ) : null}
+                  </div>
                   <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
                 </article>
               ))}
@@ -3543,13 +3578,12 @@ function SchedulerBoard({
                   <div>
                     <strong>{resource.name}</strong>
                     <span>
-                      {Math.max(0, resource.capacity - used)} free · {used} in
-                      use
+                      {resource.capacity} total · {Math.max(0, resource.capacity - used)} free
                     </span>
                   </div>
                   <div
                     className="capacity-dots"
-                    aria-label={`${used} of ${resource.capacity} in use`}
+                    aria-label={`${resource.capacity} total, ${Math.max(0, resource.capacity - used)} free`}
                   >
                     {Array.from({ length: resource.capacity }, (_, index) => (
                       <i key={index} className={index < used ? 'used' : ''} />
