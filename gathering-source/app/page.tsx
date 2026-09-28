@@ -124,10 +124,6 @@ const formatPhoneInput = (value: string) => {
 };
 const companionPhone = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? '' : formatPhone(companion.phone || '');
-const companionSummary = (companion: string | { name: string; phone?: string }) => {
-  const phone = companionPhone(companion);
-  return `${companionName(companion)}${phone ? ` (${phone})` : ''}`;
-};
 const normalizeOptionalPhone = (value: string) => {
   if (!value.trim()) return '';
   const digits = phoneDigits(value);
@@ -3290,28 +3286,51 @@ function SchedulerBoard({
       const safe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
       return `"${safe.replaceAll('"', '""')}"`;
     };
+    const rows = sortedRsvps.flatMap((rsvp) => {
+      const response = rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going';
+      return [
+        [rsvp.guestName, formatPhone(rsvp.guestPhone), 'Primary guest', '', response, partySize(rsvp), rsvp.activeOrderCount || 0],
+        ...(rsvp.companions || []).map((companion) => [
+          companionName(companion),
+          companionPhone(companion),
+          'Additional guest',
+          rsvp.guestName,
+          response,
+          '',
+          '',
+        ]),
+      ];
+    });
     downloadGuestFile([
-      ['Name', 'Phone', 'RSVP', 'Party size', 'Additional guests', 'Active orders'].map(escapeCell).join(','),
-      ...sortedRsvps.map((rsvp) => [
-        rsvp.guestName,
-        formatPhone(rsvp.guestPhone),
-        rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going',
-        partySize(rsvp),
-        (rsvp.companions || []).map(companionSummary).join('; '),
-        rsvp.activeOrderCount || 0,
-      ].map(escapeCell).join(',')),
+      ['Name', 'Phone', 'Guest type', 'Invited by', 'RSVP', 'Party size', 'Active orders'].map(escapeCell).join(','),
+      ...rows.map((row) => row.map(escapeCell).join(',')),
     ].join('\n'), 'csv', 'text/csv;charset=utf-8');
   };
-  const downloadGuestContacts = () => downloadGuestFile(sortedRsvps.map((rsvp) => [
-    'BEGIN:VCARD',
-    'VERSION:3.0',
-    `FN:${rsvp.guestName.replaceAll('\n', ' ')}`,
-    `TEL;TYPE=CELL:${formatPhone(rsvp.guestPhone)}`,
-    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}${rsvp.companions?.length ? ` — Bringing: ${rsvp.companions.map(companionSummary).join(', ')}` : ''}`,
-    'END:VCARD',
-  ].join('\n')).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
+  const downloadGuestContacts = () => downloadGuestFile(sortedRsvps.flatMap((rsvp) => {
+    const response = rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going';
+    const card = (name: string, phone: string, note: string) => [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      `FN:${name.replaceAll('\n', ' ')}`,
+      ...(phone ? [`TEL;TYPE=CELL:${formatPhone(phone)}`] : []),
+      `NOTE:${note}`,
+      'END:VCARD',
+    ].join('\n');
+    return [
+      card(rsvp.guestName, rsvp.guestPhone, `${menu.title} — ${response} — Primary guest`),
+      ...(rsvp.companions || []).map((companion) => card(
+        companionName(companion),
+        companionPhone(companion),
+        `${menu.title} — ${response} — Invited by ${rsvp.guestName}`,
+      )),
+    ];
+  }).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
   const copyGuestPhones = async () => {
-    await navigator.clipboard.writeText(sortedRsvps.map((rsvp) => formatPhone(rsvp.guestPhone)).join(', '));
+    const phones = sortedRsvps.flatMap((rsvp) => [
+      formatPhone(rsvp.guestPhone),
+      ...(rsvp.companions || []).map(companionPhone).filter(Boolean),
+    ]);
+    await navigator.clipboard.writeText(phones.join(', '));
     setGuestListNotice('Phone numbers copied');
   };
   const queuedTaskViews = orders
