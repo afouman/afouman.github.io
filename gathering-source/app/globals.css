@@ -1081,6 +1081,14 @@ button:disabled {
   background: var(--peach);
   color: var(--wine-deep);
 }
+.view-switch-button {
+  border: 1px solid rgb(255 255 255/0.3);
+  background: var(--wine);
+  color: #fff8eb;
+}
+.view-switch-button:hover {
+  background: #681a29;
+}
 .guest-hero {
   position: relative;
   display: flex;
@@ -1517,6 +1525,14 @@ button:disabled {
 .host-mode .app-header > div > button:first-child span:first-child {
   background: var(--acid);
   color: var(--night);
+}
+.host-mode .view-switch-button {
+  border-color: rgb(216 240 106/0.32);
+  background: var(--acid);
+  color: var(--night);
+}
+.host-mode .view-switch-button:hover {
+  background: #e5f78f;
 }
 .host-workspace {
   min-height: calc(100vh - 72px);
