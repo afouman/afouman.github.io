@@ -97,10 +97,18 @@ type Rsvp = {
   guestName: string;
   guestPhone: string;
   status: 'yes' | 'maybe' | 'no';
-  companions?: string[];
+  companions?: Array<string | { name: string; phone?: string }>;
   activeOrderCount: number;
   createdAt: number;
   updatedAt?: number;
+};
+const companionName = (companion: string | { name: string; phone?: string }) =>
+  typeof companion === 'string' ? companion : companion.name;
+const companionPhone = (companion: string | { name: string; phone?: string }) =>
+  typeof companion === 'string' ? '' : companion.phone || '';
+const companionSummary = (companion: string | { name: string; phone?: string }) => {
+  const phone = companionPhone(companion);
+  return `${companionName(companion)}${phone ? ` (${phone})` : ''}`;
 };
 type GuestProfile = {
   guestUid: string;
@@ -488,6 +496,7 @@ export default function Home() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpCompanionNames, setRsvpCompanionNames] = useState<string[]>([]);
+  const [rsvpCompanionPhones, setRsvpCompanionPhones] = useState<string[]>([]);
   const [rsvpBusy, setRsvpBusy] = useState(false);
   const [guestUid, setGuestUid] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<'created' | 'updated'>(
@@ -926,7 +935,9 @@ export default function Home() {
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
-    setRsvpCompanionNames((myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0));
+    const companions = (myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0);
+    setRsvpCompanionNames(companions.map(companionName));
+    setRsvpCompanionPhones(companions.map(companionPhone));
     setChangingGuestPhone(false);
     setEditingGuestProfile(!effectiveGuestProfile);
     setRsvpPanelOpen(true);
@@ -936,7 +947,9 @@ export default function Home() {
     setPhoneNumber(effectiveGuestProfile?.guestPhone || '');
     setGuestPin('');
     setRsvpChoice(myRsvp?.status || 'yes');
-    setRsvpCompanionNames((myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0));
+    const companions = (myRsvp?.companions || []).slice(0, menu.maxAdditionalGuests || 0);
+    setRsvpCompanionNames(companions.map(companionName));
+    setRsvpCompanionPhones(companions.map(companionPhone));
     setChangingGuestPhone(false);
     setEditingGuestProfile(false);
     setRsvpPanelOpen(false);
@@ -1313,13 +1326,17 @@ export default function Home() {
       return;
     }
     const maxCompanions = Math.max(0, menu.maxAdditionalGuests || 0);
-    const companions = rsvpChoice === 'no'
+    const companionNames = rsvpChoice === 'no'
       ? []
       : rsvpCompanionNames.slice(0, maxCompanions).map((name) => name.trim());
-    if (companions.some((name) => name.length < 2 || name.length > 80)) {
+    if (companionNames.some((name) => name.length < 2 || name.length > 80)) {
       notify('Enter a name between 2 and 80 characters for each additional guest');
       return;
     }
+    const companions = companionNames.map((name, index) => {
+      const phone = (rsvpCompanionPhones[index] || '').trim().slice(0, 30);
+      return phone ? { name, phone } : { name };
+    });
     const activeOrders = rememberedOrders.filter((order) => order.status === 'new' || order.status === 'preparing');
     if (myRsvp?.status === 'yes' && rsvpChoice !== 'yes' && activeOrders.length) {
       setRsvpChoice(myRsvp.status);
@@ -2097,17 +2114,35 @@ export default function Home() {
                 placeholder="Sunday birthday brunch"
               />
             </label>
-            <label className="field-label mt-5">
-              Event date and time
-              <input
-                type="datetime-local"
-                value={newEvent.date}
-                onChange={(e) =>
-                  setNewEvent({ ...newEvent, date: e.target.value })
-                }
-                className="field-input date-time-input"
-              />
-            </label>
+            <div className="new-event-schedule-grid">
+              <label className="field-label">
+                Event date and time
+                <input
+                  type="datetime-local"
+                  value={newEvent.date}
+                  onChange={(e) =>
+                    setNewEvent({ ...newEvent, date: e.target.value })
+                  }
+                  className="field-input date-time-input"
+                />
+              </label>
+              <label className="field-label compact-integer-field">
+                Max friends per guest
+                <input
+                  type="number"
+                  min="0"
+                  max="20"
+                  value={newEvent.maxAdditionalGuests}
+                  onChange={(event) =>
+                    setNewEvent({
+                      ...newEvent,
+                      maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
+                    })
+                  }
+                  className="field-input"
+                />
+              </label>
+            </div>
             <label className="field-label mt-5">
               Address
               <input
@@ -2119,23 +2154,6 @@ export default function Home() {
                 placeholder="123 Main Street, Los Angeles, CA"
                 autoComplete="street-address"
               />
-            </label>
-            <label className="field-label mt-5">
-              Maximum friends per guest
-              <input
-                type="number"
-                min="0"
-                max="20"
-                value={newEvent.maxAdditionalGuests}
-                onChange={(event) =>
-                  setNewEvent({
-                    ...newEvent,
-                    maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
-                  })
-                }
-                className="field-input"
-              />
-              <small className="date-preview">Use 0 for invitations that do not include additional guests.</small>
             </label>
             <label className="field-label mt-5">
               Guest welcome message
@@ -2341,6 +2359,9 @@ export default function Home() {
                                 setRsvpCompanionNames((current) =>
                                   Array.from({ length: count }, (_, index) => current[index] || ''),
                                 );
+                                setRsvpCompanionPhones((current) =>
+                                  Array.from({ length: count }, (_, index) => current[index] || ''),
+                                );
                               }}
                             >
                               {Array.from({ length: (menu.maxAdditionalGuests || 0) + 1 }, (_, count) => (
@@ -2351,24 +2372,45 @@ export default function Home() {
                             </select>
                           </label>
                           {rsvpCompanionNames.map((name, index) => (
-                            <label className="field-label" key={index}>
-                              Friend {index + 1} name
-                              <input
-                                className="field-input"
-                                value={name}
-                                disabled={menu.rsvpOpen === false}
-                                maxLength={80}
-                                placeholder="Full name"
-                                autoComplete="off"
-                                onChange={(event) =>
-                                  setRsvpCompanionNames((current) =>
-                                    current.map((entry, nameIndex) =>
-                                      nameIndex === index ? event.target.value : entry,
-                                    ),
-                                  )
-                                }
-                              />
-                            </label>
+                            <div className="rsvp-companion-row" key={index}>
+                              <label className="field-label">
+                                Friend {index + 1} name
+                                <input
+                                  className="field-input"
+                                  value={name}
+                                  disabled={menu.rsvpOpen === false}
+                                  maxLength={80}
+                                  placeholder="Full name"
+                                  autoComplete="off"
+                                  onChange={(event) =>
+                                    setRsvpCompanionNames((current) =>
+                                      current.map((entry, nameIndex) =>
+                                        nameIndex === index ? event.target.value : entry,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </label>
+                              <label className="field-label">
+                                Phone <em>optional</em>
+                                <input
+                                  className="field-input"
+                                  value={rsvpCompanionPhones[index] || ''}
+                                  disabled={menu.rsvpOpen === false}
+                                  maxLength={30}
+                                  placeholder="(555) 555-5555"
+                                  inputMode="tel"
+                                  autoComplete="off"
+                                  onChange={(event) =>
+                                    setRsvpCompanionPhones((current) =>
+                                      current.map((entry, phoneIndex) =>
+                                        phoneIndex === index ? event.target.value : entry,
+                                      ),
+                                    )
+                                  }
+                                />
+                              </label>
+                            </div>
                           ))}
                         </>
                       ) : (
@@ -3220,7 +3262,7 @@ function SchedulerBoard({
         rsvp.guestPhone,
         rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going',
         partySize(rsvp),
-        (rsvp.companions || []).join('; '),
+        (rsvp.companions || []).map(companionSummary).join('; '),
         rsvp.activeOrderCount || 0,
       ].map(escapeCell).join(',')),
     ].join('\n'), 'csv', 'text/csv;charset=utf-8');
@@ -3230,7 +3272,7 @@ function SchedulerBoard({
     'VERSION:3.0',
     `FN:${rsvp.guestName.replaceAll('\n', ' ')}`,
     `TEL;TYPE=CELL:${rsvp.guestPhone}`,
-    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}${rsvp.companions?.length ? ` — Bringing: ${rsvp.companions.join(', ')}` : ''}`,
+    `NOTE:${menu.title} — ${rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}${rsvp.companions?.length ? ` — Bringing: ${rsvp.companions.map(companionSummary).join(', ')}` : ''}`,
     'END:VCARD',
   ].join('\n')).join('\n'), 'vcf', 'text/vcard;charset=utf-8');
   const copyGuestPhones = async () => {
@@ -3442,7 +3484,7 @@ function SchedulerBoard({
           <div className="resource-meter-grid rsvp-card-strip">
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.join(', ')}</small> : null}</div>
+                <div><strong>{rsvp.guestName}</strong><span>{rsvp.guestPhone} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionSummary).join(', ')}</small> : null}</div>
                 <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
@@ -3467,7 +3509,7 @@ function SchedulerBoard({
             <div className="guest-list-scroll">
               {sortedRsvps.map((rsvp) => (
                 <article key={rsvp.guestUid}>
-                  <div><strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.join(', ')}</small> : null}</div>
+                  <div><strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong><a href={`tel:${rsvp.guestPhone}`}>{rsvp.guestPhone}</a>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionSummary).join(', ')}</small> : null}</div>
                   <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
                 </article>
               ))}
@@ -4117,8 +4159,8 @@ function MenuEditor({
           {menu.accepting ? 'Accepting orders' : 'Orders closed'}
         </button>
       </div>
-      <div className="grid gap-5 sm:grid-cols-2">
-        <label className="field-label">
+      <div className="event-settings-grid">
+        <label className="field-label event-settings-title">
           Event name
           <input
             className="field-input"
@@ -4142,6 +4184,22 @@ function MenuEditor({
           />
           {menu.startsAt && <small className="date-preview">{menu.date}</small>}
         </label>
+        <label className="field-label compact-integer-field">
+          Max friends per guest
+          <input
+            type="number"
+            min="0"
+            max="20"
+            className="field-input"
+            value={menu.maxAdditionalGuests || 0}
+            onChange={(event) =>
+              setMenu({
+                ...menu,
+                maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
+              })
+            }
+          />
+        </label>
       </div>
       <label className="field-label mt-5">
         Address
@@ -4152,23 +4210,6 @@ function MenuEditor({
           placeholder="123 Main Street, Los Angeles, CA"
           autoComplete="street-address"
         />
-      </label>
-      <label className="field-label mt-5">
-        Maximum friends each guest can bring
-        <input
-          type="number"
-          min="0"
-          max="20"
-          className="field-input"
-          value={menu.maxAdditionalGuests || 0}
-          onChange={(event) =>
-            setMenu({
-              ...menu,
-              maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
-            })
-          }
-        />
-        <small className="date-preview">Guests will enter one name for every friend they include.</small>
       </label>
       <label className="field-label mt-5">
         Welcome message

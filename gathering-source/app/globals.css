@@ -218,6 +218,47 @@ button:disabled {
   font-size: 0.68rem;
   font-weight: 600;
 }
+.event-settings-grid {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.15fr) minmax(215px, 1fr) minmax(135px, 0.42fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+.new-event-schedule-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(135px, 0.42fr);
+  gap: 1rem;
+  align-items: start;
+  margin-top: 1.25rem;
+}
+.event-settings-grid > *,
+.new-event-schedule-grid > * {
+  min-width: 0;
+}
+.compact-integer-field input {
+  text-align: center;
+  font-weight: 800;
+}
+@media (max-width: 900px) {
+  .event-settings-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(135px, 0.45fr);
+  }
+  .event-settings-title {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 600px) {
+  .event-settings-grid,
+  .new-event-schedule-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .event-settings-title {
+    grid-column: auto;
+  }
+  .compact-integer-field input {
+    text-align: left;
+  }
+}
 .app-header {
   padding-top: env(safe-area-inset-top);
 }
@@ -2507,6 +2548,14 @@ button:disabled {
   font-size: 0.78rem;
   font-weight: 700;
 }
+.rsvp-companion-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 0.65rem;
+}
+.rsvp-companion-row > * {
+  min-width: 0;
+}
 .rsvp-order-lock { margin-top: 1rem; color: #723e3d; font-size: 0.78rem; font-weight: 700; }
 .rsvp-closed-note { margin-top: 1rem; color: #723e3d; font-size: 0.78rem; font-weight: 800; }
 .rsvp-required-banner { background: #6c5437; }
@@ -2537,6 +2586,7 @@ button:disabled {
   .guest-rsvp-form .guest-pin-field { flex-basis: auto; }
   .rsvp-choices { width: 100%; }
   .rsvp-choices label { flex: 1 1 100%; }
+  .rsvp-companion-row { grid-template-columns: minmax(0, 1fr); }
   .guest-profile-summary, .guest-profile-actions { align-items: stretch; flex-direction: column; }
 }
 .capacity-dots {
