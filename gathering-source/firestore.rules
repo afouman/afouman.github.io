@@ -78,6 +78,9 @@ service cloud.firestore {
         && data.replyTo.text.size() <= 300
       );
     }
+    function messageDeleted(data) {
+      return data.keys().hasAny(['deleted']) && data.deleted == true;
+    }
 
     match /events/{eventId} {
       allow read: if true;
@@ -267,6 +270,7 @@ service cloud.firestore {
             'id', 'type', 'authorUid', 'authorName', 'authorRole', 'text',
             'createdAt', 'updatedAt', 'edited', 'replyTo', 'reactions',
             'pollQuestion', 'pollOptions', 'pollVotes', 'allowGuestOptions',
+            'pinned', 'pinnedAt', 'pinnedByName', 'deleted',
             'lastActorUid', 'lastActorRole'
           ])
           && request.resource.data.id == messageId
@@ -285,6 +289,10 @@ service cloud.firestore {
           && request.resource.data.pollQuestion is string
           && request.resource.data.pollQuestion.size() <= 300
           && request.resource.data.allowGuestOptions is bool
+          && request.resource.data.pinned == false
+          && request.resource.data.pinnedAt == 0
+          && request.resource.data.pinnedByName == ''
+          && request.resource.data.deleted == false
           && request.resource.data.lastActorUid == request.resource.data.authorUid
           && request.resource.data.lastActorRole == request.resource.data.authorRole
           && (
@@ -311,6 +319,8 @@ service cloud.firestore {
           && (
             (
               request.resource.data.type == 'message'
+              && !messageDeleted(resource.data)
+              && !messageDeleted(request.resource.data)
               && request.resource.data.lastActorUid == resource.data.authorUid
               && request.resource.data.lastActorRole == resource.data.authorRole
               && validChatActor(eventId, request.resource.data)
@@ -322,7 +332,9 @@ service cloud.firestore {
                 'text', 'edited', 'updatedAt', 'lastActorUid', 'lastActorRole'
               ])
             ) || (
-              request.resource.data.reactions is map
+              !messageDeleted(resource.data)
+              && !messageDeleted(request.resource.data)
+              && request.resource.data.reactions is map
               && request.resource.data.pollVotes is map
               && request.resource.data.pollOptions is list
               && request.resource.data.pollOptions.size() <= 20
@@ -336,6 +348,43 @@ service cloud.firestore {
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'reactions', 'pollVotes', 'pollOptions', 'updatedAt',
                 'lastActorUid', 'lastActorRole'
+              ])
+            ) || (
+              !messageDeleted(resource.data)
+              && !messageDeleted(request.resource.data)
+              && request.resource.data.lastActorRole == 'host'
+              && canManageEvent(eventId)
+              && request.resource.data.pinned is bool
+              && request.resource.data.pinnedAt is int
+              && request.resource.data.pinnedByName is string
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'pinned', 'pinnedAt', 'pinnedByName', 'updatedAt',
+                'lastActorUid', 'lastActorRole'
+              ])
+            ) || (
+              !messageDeleted(resource.data)
+              && request.resource.data.deleted == true
+              && request.resource.data.text == ''
+              && request.resource.data.pollQuestion == ''
+              && request.resource.data.pollOptions.size() == 0
+              && request.resource.data.pollVotes.size() == 0
+              && request.resource.data.reactions.size() == 0
+              && request.resource.data.replyTo == null
+              && request.resource.data.pinned == false
+              && request.resource.data.pinnedAt == 0
+              && request.resource.data.pinnedByName == ''
+              && (
+                (request.resource.data.lastActorRole == 'host' && canManageEvent(eventId))
+                || (
+                  request.resource.data.lastActorUid == resource.data.authorUid
+                  && request.resource.data.lastActorRole == resource.data.authorRole
+                  && validChatActor(eventId, request.resource.data)
+                )
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'text', 'pollQuestion', 'pollOptions', 'pollVotes', 'reactions',
+                'replyTo', 'edited', 'pinned', 'pinnedAt', 'pinnedByName',
+                'deleted', 'updatedAt', 'lastActorUid', 'lastActorRole'
               ])
             )
           );

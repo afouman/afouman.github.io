@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
+import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
   ArrowLeft,
   CalendarPlus,
@@ -21,6 +22,8 @@ import {
   MessageCircle,
   Minus,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Reply,
   Send,
@@ -136,6 +139,10 @@ type ChatMessage = {
   pollOptions: ChatPollOption[];
   pollVotes: Record<string, string>;
   allowGuestOptions: boolean;
+  pinned?: boolean;
+  pinnedAt?: number;
+  pinnedByName?: string;
+  deleted?: boolean;
   lastActorUid?: string;
   lastActorRole?: 'host' | 'guest';
 };
@@ -170,6 +177,7 @@ const playChatSound = () => {
   if (context.state === 'running') chime();
   else void context.resume().then(chime).catch(() => undefined);
 };
+const eventTimestamp = () => Date.now();
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
 const phoneDigits = (value: string) => {
@@ -645,7 +653,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=6', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=7', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2919,8 +2927,6 @@ function GuestMenu({
   );
 }
 
-const CHAT_EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '🤔'];
-
 function EventChat({
   menu,
   actor,
@@ -2943,6 +2949,7 @@ function EventChat({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [reactionFor, setReactionFor] = useState<string | null>(null);
   const [reactionDetailsFor, setReactionDetailsFor] = useState<string | null>(null);
+  const [messageMenuFor, setMessageMenuFor] = useState<string | null>(null);
   const [pollOpen, setPollOpen] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
@@ -2952,6 +2959,7 @@ function EventChat({
   const [busy, setBusy] = useState(false);
   const [unread, setUnread] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const locked = menu.chatOpen === false;
@@ -2990,7 +2998,7 @@ function EventChat({
           return {
             id: entry.id,
             ...data,
-            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            createdAt: data.createdAt?.toMillis?.() ?? eventTimestamp(),
             updatedAt: data.updatedAt?.toMillis?.(),
           } as ChatMessage;
         }));
@@ -3018,8 +3026,13 @@ function EventChat({
   }, [messages, actor.uid, visible]);
 
   useEffect(() => {
-    if (visible) queueMicrotask(() => setUnread(0));
+    if (visible) queueMicrotask(() => {
+      setUnread(0);
+      composerRef.current?.focus();
+    });
   }, [visible]);
+
+  const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus());
 
   const resolveActor = async (): Promise<ChatActor> => {
     if (actor.role === 'guest' || !firebaseConfigured) return actor;
@@ -3043,7 +3056,7 @@ function EventChat({
     const resolvedActor = await resolveActor();
     if (!firebaseConfigured) {
       savePreview(messages.map((message) => message.id === messageId
-        ? { ...message, ...build(message, resolvedActor), updatedAt: Date.now(), lastActorUid: resolvedActor.uid, lastActorRole: resolvedActor.role }
+        ? { ...message, ...build(message, resolvedActor), updatedAt: eventTimestamp(), lastActorUid: resolvedActor.uid, lastActorRole: resolvedActor.role }
         : message));
       return;
     }
@@ -3082,8 +3095,8 @@ function EventChat({
           authorName: resolvedActor.name,
           authorRole: resolvedActor.role,
           text: text.slice(0, 2000),
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          createdAt: eventTimestamp(),
+          updatedAt: eventTimestamp(),
           edited: false,
           replyTo,
           reactions: {},
@@ -3091,6 +3104,10 @@ function EventChat({
           pollOptions: [],
           pollVotes: {},
           allowGuestOptions: false,
+          pinned: false,
+          pinnedAt: 0,
+          pinnedByName: '',
+          deleted: false,
           lastActorUid: resolvedActor.uid,
           lastActorRole: resolvedActor.role,
         };
@@ -3108,6 +3125,7 @@ function EventChat({
       setDraft('');
       setReplyTo(null);
       setEditing(null);
+      focusComposer();
     } catch {
       notify('Message could not be saved');
     } finally {
@@ -3122,7 +3140,7 @@ function EventChat({
     try {
       const resolvedActor = await resolveActor();
       const id = crypto.randomUUID();
-      const now = Date.now();
+      const now = eventTimestamp();
       const message: ChatMessage = {
         id,
         type: 'poll',
@@ -3144,6 +3162,10 @@ function EventChat({
         })),
         pollVotes: {},
         allowGuestOptions,
+        pinned: false,
+        pinnedAt: 0,
+        pinnedByName: '',
+        deleted: false,
         lastActorUid: resolvedActor.uid,
         lastActorRole: 'host',
       };
@@ -3161,6 +3183,7 @@ function EventChat({
       setPollOptions(['', '']);
       setAllowGuestOptions(false);
       setPollOpen(false);
+      focusComposer();
     } catch {
       notify('Poll could not be created');
     } finally {
@@ -3177,6 +3200,7 @@ function EventChat({
       return { reactions };
     });
     setReactionFor(null);
+    focusComposer();
   };
   const vote = async (message: ChatMessage, optionId: string) => {
     await updateMessage(message.id, (current, resolvedActor) => {
@@ -3185,6 +3209,7 @@ function EventChat({
       else pollVotes[resolvedActor.uid] = optionId;
       return { pollVotes };
     });
+    focusComposer();
   };
   const addPollOption = async (message: ChatMessage) => {
     const text = newOption.trim();
@@ -3199,7 +3224,49 @@ function EventChat({
     }));
     setNewOption('');
     setAddingOptionFor(null);
+    focusComposer();
   };
+  const togglePinned = async (message: ChatMessage) => {
+    if (actor.role !== 'host' || locked || message.deleted) return;
+    await updateMessage(message.id, (current, resolvedActor) => ({
+      pinned: !current.pinned,
+      pinnedAt: current.pinned ? 0 : eventTimestamp(),
+      pinnedByName: current.pinned ? '' : resolvedActor.name,
+    }));
+    setMessageMenuFor(null);
+    focusComposer();
+  };
+  const deleteMessage = async (message: ChatMessage) => {
+    if (locked || message.deleted) return;
+    if (!window.confirm('Delete this message? This cannot be undone.')) return;
+    const resolvedActor = await resolveActor();
+    if (resolvedActor.role !== 'host' && message.authorUid !== resolvedActor.uid) return;
+    await updateMessage(message.id, () => ({
+      text: '',
+      pollQuestion: '',
+      pollOptions: [],
+      pollVotes: {},
+      reactions: {},
+      replyTo: null,
+      edited: false,
+      pinned: false,
+      pinnedAt: 0,
+      pinnedByName: '',
+      deleted: true,
+    }));
+    setMessageMenuFor(null);
+    if (editing?.id === message.id) {
+      setEditing(null);
+      setDraft('');
+    }
+    focusComposer();
+  };
+  const orderedMessages = [...messages].sort((left, right) => {
+    if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
+    if (left.pinned && right.pinned)
+      return (right.pinnedAt || right.createdAt) - (left.pinnedAt || left.createdAt);
+    return left.createdAt - right.createdAt;
+  });
 
   if (!visible) {
     return (
@@ -3225,7 +3292,7 @@ function EventChat({
           {messages.length === 0 && (
             <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
           )}
-          {messages.map((message) => {
+          {orderedMessages.map((message) => {
             const mine = message.authorUid === actor.uid || (actor.role === 'host' && message.authorRole === 'host');
             const reactionEntries = Object.entries(message.reactions || {}).map(([uid, reaction]) => ({
               uid,
@@ -3244,17 +3311,35 @@ function EventChat({
             const myReactionEmoji = typeof myReaction === 'string' ? myReaction : myReaction?.emoji;
             const totalVotes = Object.keys(message.pollVotes || {}).length;
             return (
-              <article key={message.id} className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''}`}>
+              <article
+                key={message.id}
+                className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message.pinned ? 'pinned' : ''} ${message.deleted ? 'deleted' : ''}`}
+                onPointerUp={(event) => {
+                  if (event.button !== 0) return;
+                  if ((event.target as HTMLElement).closest('button, input, textarea, label')) return;
+                  setMessageMenuFor(messageMenuFor === message.id ? null : message.id);
+                }}
+              >
                 <div className="chat-message-meta">
                   <strong>{message.authorName}</strong>
                   {message.authorRole === 'host' && <b>Host</b>}
+                  {message.pinned && <b className="chat-pinned-badge"><Pin size={10} /> Pinned</b>}
                   <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
                   {message.edited && <em>edited</em>}
+                  {!message.deleted && !locked && <button type="button" className="chat-message-options" aria-label={`Options for ${message.authorName}'s message`} onClick={() => setMessageMenuFor(messageMenuFor === message.id ? null : message.id)}>•••</button>}
                 </div>
-                {message.replyTo && (
+                {messageMenuFor === message.id && !locked && (
+                  <div className="chat-message-menu">
+                    {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
+                    {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
+                    {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin' : 'Pin to top'}</button>}
+                    {(mine || actor.role === 'host') && !message.deleted && <button type="button" className="danger" onClick={() => void deleteMessage(message)}><Trash2 size={14} /> Delete</button>}
+                  </div>
+                )}
+                {message.replyTo && !message.deleted && (
                   <div className="chat-reply-context"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></div>
                 )}
-                {message.type === 'message' ? <p>{message.text}</p> : (
+                {message.deleted ? <p className="chat-deleted-copy">Message deleted</p> : message.type === 'message' ? <p>{message.text}</p> : (
                   <div className="chat-poll">
                     <strong>{message.pollQuestion}</strong>
                     <span>{totalVotes} vote{totalVotes === 1 ? '' : 's'} · {message.allowGuestOptions ? 'Guests can add options' : 'Fixed options'}</span>
@@ -3277,9 +3362,9 @@ function EventChat({
                     )}
                   </div>
                 )}
-                {reactionGroups.length > 0 && (
+                {!message.deleted && reactionGroups.length > 0 && (
                   <div className="chat-reaction-summary">
-                    {reactionGroups.slice(0, 3).map(({ emoji, names }) => <button type="button" disabled={locked} className={myReactionEmoji === emoji ? 'selected' : ''} key={emoji} title={`${names.join(', ')} reacted ${emoji}`} onClick={() => void react(message, emoji)}>{emoji} {names.length}</button>)}
+                    {reactionGroups.slice(0, 3).map(({ emoji, names }) => <button type="button" disabled={locked} className={myReactionEmoji === emoji ? 'selected' : ''} key={emoji} data-tooltip={`${names.join(', ')} reacted ${emoji}`} aria-label={`${names.join(', ')} reacted ${emoji}`} onClick={() => void react(message, emoji)}>{emoji} {names.length}</button>)}
                     {reactionGroups.length > 3 && <button type="button" className="chat-reaction-more" onClick={() => setReactionDetailsFor(reactionDetailsFor === message.id ? null : message.id)}>+{reactionGroups.length - 3}</button>}
                     {reactionDetailsFor === message.id && (
                       <div className="chat-reaction-details">
@@ -3288,12 +3373,12 @@ function EventChat({
                     )}
                   </div>
                 )}
-                {!locked && (
+                {!locked && !message.deleted && (
                   <div className="chat-message-actions">
-                    <button type="button" onClick={() => setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) })}><Reply size={13} /> Reply</button>
-                    {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); }}><Pencil size={13} /> Edit</button>}
+                    <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); focusComposer(); }}><Reply size={13} /> Reply</button>
+                    {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); focusComposer(); }}><Pencil size={13} /> Edit</button>}
                     <button type="button" onClick={() => setReactionFor(reactionFor === message.id ? null : message.id)}><Smile size={13} /> React</button>
-                    {reactionFor === message.id && <div className="chat-reaction-picker">{CHAT_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => void react(message, emoji)}>{emoji}</button>)}</div>}
+                    {reactionFor === message.id && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); focusComposer(); }} /></div>}
                   </div>
                 )}
               </article>
@@ -3313,14 +3398,14 @@ function EventChat({
         )}
         {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
           <footer className="chat-composer">
-            {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); }}><XCircle size={16} /></button></div>}
+            {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
             <div>
               <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
               {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
-              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <button type="button" className="chat-send" disabled={busy || !draft.trim()} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
             </div>
-            {emojiOpen && <div className="chat-emoji-picker">{CHAT_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => { setDraft((current) => `${current}${emoji}`); setEmojiOpen(false); }}>{emoji}</button>)}</div>}
+            {emojiOpen && <div className="chat-emoji-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={350} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { setDraft((current) => `${current}${emojiData.emoji}`); setEmojiOpen(false); focusComposer(); }} /></div>}
           </footer>
         )}
       </dialog>
