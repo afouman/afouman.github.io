@@ -18,12 +18,16 @@ import {
   Leaf,
   ListChecks,
   LockKeyhole,
+  MessageCircle,
   Minus,
   Pencil,
   Plus,
+  Reply,
+  Send,
   Settings2,
   Share2,
   ShoppingBag,
+  Smile,
   Smartphone,
   Sparkles,
   SquarePlus,
@@ -58,6 +62,7 @@ type EventMenu = {
   welcome: string;
   accepting: boolean;
   rsvpOpen?: boolean;
+  chatOpen?: boolean;
   maxAdditionalGuests?: number;
   categories?: string[];
   resources?: EventResource[];
@@ -101,6 +106,37 @@ type Rsvp = {
   activeOrderCount: number;
   createdAt: number;
   updatedAt?: number;
+};
+type ChatActor = {
+  uid: string;
+  name: string;
+  role: 'host' | 'guest';
+};
+type ChatReply = { id: string; authorName: string; text: string };
+type ChatPollOption = {
+  id: string;
+  text: string;
+  addedByUid: string;
+  addedByName: string;
+};
+type ChatMessage = {
+  id: string;
+  type: 'message' | 'poll';
+  authorUid: string;
+  authorName: string;
+  authorRole: 'host' | 'guest';
+  text: string;
+  createdAt: number;
+  updatedAt?: number;
+  edited: boolean;
+  replyTo: ChatReply | null;
+  reactions: Record<string, string>;
+  pollQuestion: string;
+  pollOptions: ChatPollOption[];
+  pollVotes: Record<string, string>;
+  allowGuestOptions: boolean;
+  lastActorUid?: string;
+  lastActorRole?: 'host' | 'guest';
 };
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
@@ -514,6 +550,7 @@ export default function Home() {
   const [editingGuestProfile, setEditingGuestProfile] = useState(false);
   const [changingGuestPhone, setChangingGuestPhone] = useState(false);
   const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpCompanionNames, setRsvpCompanionNames] = useState<string[]>([]);
@@ -951,6 +988,11 @@ export default function Home() {
   const rsvpButtonLabel = myRsvp
     ? `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
+  const chatActor: ChatActor | null = mode === 'host'
+    ? hostUser ? { uid: menu.ownerUid || 'host', name: 'Host', role: 'host' } : null
+    : myRsvp?.status === 'yes' && effectiveGuestProfile
+      ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
+      : null;
   const openRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
@@ -1062,6 +1104,7 @@ export default function Home() {
       welcome: newEvent.welcome.trim(),
       accepting: false,
       rsvpOpen: true,
+      chatOpen: true,
       maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
       resources: [],
@@ -1870,6 +1913,34 @@ export default function Home() {
     }
   }
 
+  async function setEventChatOpen(chatIsOpen: boolean) {
+    const previousMenu = menu;
+    const previousEvents = events;
+    const updatedMenu = { ...menu, chatOpen: chatIsOpen };
+    const updatedEvents = events.map((event) =>
+      event.id === menu.id ? updatedMenu : event,
+    );
+    setMenu(updatedMenu);
+    setEvents(updatedEvents);
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        await store.updateDoc(
+          store.doc(store.getFirestore(getApp()), 'events', menu.id),
+          { chatOpen: chatIsOpen },
+        );
+      } else shareDemoUpdate({ type: 'events', value: updatedEvents });
+      notify(chatIsOpen ? 'Chat is open' : 'Chat is locked — history stays visible');
+    } catch {
+      setMenu(previousMenu);
+      setEvents(previousEvents);
+      notify('Could not change chat status');
+    }
+  }
+
   async function uploadItemImage(itemId: string, file: File) {
     if (!file.type.startsWith('image/')) {
       notify('Please choose an image file');
@@ -2022,6 +2093,16 @@ export default function Home() {
                 <Smartphone size={14} /> Host app
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setChatOpen(true)}
+              disabled={!chatActor}
+              className="chat-header-button"
+              title={!chatActor && mode === 'guest' ? 'RSVP Going to join the chat' : undefined}
+            >
+              <MessageCircle size={16} />
+              <span>{menu.chatOpen === false ? 'Chat locked' : 'Chat'}</span>
+            </button>
             {!isStandalone && (
               <button
                 onClick={() => switchMode(mode === 'guest' ? 'host' : 'guest')}
@@ -2079,6 +2160,16 @@ export default function Home() {
           serveTask={serveTask}
           setAccepting={setEventAccepting}
           setRsvpOpen={setEventRsvpOpen}
+          setChatOpen={setEventChatOpen}
+          notify={notify}
+        />
+      )}
+
+      {chatOpen && chatActor && (
+        <EventChat
+          menu={menu}
+          actor={chatActor}
+          onClose={() => setChatOpen(false)}
           notify={notify}
         />
       )}
@@ -2786,6 +2877,359 @@ function GuestMenu({
   );
 }
 
+const CHAT_EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '🤔'];
+
+function EventChat({
+  menu,
+  actor,
+  onClose,
+  notify,
+}: {
+  menu: EventMenu;
+  actor: ChatActor;
+  onClose: () => void;
+  notify: (message: string) => void;
+}) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [replyTo, setReplyTo] = useState<ChatReply | null>(null);
+  const [editing, setEditing] = useState<ChatMessage | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
+  const [reactionFor, setReactionFor] = useState<string | null>(null);
+  const [pollOpen, setPollOpen] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
+  const [allowGuestOptions, setAllowGuestOptions] = useState(false);
+  const [addingOptionFor, setAddingOptionFor] = useState<string | null>(null);
+  const [newOption, setNewOption] = useState('');
+  const [busy, setBusy] = useState(false);
+  const endRef = useRef<HTMLDivElement | null>(null);
+  const previewKey = `gather-demo-chat:${menu.id}`;
+  const locked = menu.chatOpen === false;
+
+  useEffect(() => {
+    if (!firebaseConfigured) {
+      const load = () => {
+        try {
+          setMessages(JSON.parse(localStorage.getItem(previewKey) || '[]') as ChatMessage[]);
+        } catch {
+          setMessages([]);
+        }
+      };
+      load();
+      const handleStorage = (event: StorageEvent) => {
+        if (event.key === previewKey) load();
+      };
+      window.addEventListener('storage', handleStorage);
+      return () => window.removeEventListener('storage', handleStorage);
+    }
+    let unsubscribe = () => {};
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/firestore'),
+      ]);
+      const query = store.query(
+        store.collection(store.getFirestore(getApp()), 'events', menu.id, 'chat'),
+        store.orderBy('createdAt', 'asc'),
+      );
+      unsubscribe = store.onSnapshot(query, (snapshot) => {
+        setMessages(snapshot.docs.map((entry) => {
+          const data = entry.data();
+          return {
+            id: entry.id,
+            ...data,
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: data.updatedAt?.toMillis?.(),
+          } as ChatMessage;
+        }));
+      });
+    })().catch(() => undefined);
+    return () => unsubscribe();
+  }, [menu.id, previewKey]);
+
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length]);
+
+  const resolveActor = async (): Promise<ChatActor> => {
+    if (actor.role === 'guest' || !firebaseConfigured) return actor;
+    const [{ getApp }, authModule] = await Promise.all([
+      import('firebase/app'),
+      import('firebase/auth'),
+    ]);
+    const user = authModule.getAuth(getApp()).currentUser;
+    if (!user) throw new Error('host-sign-in');
+    return { uid: user.uid, name: 'Host', role: 'host' };
+  };
+  const savePreview = (next: ChatMessage[]) => {
+    setMessages(next);
+    localStorage.setItem(previewKey, JSON.stringify(next));
+  };
+  const updateMessage = async (
+    messageId: string,
+    build: (current: ChatMessage, resolvedActor: ChatActor) => Partial<ChatMessage>,
+  ) => {
+    if (locked) return;
+    const resolvedActor = await resolveActor();
+    if (!firebaseConfigured) {
+      savePreview(messages.map((message) => message.id === messageId
+        ? { ...message, ...build(message, resolvedActor), updatedAt: Date.now(), lastActorUid: resolvedActor.uid, lastActorRole: resolvedActor.role }
+        : message));
+      return;
+    }
+    const [{ getApp }, store] = await Promise.all([
+      import('firebase/app'),
+      import('firebase/firestore'),
+    ]);
+    const ref = store.doc(store.getFirestore(getApp()), 'events', menu.id, 'chat', messageId);
+    await store.runTransaction(store.getFirestore(getApp()), async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) return;
+      const current = { id: snapshot.id, ...snapshot.data() } as ChatMessage;
+      transaction.update(ref, {
+        ...build(current, resolvedActor),
+        updatedAt: store.serverTimestamp(),
+        lastActorUid: resolvedActor.uid,
+        lastActorRole: resolvedActor.role,
+      });
+    });
+  };
+  const sendMessage = async () => {
+    const text = draft.trim();
+    if (!text || locked || busy) return;
+    setBusy(true);
+    try {
+      const resolvedActor = await resolveActor();
+      if (editing) {
+        if (editing.authorUid !== resolvedActor.uid) throw new Error('not-author');
+        await updateMessage(editing.id, () => ({ text: text.slice(0, 2000), edited: true }));
+      } else {
+        const id = crypto.randomUUID();
+        const message: ChatMessage = {
+          id,
+          type: 'message',
+          authorUid: resolvedActor.uid,
+          authorName: resolvedActor.name,
+          authorRole: resolvedActor.role,
+          text: text.slice(0, 2000),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          edited: false,
+          replyTo,
+          reactions: {},
+          pollQuestion: '',
+          pollOptions: [],
+          pollVotes: {},
+          allowGuestOptions: false,
+          lastActorUid: resolvedActor.uid,
+          lastActorRole: resolvedActor.role,
+        };
+        if (firebaseConfigured) {
+          const [{ getApp }, store] = await Promise.all([
+            import('firebase/app'),
+            import('firebase/firestore'),
+          ]);
+          await store.setDoc(
+            store.doc(store.getFirestore(getApp()), 'events', menu.id, 'chat', id),
+            { ...message, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
+          );
+        } else savePreview([...messages, message]);
+      }
+      setDraft('');
+      setReplyTo(null);
+      setEditing(null);
+    } catch {
+      notify('Message could not be saved');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const createPoll = async () => {
+    const question = pollQuestion.trim();
+    const options = pollOptions.map((option) => option.trim()).filter(Boolean);
+    if (actor.role !== 'host' || !question || options.length < 2 || locked || busy) return;
+    setBusy(true);
+    try {
+      const resolvedActor = await resolveActor();
+      const id = crypto.randomUUID();
+      const now = Date.now();
+      const message: ChatMessage = {
+        id,
+        type: 'poll',
+        authorUid: resolvedActor.uid,
+        authorName: resolvedActor.name,
+        authorRole: 'host',
+        text: '',
+        createdAt: now,
+        updatedAt: now,
+        edited: false,
+        replyTo: null,
+        reactions: {},
+        pollQuestion: question.slice(0, 300),
+        pollOptions: options.slice(0, 12).map((text, index) => ({
+          id: `${id}-${index}`,
+          text: text.slice(0, 120),
+          addedByUid: resolvedActor.uid,
+          addedByName: 'Host',
+        })),
+        pollVotes: {},
+        allowGuestOptions,
+        lastActorUid: resolvedActor.uid,
+        lastActorRole: 'host',
+      };
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        await store.setDoc(
+          store.doc(store.getFirestore(getApp()), 'events', menu.id, 'chat', id),
+          { ...message, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
+        );
+      } else savePreview([...messages, message]);
+      setPollQuestion('');
+      setPollOptions(['', '']);
+      setAllowGuestOptions(false);
+      setPollOpen(false);
+    } catch {
+      notify('Poll could not be created');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const react = async (message: ChatMessage, emoji: string) => {
+    await updateMessage(message.id, (current, resolvedActor) => {
+      const reactions = { ...current.reactions };
+      if (reactions[resolvedActor.uid] === emoji) delete reactions[resolvedActor.uid];
+      else reactions[resolvedActor.uid] = emoji;
+      return { reactions };
+    });
+    setReactionFor(null);
+  };
+  const vote = async (message: ChatMessage, optionId: string) => {
+    await updateMessage(message.id, (current, resolvedActor) => {
+      const pollVotes = { ...current.pollVotes };
+      if (pollVotes[resolvedActor.uid] === optionId) delete pollVotes[resolvedActor.uid];
+      else pollVotes[resolvedActor.uid] = optionId;
+      return { pollVotes };
+    });
+  };
+  const addPollOption = async (message: ChatMessage) => {
+    const text = newOption.trim();
+    if (!text || (!message.allowGuestOptions && actor.role !== 'host')) return;
+    await updateMessage(message.id, (current, resolvedActor) => ({
+      pollOptions: [...(current.pollOptions || []), {
+        id: crypto.randomUUID(),
+        text: text.slice(0, 120),
+        addedByUid: resolvedActor.uid,
+        addedByName: resolvedActor.name,
+      }].slice(0, 20),
+    }));
+    setNewOption('');
+    setAddingOptionFor(null);
+  };
+
+  return (
+    <div className="chat-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.currentTarget === event.target) onClose();
+    }}>
+      <dialog open className="event-chat" aria-labelledby="event-chat-title">
+        <header className="chat-header">
+          <div>
+            <p className="eyebrow">{menu.title}</p>
+            <h2 id="event-chat-title" className="font-display">Event chat</h2>
+            <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close chat"><XCircle size={22} /></button>
+        </header>
+        <div className="chat-stream" aria-live="polite">
+          {messages.length === 0 && (
+            <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
+          )}
+          {messages.map((message) => {
+            const mine = message.authorUid === actor.uid || (actor.role === 'host' && message.authorRole === 'host');
+            const reactionCounts = Object.values(message.reactions || {}).reduce<Record<string, number>>((counts, emoji) => ({ ...counts, [emoji]: (counts[emoji] || 0) + 1 }), {});
+            const totalVotes = Object.keys(message.pollVotes || {}).length;
+            return (
+              <article key={message.id} className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''}`}>
+                <div className="chat-message-meta">
+                  <strong>{message.authorName}</strong>
+                  {message.authorRole === 'host' && <b>Host</b>}
+                  <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
+                  {message.edited && <em>edited</em>}
+                </div>
+                {message.replyTo && (
+                  <div className="chat-reply-context"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></div>
+                )}
+                {message.type === 'message' ? <p>{message.text}</p> : (
+                  <div className="chat-poll">
+                    <strong>{message.pollQuestion}</strong>
+                    <span>{totalVotes} vote{totalVotes === 1 ? '' : 's'} · {message.allowGuestOptions ? 'Guests can add options' : 'Fixed options'}</span>
+                    <div className="chat-poll-options">
+                      {(message.pollOptions || []).map((option) => {
+                        const votes = Object.values(message.pollVotes || {}).filter((value) => value === option.id).length;
+                        const selected = message.pollVotes?.[actor.uid] === option.id;
+                        return (
+                          <button key={option.id} type="button" disabled={locked} className={selected ? 'selected' : ''} onClick={() => void vote(message, option.id)}>
+                            <span>{option.text}{option.addedByName !== 'Host' && <small>Added by {option.addedByName}</small>}</span>
+                            <b>{votes}</b>
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {!locked && (message.allowGuestOptions || actor.role === 'host') && (
+                      addingOptionFor === message.id ? (
+                        <div className="chat-add-option"><input value={newOption} onChange={(event) => setNewOption(event.target.value)} maxLength={120} placeholder="New poll option" autoFocus /><button type="button" onClick={() => void addPollOption(message)}>Add</button><button type="button" onClick={() => { setAddingOptionFor(null); setNewOption(''); }}>Cancel</button></div>
+                      ) : <button type="button" className="chat-add-option-trigger" onClick={() => setAddingOptionFor(message.id)}><Plus size={14} /> Add an option</button>
+                    )}
+                  </div>
+                )}
+                {Object.keys(reactionCounts).length > 0 && (
+                  <div className="chat-reaction-summary">
+                    {Object.entries(reactionCounts).map(([emoji, count]) => <button type="button" disabled={locked} className={message.reactions?.[actor.uid] === emoji ? 'selected' : ''} key={emoji} onClick={() => void react(message, emoji)}>{emoji} {count}</button>)}
+                  </div>
+                )}
+                {!locked && (
+                  <div className="chat-message-actions">
+                    <button type="button" onClick={() => setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) })}><Reply size={13} /> Reply</button>
+                    {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); }}><Pencil size={13} /> Edit</button>}
+                    <button type="button" onClick={() => setReactionFor(reactionFor === message.id ? null : message.id)}><Smile size={13} /> React</button>
+                    {reactionFor === message.id && <div className="chat-reaction-picker">{CHAT_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => void react(message, emoji)}>{emoji}</button>)}</div>}
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+        {pollOpen && actor.role === 'host' && !locked && (
+          <section className="chat-poll-composer">
+            <div><strong>Create a poll</strong><button type="button" onClick={() => setPollOpen(false)}><XCircle size={18} /></button></div>
+            <input value={pollQuestion} onChange={(event) => setPollQuestion(event.target.value)} maxLength={300} placeholder="What should everyone vote on?" />
+            {pollOptions.map((option, index) => <div key={index}><input value={option} onChange={(event) => setPollOptions((current) => current.map((value, optionIndex) => optionIndex === index ? event.target.value : value))} maxLength={120} placeholder={`Option ${index + 1}`} />{pollOptions.length > 2 && <button type="button" onClick={() => setPollOptions((current) => current.filter((_, optionIndex) => optionIndex !== index))}><XCircle size={16} /></button>}</div>)}
+            {pollOptions.length < 12 && <button type="button" className="chat-add-option-trigger" onClick={() => setPollOptions((current) => [...current, ''])}><Plus size={14} /> Add option</button>}
+            <label><input type="checkbox" checked={allowGuestOptions} onChange={(event) => setAllowGuestOptions(event.target.checked)} /> Let guests add poll options</label>
+            <button type="button" className="primary-button" disabled={busy || !pollQuestion.trim() || pollOptions.filter((option) => option.trim()).length < 2} onClick={() => void createPoll()}>Publish poll</button>
+          </section>
+        )}
+        {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
+          <footer className="chat-composer">
+            {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); }}><XCircle size={16} /></button></div>}
+            <div>
+              <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
+              {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
+              <textarea value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <button type="button" className="chat-send" disabled={busy || !draft.trim()} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
+            </div>
+            {emojiOpen && <div className="chat-emoji-picker">{CHAT_EMOJIS.map((emoji) => <button type="button" key={emoji} onClick={() => { setDraft((current) => `${current}${emoji}`); setEmojiOpen(false); }}>{emoji}</button>)}</div>}
+          </footer>
+        )}
+      </dialog>
+    </div>
+  );
+}
+
 function HostWorkspace({
   events,
   menu,
@@ -2810,6 +3254,7 @@ function HostWorkspace({
   serveTask,
   setAccepting,
   setRsvpOpen,
+  setChatOpen,
   notify,
 }: {
   events: EventMenu[];
@@ -2835,6 +3280,7 @@ function HostWorkspace({
   serveTask: (orderId: string, taskId: string) => Promise<void>;
   setAccepting: (accepting: boolean) => Promise<void>;
   setRsvpOpen: (rsvpOpen: boolean) => Promise<void>;
+  setChatOpen: (chatOpen: boolean) => Promise<void>;
   notify: (message: string) => void;
 }) {
   const activeOrders = orders.filter(
@@ -2933,6 +3379,16 @@ function HostWorkspace({
                   </div>
                   <button onClick={() => void setRsvpOpen(menu.rsvpOpen === false)}>
                     {menu.rsvpOpen === false ? <><UsersRound size={17} /> Open RSVPs</> : <><XCircle size={17} /> Lock RSVPs</>}
+                  </button>
+                </div>
+                <div className={`order-gate chat-gate ${menu.chatOpen === false ? 'closed' : 'open'}`}>
+                  <div>
+                    <span className="order-gate-light" />
+                    <p>{menu.chatOpen === false ? 'Event chat is locked' : 'Event chat is open'}</p>
+                    <small>{menu.chatOpen === false ? 'Conversation history stays visible.' : 'Going guests can message and vote.'}</small>
+                  </div>
+                  <button onClick={() => void setChatOpen(menu.chatOpen === false)}>
+                    {menu.chatOpen === false ? <><MessageCircle size={17} /> Open chat</> : <><LockKeyhole size={17} /> Lock chat</>}
                   </button>
                 </div>
               </div>
