@@ -119,6 +119,7 @@ type ChatPollOption = {
   addedByUid: string;
   addedByName: string;
 };
+type ChatReaction = string | { emoji: string; name: string };
 type ChatMessage = {
   id: string;
   type: 'message' | 'poll';
@@ -130,13 +131,44 @@ type ChatMessage = {
   updatedAt?: number;
   edited: boolean;
   replyTo: ChatReply | null;
-  reactions: Record<string, string>;
+  reactions: Record<string, ChatReaction>;
   pollQuestion: string;
   pollOptions: ChatPollOption[];
   pollVotes: Record<string, string>;
   allowGuestOptions: boolean;
   lastActorUid?: string;
   lastActorRole?: 'host' | 'guest';
+};
+let chatAudioContext: AudioContext | null = null;
+const primeChatAudio = () => {
+  if (typeof window === 'undefined') return null;
+  const AudioContextConstructor = window.AudioContext ||
+    (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextConstructor) return null;
+  chatAudioContext ||= new AudioContextConstructor();
+  if (chatAudioContext.state === 'suspended') void chatAudioContext.resume();
+  return chatAudioContext;
+};
+const playChatSound = () => {
+  const context = primeChatAudio();
+  if (!context) return;
+  const chime = () => {
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.12, context.currentTime + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.32);
+    gain.connect(context.destination);
+    [660, 880].forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      oscillator.type = 'sine';
+      oscillator.frequency.value = frequency;
+      oscillator.connect(gain);
+      oscillator.start(context.currentTime + index * 0.08);
+      oscillator.stop(context.currentTime + 0.24 + index * 0.08);
+    });
+  };
+  if (context.state === 'running') chime();
+  else void context.resume().then(chime).catch(() => undefined);
 };
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
@@ -551,6 +583,7 @@ export default function Home() {
   const [changingGuestPhone, setChangingGuestPhone] = useState(false);
   const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatStarted, setChatStarted] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpCompanionNames, setRsvpCompanionNames] = useState<string[]>([]);
@@ -612,7 +645,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=5', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=6', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2095,7 +2128,11 @@ export default function Home() {
             )}
             <button
               type="button"
-              onClick={() => setChatOpen(true)}
+              onClick={() => {
+                primeChatAudio();
+                setChatStarted(true);
+                setChatOpen(true);
+              }}
               disabled={!chatActor}
               className="chat-header-button"
               title={!chatActor && mode === 'guest' ? 'RSVP Going to join the chat' : undefined}
@@ -2165,11 +2202,16 @@ export default function Home() {
         />
       )}
 
-      {chatOpen && chatActor && (
+      {chatStarted && chatActor && (
         <EventChat
           menu={menu}
           actor={chatActor}
-          onClose={() => setChatOpen(false)}
+          visible={chatOpen}
+          onOpen={() => {
+            primeChatAudio();
+            setChatOpen(true);
+          }}
+          onMinimize={() => setChatOpen(false)}
           notify={notify}
         />
       )}
@@ -2882,12 +2924,16 @@ const CHAT_EMOJIS = ['👍', '❤️', '😂', '🎉', '👏', '🤔'];
 function EventChat({
   menu,
   actor,
-  onClose,
+  visible,
+  onOpen,
+  onMinimize,
   notify,
 }: {
   menu: EventMenu;
   actor: ChatActor;
-  onClose: () => void;
+  visible: boolean;
+  onOpen: () => void;
+  onMinimize: () => void;
   notify: (message: string) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -2896,6 +2942,7 @@ function EventChat({
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [reactionFor, setReactionFor] = useState<string | null>(null);
+  const [reactionDetailsFor, setReactionDetailsFor] = useState<string | null>(null);
   const [pollOpen, setPollOpen] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
@@ -2903,11 +2950,15 @@ function EventChat({
   const [addingOptionFor, setAddingOptionFor] = useState<string | null>(null);
   const [newOption, setNewOption] = useState('');
   const [busy, setBusy] = useState(false);
+  const [unread, setUnread] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const knownMessageIds = useRef<Set<string> | null>(null);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const locked = menu.chatOpen === false;
 
   useEffect(() => {
+    knownMessageIds.current = null;
+    queueMicrotask(() => setUnread(0));
     if (!firebaseConfigured) {
       const load = () => {
         try {
@@ -2951,6 +3002,24 @@ function EventChat({
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
+
+  useEffect(() => {
+    const currentIds = new Set(messages.map((message) => message.id));
+    if (knownMessageIds.current) {
+      const incoming = messages.filter(
+        (message) => !knownMessageIds.current?.has(message.id) && message.authorUid !== actor.uid,
+      );
+      if (incoming.length) {
+        playChatSound();
+        if (!visible) setUnread((current) => current + incoming.length);
+      }
+    }
+    knownMessageIds.current = currentIds;
+  }, [messages, actor.uid, visible]);
+
+  useEffect(() => {
+    if (visible) queueMicrotask(() => setUnread(0));
+  }, [visible]);
 
   const resolveActor = async (): Promise<ChatActor> => {
     if (actor.role === 'guest' || !firebaseConfigured) return actor;
@@ -3101,8 +3170,10 @@ function EventChat({
   const react = async (message: ChatMessage, emoji: string) => {
     await updateMessage(message.id, (current, resolvedActor) => {
       const reactions = { ...current.reactions };
-      if (reactions[resolvedActor.uid] === emoji) delete reactions[resolvedActor.uid];
-      else reactions[resolvedActor.uid] = emoji;
+      const existing = reactions[resolvedActor.uid];
+      const existingEmoji = typeof existing === 'string' ? existing : existing?.emoji;
+      if (existingEmoji === emoji) delete reactions[resolvedActor.uid];
+      else reactions[resolvedActor.uid] = { emoji, name: resolvedActor.name };
       return { reactions };
     });
     setReactionFor(null);
@@ -3130,10 +3201,17 @@ function EventChat({
     setAddingOptionFor(null);
   };
 
+  if (!visible) {
+    return (
+      <button type="button" className={`chat-minimized ${actor.role}`} onClick={onOpen} aria-label={`Open event chat${unread ? `, ${unread} unread` : ''}`}>
+        <MessageCircle size={21} />
+        {unread > 0 && <b>{unread > 99 ? '99+' : unread}</b>}
+      </button>
+    );
+  }
+
   return (
-    <div className="chat-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.currentTarget === event.target) onClose();
-    }}>
+    <div className={`chat-float-layer ${actor.role}`}>
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
         <header className="chat-header">
           <div>
@@ -3141,7 +3219,7 @@ function EventChat({
             <h2 id="event-chat-title" className="font-display">Event chat</h2>
             <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close chat"><XCircle size={22} /></button>
+          <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={22} /></button>
         </header>
         <div className="chat-stream" aria-live="polite">
           {messages.length === 0 && (
@@ -3149,7 +3227,21 @@ function EventChat({
           )}
           {messages.map((message) => {
             const mine = message.authorUid === actor.uid || (actor.role === 'host' && message.authorRole === 'host');
-            const reactionCounts = Object.values(message.reactions || {}).reduce<Record<string, number>>((counts, emoji) => ({ ...counts, [emoji]: (counts[emoji] || 0) + 1 }), {});
+            const reactionEntries = Object.entries(message.reactions || {}).map(([uid, reaction]) => ({
+              uid,
+              emoji: typeof reaction === 'string' ? reaction : reaction.emoji,
+              name: typeof reaction === 'string'
+                ? messages.find((candidate) => candidate.authorUid === uid)?.authorName || 'Guest'
+                : reaction.name,
+            }));
+            const reactionGroups = reactionEntries.reduce<Array<{ emoji: string; names: string[] }>>((groups, reaction) => {
+              const existing = groups.find((group) => group.emoji === reaction.emoji);
+              if (existing) existing.names.push(reaction.name);
+              else groups.push({ emoji: reaction.emoji, names: [reaction.name] });
+              return groups;
+            }, []);
+            const myReaction = message.reactions?.[actor.uid];
+            const myReactionEmoji = typeof myReaction === 'string' ? myReaction : myReaction?.emoji;
             const totalVotes = Object.keys(message.pollVotes || {}).length;
             return (
               <article key={message.id} className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''}`}>
@@ -3185,9 +3277,15 @@ function EventChat({
                     )}
                   </div>
                 )}
-                {Object.keys(reactionCounts).length > 0 && (
+                {reactionGroups.length > 0 && (
                   <div className="chat-reaction-summary">
-                    {Object.entries(reactionCounts).map(([emoji, count]) => <button type="button" disabled={locked} className={message.reactions?.[actor.uid] === emoji ? 'selected' : ''} key={emoji} onClick={() => void react(message, emoji)}>{emoji} {count}</button>)}
+                    {reactionGroups.slice(0, 3).map(({ emoji, names }) => <button type="button" disabled={locked} className={myReactionEmoji === emoji ? 'selected' : ''} key={emoji} title={`${names.join(', ')} reacted ${emoji}`} onClick={() => void react(message, emoji)}>{emoji} {names.length}</button>)}
+                    {reactionGroups.length > 3 && <button type="button" className="chat-reaction-more" onClick={() => setReactionDetailsFor(reactionDetailsFor === message.id ? null : message.id)}>+{reactionGroups.length - 3}</button>}
+                    {reactionDetailsFor === message.id && (
+                      <div className="chat-reaction-details">
+                        {reactionEntries.map((reaction) => <span key={reaction.uid}><strong>{reaction.name}</strong><b>{reaction.emoji}</b></span>)}
+                      </div>
+                    )}
                   </div>
                 )}
                 {!locked && (
