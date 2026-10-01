@@ -8,6 +8,8 @@ import {
   CalendarPlus,
   Camera,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Copy,
   Download,
@@ -653,7 +655,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=7', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=8', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2958,8 +2960,12 @@ function EventChat({
   const [newOption, setNewOption] = useState('');
   const [busy, setBusy] = useState(false);
   const [unread, setUnread] = useState(0);
+  const [pinnedIndex, setPinnedIndex] = useState(0);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const messageRefs = useRef<Record<string, HTMLElement | null>>({});
+  const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const locked = menu.chatOpen === false;
@@ -3032,7 +3038,20 @@ function EventChat({
     });
   }, [visible]);
 
+  useEffect(() => () => {
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+  }, []);
+
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus());
+
+  const jumpToMessage = (messageId: string) => {
+    const message = messageRefs.current[messageId];
+    if (!message) return;
+    message.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedMessageId(messageId);
+    if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
+    highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(null), 1800);
+  };
 
   const resolveActor = async (): Promise<ChatActor> => {
     if (actor.role === 'guest' || !firebaseConfigured) return actor;
@@ -3261,12 +3280,12 @@ function EventChat({
     }
     focusComposer();
   };
-  const orderedMessages = [...messages].sort((left, right) => {
-    if (Boolean(left.pinned) !== Boolean(right.pinned)) return left.pinned ? -1 : 1;
-    if (left.pinned && right.pinned)
-      return (right.pinnedAt || right.createdAt) - (left.pinnedAt || left.createdAt);
-    return left.createdAt - right.createdAt;
-  });
+  const orderedMessages = [...messages].sort((left, right) => left.createdAt - right.createdAt);
+  const pinnedMessages = messages
+    .filter((message) => message.pinned && !message.deleted)
+    .sort((left, right) => (right.pinnedAt || right.createdAt) - (left.pinnedAt || left.createdAt));
+  const visiblePinnedIndex = Math.min(pinnedIndex, Math.max(0, pinnedMessages.length - 1));
+  const visiblePinnedMessage = pinnedMessages[visiblePinnedIndex];
 
   if (!visible) {
     return (
@@ -3280,14 +3299,39 @@ function EventChat({
   return (
     <div className={`chat-float-layer ${actor.role}`}>
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
-        <header className="chat-header">
-          <div>
-            <p className="eyebrow">{menu.title}</p>
-            <h2 id="event-chat-title" className="font-display">Event chat</h2>
-            <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
-          </div>
-          <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={22} /></button>
-        </header>
+        <div className="chat-top">
+          <header className="chat-header">
+            <div>
+              <p className="eyebrow">{menu.title}</p>
+              <h2 id="event-chat-title" className="font-display">Event chat</h2>
+              <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
+            </div>
+            <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={20} /></button>
+          </header>
+          {visiblePinnedMessage && (
+            <aside className="chat-pinned-banner" aria-label="Pinned messages">
+              <button
+                type="button"
+                className="chat-pinned-jump"
+                onClick={() => jumpToMessage(visiblePinnedMessage.id)}
+                title="Jump to pinned message"
+              >
+                <Pin size={14} />
+                <span>
+                  <small>Pinned by {visiblePinnedMessage.pinnedByName || 'Host'}</small>
+                  <strong>{visiblePinnedMessage.authorName}: {visiblePinnedMessage.type === 'poll' ? visiblePinnedMessage.pollQuestion : visiblePinnedMessage.text}</strong>
+                </span>
+              </button>
+              {pinnedMessages.length > 1 && (
+                <div className="chat-pinned-navigation">
+                  <span>{visiblePinnedIndex + 1}/{pinnedMessages.length}</span>
+                  <button type="button" aria-label="Previous pinned message" onClick={() => setPinnedIndex((current) => (current - 1 + pinnedMessages.length) % pinnedMessages.length)}><ChevronLeft size={15} /></button>
+                  <button type="button" aria-label="Next pinned message" onClick={() => setPinnedIndex((current) => (current + 1) % pinnedMessages.length)}><ChevronRight size={15} /></button>
+                </div>
+              )}
+            </aside>
+          )}
+        </div>
         <div className="chat-stream" aria-live="polite">
           {messages.length === 0 && (
             <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
@@ -3313,7 +3357,8 @@ function EventChat({
             return (
               <article
                 key={message.id}
-                className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message.pinned ? 'pinned' : ''} ${message.deleted ? 'deleted' : ''}`}
+                ref={(node) => { messageRefs.current[message.id] = node; }}
+                className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
                 onPointerUp={(event) => {
                   if (event.button !== 0) return;
                   if ((event.target as HTMLElement).closest('button, input, textarea, label')) return;
@@ -3332,12 +3377,12 @@ function EventChat({
                   <div className="chat-message-menu">
                     {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
                     {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
-                    {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin' : 'Pin to top'}</button>}
+                    {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin message' : 'Pin message'}</button>}
                     {(mine || actor.role === 'host') && !message.deleted && <button type="button" className="danger" onClick={() => void deleteMessage(message)}><Trash2 size={14} /> Delete</button>}
                   </div>
                 )}
                 {message.replyTo && !message.deleted && (
-                  <div className="chat-reply-context"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></div>
+                  <button type="button" className="chat-reply-context" onClick={() => jumpToMessage(message.replyTo!.id)} title="Jump to replied message"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></button>
                 )}
                 {message.deleted ? <p className="chat-deleted-copy">Message deleted</p> : message.type === 'message' ? <p>{message.text}</p> : (
                   <div className="chat-poll">
@@ -3399,7 +3444,7 @@ function EventChat({
         {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
           <footer className="chat-composer">
             {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
-            <div>
+            <div className={`chat-composer-row ${actor.role}`}>
               <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
               {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
               <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
