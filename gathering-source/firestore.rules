@@ -26,6 +26,20 @@ service cloud.firestore {
       return !get(/databases/$(database)/documents/events/$(eventId)).data.keys().hasAny(['rsvpOpen'])
         || get(/databases/$(database)/documents/events/$(eventId)).data.rsvpOpen == true;
     }
+    function eventRequiresApproval(eventId) {
+      let event = get(/databases/$(database)/documents/events/$(eventId)).data;
+      return event.keys().hasAny(['requireGuestApproval'])
+        && event.requireGuestApproval == true;
+    }
+    function guestIsApprovedForEvent(eventId, guestUid) {
+      return !eventRequiresApproval(eventId) || (
+        exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid))
+        && (
+          !guestRsvp(eventId, guestUid).data.keys().hasAny(['approvalStatus'])
+          || guestRsvp(eventId, guestUid).data.approvalStatus == 'approved'
+        )
+      );
+    }
     function companionCount(data) {
       return data.keys().hasAny(['companions']) ? data.companions.size() : 0;
     }
@@ -44,7 +58,8 @@ service cloud.firestore {
     }
     function guestCanChat(eventId, guestUid) {
       return exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid))
-        && guestRsvp(eventId, guestUid).data.status == 'yes';
+        && guestRsvp(eventId, guestUid).data.status == 'yes'
+        && guestIsApprovedForEvent(eventId, guestUid);
     }
     function validChatActor(eventId, data) {
       return (
@@ -81,6 +96,19 @@ service cloud.firestore {
     function messageDeleted(data) {
       return data.keys().hasAny(['deleted']) && data.deleted == true;
     }
+    function pollBump(data) {
+      return data.keys().hasAny(['pollBumpedAt']) ? data.pollBumpedAt : 0;
+    }
+    function pollChoiceModeUnchanged(before, after) {
+      return (
+        !before.keys().hasAny(['allowMultipleVotes'])
+        && !after.keys().hasAny(['allowMultipleVotes'])
+      ) || (
+        before.keys().hasAny(['allowMultipleVotes'])
+        && after.keys().hasAny(['allowMultipleVotes'])
+        && after.allowMultipleVotes == before.allowMultipleVotes
+      );
+    }
 
     match /events/{eventId} {
       allow read: if true;
@@ -103,6 +131,7 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/events/$(eventId)/guests/$(request.resource.data.guestUid))
           && exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.resource.data.guestUid))
           && guestRsvp(eventId, request.resource.data.guestUid).data.status == 'yes'
+          && guestIsApprovedForEvent(eventId, request.resource.data.guestUid)
           && request.resource.data.guestName == guestProfile(eventId, request.resource.data.guestUid).data.guestName
           && getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(request.resource.data.guestUid)).data.activeOrderCount
             == activeOrders(guestRsvp(eventId, request.resource.data.guestUid).data) + 1
@@ -125,6 +154,7 @@ service cloud.firestore {
             || (
               get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
               && guestRsvp(eventId, resource.data.guestUid).data.status == 'yes'
+              && guestIsApprovedForEvent(eventId, resource.data.guestUid)
             )
           )
           && request.resource.data.revision == resource.data.revision + 1
@@ -217,11 +247,13 @@ service cloud.firestore {
         allow create: if rsvpIsOpen(eventId)
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
-            'companions', 'createdAt', 'updatedAt'
+            'approvalStatus', 'companions', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.guestUid == guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
+          && request.resource.data.approvalStatus
+            == (eventRequiresApproval(eventId) ? 'pending' : 'approved')
           && companionsAreValid(eventId, request.resource.data)
           && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid))
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
@@ -233,6 +265,15 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount is int
           && request.resource.data.activeOrderCount >= 0
+          && request.resource.data.approvalStatus in ['pending', 'approved', 'declined']
+          && (
+            (resource.data.keys().hasAny(['approvalStatus'])
+              && request.resource.data.approvalStatus == resource.data.approvalStatus)
+            ||
+            (!resource.data.keys().hasAny(['approvalStatus'])
+              && request.resource.data.approvalStatus
+                == (eventRequiresApproval(eventId) ? 'pending' : 'approved'))
+          )
           && companionsAreValid(eventId, request.resource.data)
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
           && request.resource.data.guestPhone == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestPhone
@@ -257,7 +298,8 @@ service cloud.firestore {
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.updatedAt == request.time
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'guestName', 'guestPhone', 'status', 'companions', 'activeOrderCount', 'updatedAt'
+            'guestName', 'guestPhone', 'status', 'approvalStatus', 'companions',
+            'activeOrderCount', 'updatedAt'
           ])
         );
         allow delete: if canManageEvent(eventId);
@@ -269,7 +311,8 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly([
             'id', 'type', 'authorUid', 'authorName', 'authorRole', 'text',
             'createdAt', 'updatedAt', 'edited', 'replyTo', 'reactions',
-            'pollQuestion', 'pollOptions', 'pollVotes', 'allowGuestOptions',
+            'pollQuestion', 'pollOptions', 'pollVotes', 'pollVoterNames',
+            'allowGuestOptions', 'allowMultipleVotes', 'pollBumpedAt',
             'pinned', 'pinnedAt', 'pinnedByName', 'deleted',
             'lastActorUid', 'lastActorRole'
           ])
@@ -284,11 +327,14 @@ service cloud.firestore {
           && validReply(request.resource.data)
           && request.resource.data.reactions is map
           && request.resource.data.pollVotes is map
+          && request.resource.data.pollVoterNames is map
           && request.resource.data.pollOptions is list
           && request.resource.data.pollOptions.size() <= 20
           && request.resource.data.pollQuestion is string
           && request.resource.data.pollQuestion.size() <= 300
           && request.resource.data.allowGuestOptions is bool
+          && request.resource.data.allowMultipleVotes is bool
+          && request.resource.data.pollBumpedAt == 0
           && request.resource.data.pinned == false
           && request.resource.data.pinnedAt == 0
           && request.resource.data.pinnedByName == ''
@@ -336,18 +382,28 @@ service cloud.firestore {
               && !messageDeleted(request.resource.data)
               && request.resource.data.reactions is map
               && request.resource.data.pollVotes is map
+              && (
+                !request.resource.data.keys().hasAny(['pollVoterNames'])
+                || request.resource.data.pollVoterNames is map
+              )
               && request.resource.data.pollOptions is list
               && request.resource.data.pollOptions.size() <= 20
+              && pollChoiceModeUnchanged(resource.data, request.resource.data)
               && (
-                request.resource.data.pollOptions == resource.data.pollOptions
+                (
+                  request.resource.data.pollOptions == resource.data.pollOptions
+                  && pollBump(request.resource.data) == pollBump(resource.data)
+                )
                 || (
                   request.resource.data.type == 'poll'
                   && (resource.data.allowGuestOptions == true || request.resource.data.lastActorRole == 'host')
+                  && request.resource.data.pollBumpedAt is int
+                  && request.resource.data.pollBumpedAt > pollBump(resource.data)
                 )
               )
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'reactions', 'pollVotes', 'pollOptions', 'updatedAt',
-                'lastActorUid', 'lastActorRole'
+                'reactions', 'pollVotes', 'pollVoterNames', 'pollOptions',
+                'pollBumpedAt', 'updatedAt', 'lastActorUid', 'lastActorRole'
               ])
             ) || (
               !messageDeleted(resource.data)
@@ -368,6 +424,8 @@ service cloud.firestore {
               && request.resource.data.pollQuestion == ''
               && request.resource.data.pollOptions.size() == 0
               && request.resource.data.pollVotes.size() == 0
+              && request.resource.data.pollVoterNames.size() == 0
+              && request.resource.data.pollBumpedAt == 0
               && request.resource.data.reactions.size() == 0
               && request.resource.data.replyTo == null
               && request.resource.data.pinned == false
@@ -382,7 +440,8 @@ service cloud.firestore {
                 )
               )
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'text', 'pollQuestion', 'pollOptions', 'pollVotes', 'reactions',
+                'text', 'pollQuestion', 'pollOptions', 'pollVotes',
+                'pollVoterNames', 'pollBumpedAt', 'reactions',
                 'replyTo', 'edited', 'pinned', 'pinnedAt', 'pinnedByName',
                 'deleted', 'updatedAt', 'lastActorUid', 'lastActorRole'
               ])

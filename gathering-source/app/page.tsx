@@ -43,6 +43,7 @@ import {
 } from 'lucide-react';
 
 type EventResource = { id: string; name: string; capacity: number };
+type EventType = 'meal' | 'movie' | 'game' | 'birthday' | 'custom';
 type MenuItem = {
   id: string;
   name: string;
@@ -68,6 +69,10 @@ type EventMenu = {
   accepting: boolean;
   rsvpOpen?: boolean;
   chatOpen?: boolean;
+  requireGuestApproval?: boolean;
+  eventType?: EventType;
+  customEventType?: string;
+  backgroundImageUrl?: string;
   maxAdditionalGuests?: number;
   categories?: string[];
   resources?: EventResource[];
@@ -107,6 +112,7 @@ type Rsvp = {
   guestName: string;
   guestPhone: string;
   status: 'yes' | 'maybe' | 'no';
+  approvalStatus?: 'pending' | 'approved' | 'declined';
   companions?: Array<string | { name: string; phone?: string }>;
   activeOrderCount: number;
   createdAt: number;
@@ -125,6 +131,7 @@ type ChatPollOption = {
   addedByName: string;
 };
 type ChatReaction = string | { emoji: string; name: string };
+type ChatPollVote = string | string[];
 type ChatMessage = {
   id: string;
   type: 'message' | 'poll';
@@ -139,8 +146,11 @@ type ChatMessage = {
   reactions: Record<string, ChatReaction>;
   pollQuestion: string;
   pollOptions: ChatPollOption[];
-  pollVotes: Record<string, string>;
+  pollVotes: Record<string, ChatPollVote>;
+  pollVoterNames?: Record<string, string>;
   allowGuestOptions: boolean;
+  allowMultipleVotes?: boolean;
+  pollBumpedAt?: number;
   pinned?: boolean;
   pinnedAt?: number;
   pinnedByName?: string;
@@ -180,6 +190,29 @@ const playChatSound = () => {
   else void context.resume().then(chime).catch(() => undefined);
 };
 const eventTimestamp = () => Date.now();
+const EVENT_TYPES: Array<{ value: EventType; label: string; description: string }> = [
+  { value: 'meal', label: 'Catering / Meal', description: 'Dinner, brunch, tasting, or catered gathering' },
+  { value: 'movie', label: 'Movie Night', description: 'A cozy screening with friends' },
+  { value: 'game', label: 'Game Night', description: 'Board games, cards, or tournament play' },
+  { value: 'birthday', label: 'Birthday Party', description: 'A celebration centered on someone special' },
+  { value: 'custom', label: 'Something else', description: 'Name your own kind of gathering' },
+];
+const EVENT_BACKGROUNDS: Record<EventType, string> = {
+  meal: '/gather-dinner-hero.jpg',
+  movie: '/gather-movie-night-hero.jpg',
+  game: '/gather-game-night-hero.jpg',
+  birthday: '/gather-birthday-party-hero.jpg',
+  custom: '/gather-custom-event-hero.jpg',
+};
+const eventTypeLabel = (menu: EventMenu) =>
+  menu.eventType === 'custom' && menu.customEventType?.trim()
+    ? menu.customEventType.trim()
+    : EVENT_TYPES.find((type) => type.value === (menu.eventType || 'meal'))?.label || 'Gathering';
+const eventBackground = (menu: EventMenu) =>
+  menu.backgroundImageUrl || EVENT_BACKGROUNDS[menu.eventType || 'meal'];
+const approvalStatus = (rsvp?: Rsvp | null) => rsvp?.approvalStatus || 'approved';
+const guestIsApproved = (menu: EventMenu, rsvp?: Rsvp | null) =>
+  !menu.requireGuestApproval || approvalStatus(rsvp) === 'approved';
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
 const phoneDigits = (value: string) => {
@@ -245,6 +278,8 @@ const demoMenu: EventMenu = {
   address: 'The garden table',
   welcome: 'Choose your favorites and we’ll have your plate ready.',
   accepting: true,
+  requireGuestApproval: false,
+  eventType: 'meal',
   categories: ['To begin', 'Main plates', 'Something sweet'],
   resources: [
     { id: 'oven', name: 'Oven space', capacity: 1 },
@@ -567,6 +602,28 @@ async function guestPinHash(guestUid: string, pin: string) {
   return guestNameIndexId(`${guestUid}:${pin}`);
 }
 
+async function resizeImageFile(file: File, longestEdge: number, quality: number) {
+  return new Promise<string>((resolve, reject) => {
+    const source = URL.createObjectURL(file);
+    const image = new window.Image();
+    image.onload = () => {
+      const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+      const scale = Math.min(1, longestEdge / longestSide);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(source);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(source);
+      reject(new Error('Could not read image'));
+    };
+    image.src = source;
+  });
+}
+
 export default function Home() {
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
   const [menu, setMenu] = useState<EventMenu>(demoMenu);
@@ -614,6 +671,10 @@ export default function Home() {
     date: '',
     address: '',
     maxAdditionalGuests: 0,
+    requireGuestApproval: false,
+    eventType: 'meal' as EventType,
+    customEventType: '',
+    backgroundImageUrl: '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
@@ -985,8 +1046,8 @@ export default function Home() {
           },
           annotations: { readOnlyHint: false, untrustedContentHint: false },
           execute(input) {
-            if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting)
-              throw new Error('A Yes RSVP and open ordering are required.');
+            if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting || !guestIsApproved(menu, myRsvp))
+              throw new Error('A Going RSVP, host approval, and open ordering are required.');
             const candidate = input as { selections?: Record<string, number> };
             if (
               !candidate.selections ||
@@ -1018,7 +1079,7 @@ export default function Home() {
       ),
     ).catch(() => undefined);
     return () => lifecycle.abort();
-  }, [menu.items, menu.accepting, myRsvp]);
+  }, [menu, myRsvp]);
 
   const count = Object.values(cart).reduce((a, b) => a + b, 0);
   const effectiveGuestProfile = guestProfile || (myRsvp ? {
@@ -1028,12 +1089,19 @@ export default function Home() {
     createdAt: myRsvp.createdAt,
     updatedAt: myRsvp.updatedAt,
   } : null);
+  const guestHasEventAccess = guestIsApproved(menu, myRsvp);
   const rsvpButtonLabel = myRsvp
-    ? `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
+    ? menu.requireGuestApproval && approvalStatus(myRsvp) === 'pending'
+      ? 'RSVP: Pending approval'
+      : menu.requireGuestApproval && approvalStatus(myRsvp) === 'declined'
+        ? 'RSVP: Not approved'
+        : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
   const chatActor: ChatActor | null = mode === 'host'
-    ? hostUser ? { uid: menu.ownerUid || 'host', name: 'Host', role: 'host' } : null
-    : myRsvp?.status === 'yes' && effectiveGuestProfile
+    ? (hostUser || !firebaseConfigured)
+      ? { uid: menu.ownerUid || 'host', name: 'Host', role: 'host' }
+      : null
+    : myRsvp?.status === 'yes' && guestHasEventAccess && effectiveGuestProfile
       ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
       : null;
   const openRsvpPanel = () => {
@@ -1066,7 +1134,7 @@ export default function Home() {
   );
   const setQty = (id: string, delta: number) =>
     setCart((current) => {
-      if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting) return current;
+      if (!myRsvp || myRsvp.status !== 'yes' || !menu.accepting || !guestHasEventAccess) return current;
       const item = menu.items.find((entry) => entry.id === id);
       const alreadyReserved = reservedServings(
         rememberedOrders.filter((order) => order.id !== editingOrderId),
@@ -1148,6 +1216,10 @@ export default function Home() {
       accepting: false,
       rsvpOpen: true,
       chatOpen: true,
+      requireGuestApproval: newEvent.requireGuestApproval,
+      eventType: newEvent.eventType,
+      customEventType: newEvent.eventType === 'custom' ? newEvent.customEventType.trim() : '',
+      backgroundImageUrl: newEvent.backgroundImageUrl || undefined,
       maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
       resources: [],
@@ -1203,6 +1275,10 @@ export default function Home() {
       date: '',
       address: '',
       maxAdditionalGuests: 0,
+      requireGuestApproval: false,
+      eventType: 'meal',
+      customEventType: '',
+      backgroundImageUrl: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     history.replaceState({}, '', `?view=host&event=${event.id}`);
@@ -1237,6 +1313,10 @@ export default function Home() {
       notify('RSVP Yes before placing an order');
       return;
     }
+    if (!guestIsApproved(menu, myRsvp)) {
+      notify('The host must approve your RSVP before you can order');
+      return;
+    }
     if (count === 0) return;
     const existing = !editingOrderId ? rememberedOrders.find((order) => order.status === 'new') : null;
     const target = editingOrderId
@@ -1254,7 +1334,11 @@ export default function Home() {
         const orderRef = store.doc(db, 'events', menu.id, 'orders', orderId);
         await store.runTransaction(db, async (transaction) => {
           const rsvp = await transaction.get(store.doc(db, 'events', menu.id, 'rsvps', uid));
-          if (!rsvp.exists() || rsvp.data().status !== 'yes') throw new Error('rsvp');
+          if (
+            !rsvp.exists() ||
+            rsvp.data().status !== 'yes' ||
+            (menu.requireGuestApproval && (rsvp.data().approvalStatus || 'approved') !== 'approved')
+          ) throw new Error('rsvp');
           const prior = target ? await transaction.get(orderRef) : null;
           if (target && (!prior?.exists() || prior.data().status !== 'new' || prior.data().guestUid !== uid))
             throw new Error('order-changed');
@@ -1480,6 +1564,9 @@ export default function Home() {
           transaction.set(rsvpRef, {
             guestUid: uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
             status: rsvpChoice, companions, activeOrderCount,
+            approvalStatus: prior.exists()
+              ? (prior.data().approvalStatus || 'approved')
+              : (menu.requireGuestApproval ? 'pending' : 'approved'),
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -1489,6 +1576,7 @@ export default function Home() {
         const saved: Rsvp = {
           guestUid: profile.guestUid, guestName: profile.guestName, guestPhone: profile.guestPhone,
           status: rsvpChoice, companions, activeOrderCount: myRsvp?.activeOrderCount || 0,
+          approvalStatus: myRsvp?.approvalStatus || (menu.requireGuestApproval ? 'pending' : 'approved'),
           createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now(),
         };
         const next = [saved, ...others];
@@ -1502,12 +1590,15 @@ export default function Home() {
         guestPhone: profile.guestPhone,
         status: rsvpChoice,
         companions,
+        approvalStatus: myRsvp?.approvalStatus || (menu.requireGuestApproval ? 'pending' : 'approved'),
         activeOrderCount: myRsvp?.activeOrderCount || 0,
         createdAt: myRsvp?.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
       setRsvpPanelOpen(false);
-      notify(`RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
+      notify(menu.requireGuestApproval && !myRsvp
+        ? 'RSVP sent — the host will review your request'
+        : `RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
     } catch (error) {
       if ((error as Error).message === 'active-orders' && myRsvp) setRsvpChoice(myRsvp.status);
       notify((error as Error).message === 'active-orders'
@@ -1686,6 +1777,40 @@ export default function Home() {
       notify(`${rsvp.guestName} was removed from this event`);
     } catch {
       notify('Guest could not be deleted');
+    }
+  }
+
+  async function setGuestApproval(
+    rsvp: Rsvp,
+    nextStatus: 'approved' | 'declined',
+  ) {
+    if (nextStatus === 'declined' && (rsvp.activeOrderCount || 0) > 0) {
+      notify('Finish or clear this guest’s active orders before removing access');
+      return;
+    }
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
+        ]);
+        await store.updateDoc(
+          store.doc(store.getFirestore(getApp()), 'events', menu.id, 'rsvps', rsvp.guestUid),
+          { approvalStatus: nextStatus, updatedAt: store.serverTimestamp() },
+        );
+      } else {
+        const next = rsvps.map((entry) => entry.guestUid === rsvp.guestUid
+          ? { ...entry, approvalStatus: nextStatus, updatedAt: Date.now() }
+          : entry);
+        setRsvps(next);
+        shareDemoUpdate({ type: 'rsvps', eventId: menu.id, value: next });
+        if (myRsvp?.guestUid === rsvp.guestUid)
+          setMyRsvp({ ...myRsvp, approvalStatus: nextStatus, updatedAt: Date.now() });
+      }
+      notify(nextStatus === 'approved'
+        ? `${rsvp.guestName} can now see the event and participate`
+        : `${rsvp.guestName} was not approved`);
+    } catch {
+      notify('Guest access could not be updated');
     }
   }
 
@@ -1984,6 +2109,36 @@ export default function Home() {
     }
   }
 
+  async function prepareEventBackground(file: File) {
+    if (!file.type.startsWith('image/')) throw new Error('Choose an image file');
+    if (file.size > 8 * 1024 * 1024) throw new Error('Choose an image smaller than 8 MB');
+    const imageUrl = await resizeImageFile(file, 1600, 0.72);
+    if (imageUrl.length > 320_000)
+      throw new Error('That image is still too large. Choose a simpler or smaller image');
+    return imageUrl;
+  }
+
+  async function chooseNewEventBackground(file?: File) {
+    if (!file) return;
+    try {
+      const backgroundImageUrl = await prepareEventBackground(file);
+      setNewEvent((current) => ({ ...current, backgroundImageUrl }));
+      notify('Custom event background ready');
+    } catch (error) {
+      notify((error as Error).message || 'Could not use that image');
+    }
+  }
+
+  async function uploadEventBackground(file: File) {
+    try {
+      const backgroundImageUrl = await prepareEventBackground(file);
+      setMenu((current) => ({ ...current, backgroundImageUrl }));
+      notify('Background updated — save the event when ready');
+    } catch (error) {
+      notify((error as Error).message || 'Could not use that image');
+    }
+  }
+
   async function uploadItemImage(itemId: string, file: File) {
     if (!file.type.startsWith('image/')) {
       notify('Please choose an image file');
@@ -1996,29 +2151,14 @@ export default function Home() {
     // Keep item art in the event document. This makes images work on GitHub Pages
     // without requiring a paid Firebase Storage bucket. Resize first so a menu
     // remains comfortably below Firestore's 1 MB document limit.
-    const imageUrl = await new Promise<string>((resolve, reject) => {
-      const source = URL.createObjectURL(file);
-      const image = new window.Image();
-      image.onload = () => {
-        const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-        const scale = Math.min(1, 900 / longestSide);
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
-        URL.revokeObjectURL(source);
-        resolve(canvas.toDataURL('image/jpeg', 0.72));
-      };
-      image.onerror = () => {
-        URL.revokeObjectURL(source);
-        reject(new Error('Could not read image'));
-      };
-      image.src = source;
-    });
+    const imageUrl = await resizeImageFile(file, 900, 0.72);
     const otherImageBytes = menu.items
       .filter((item) => item.id !== itemId)
       .reduce((total, item) => total + (item.imageUrl?.startsWith('data:') ? item.imageUrl.length : 0), 0);
-    if (imageUrl.length > 180_000 || otherImageBytes + imageUrl.length > 700_000) {
+    const heroImageBytes = menu.backgroundImageUrl?.startsWith('data:')
+      ? menu.backgroundImageUrl.length
+      : 0;
+    if (imageUrl.length > 180_000 || otherImageBytes + heroImageBytes + imageUrl.length > 900_000) {
       notify('This menu is at its image limit — choose a smaller photo or remove another image');
       return;
     }
@@ -2177,8 +2317,10 @@ export default function Home() {
             categories={categories}
             cart={cart}
             reserved={rememberedOrders.filter((order) => order.id !== editingOrderId)}
-            canOrder={myRsvp?.status === 'yes' && menu.accepting}
+            canOrder={myRsvp?.status === 'yes' && menu.accepting && guestHasEventAccess}
+            accessGranted={guestHasEventAccess}
             rsvpStatus={myRsvp?.status || null}
+            rsvpApprovalStatus={myRsvp ? approvalStatus(myRsvp) : null}
             setQty={setQty}
           />
         </>
@@ -2198,11 +2340,13 @@ export default function Home() {
           saveMenu={saveMenu}
           cancelMenuEdits={cancelMenuEdits}
           uploadItemImage={uploadItemImage}
+          uploadEventBackground={uploadEventBackground}
           acceptTasks={acceptTasks}
           rejectOrder={rejectOrder}
           rejectWaitingItems={rejectWaitingItems}
           clearOrderHistory={clearOrderHistory}
           deleteGuest={deleteGuest}
+          setGuestApproval={setGuestApproval}
           finishTask={finishTask}
           serveTask={serveTask}
           setAccepting={setEventAccepting}
@@ -2256,7 +2400,7 @@ export default function Home() {
       )}
       {creatingEvent && (
         <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/45 p-5 backdrop-blur-sm">
-          <section className="w-full max-w-xl rounded-3xl bg-[var(--cream)] p-7 shadow-2xl sm:p-9">
+          <section className="new-event-dialog w-full max-w-xl rounded-3xl bg-[var(--cream)] p-7 shadow-2xl sm:p-9">
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="eyebrow">New event</p>
@@ -2286,6 +2430,54 @@ export default function Home() {
                 placeholder="Sunday birthday brunch"
               />
             </label>
+            <fieldset className="new-event-type-picker">
+              <legend className="field-label">What kind of gathering is this?</legend>
+              <div>
+                {EVENT_TYPES.map((type) => (
+                  <label key={type.value} className={newEvent.eventType === type.value ? 'selected' : ''}>
+                    <input
+                      type="radio"
+                      name="event-type"
+                      value={type.value}
+                      checked={newEvent.eventType === type.value}
+                      onChange={() => setNewEvent({ ...newEvent, eventType: type.value, backgroundImageUrl: '' })}
+                    />
+                    <strong>{type.label}</strong>
+                    <small>{type.description}</small>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {newEvent.eventType === 'custom' && (
+              <label className="field-label mt-4">
+                Name this type of gathering
+                <input
+                  value={newEvent.customEventType}
+                  onChange={(event) => setNewEvent({ ...newEvent, customEventType: event.target.value })}
+                  className="field-input"
+                  placeholder="Book club, housewarming, watch party…"
+                  maxLength={80}
+                />
+              </label>
+            )}
+            <section className="new-event-appearance">
+              <div
+                className="new-event-background-preview"
+                style={{ backgroundImage: `linear-gradient(90deg, rgb(24 3 8 / .88), rgb(24 3 8 / .14)), url(${newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]})` }}
+                aria-label={`${EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label} background preview`}
+              >
+                <span>{newEvent.customEventType || EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label}</span>
+              </div>
+              <div>
+                <strong>Event background</strong>
+                <small>Use the curated image or upload your own.</small>
+                <label className="secondary-button">
+                  <ImagePlus size={15} /> Choose image
+                  <input type="file" accept="image/*" onChange={(event) => void chooseNewEventBackground(event.target.files?.[0])} />
+                </label>
+                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '' })}>Use curated image</button>}
+              </div>
+            </section>
             <div className="new-event-schedule-grid">
               <label className="field-label">
                 Event date and time
@@ -2327,6 +2519,17 @@ export default function Home() {
                 autoComplete="street-address"
               />
             </label>
+            <label className="invite-approval-option" aria-label="Require host approval for guests">
+              <input
+                type="checkbox"
+                checked={newEvent.requireGuestApproval}
+                onChange={(event) => setNewEvent({ ...newEvent, requireGuestApproval: event.target.checked })}
+              />
+              <span>
+                <strong>Approve guests before revealing event details</strong>
+                <small>The event name, date, time, and location stay visible. The welcome message, menu, ordering, and chat unlock after you approve each guest.</small>
+              </span>
+            </label>
             <label className="field-label mt-5">
               Guest welcome message
               <textarea
@@ -2339,7 +2542,7 @@ export default function Home() {
               />
             </label>
             <button
-              disabled={!newEvent.title.trim() || !newEvent.date.trim()}
+              disabled={!newEvent.title.trim() || !newEvent.date.trim() || (newEvent.eventType === 'custom' && !newEvent.customEventType.trim())}
               onClick={() => void createEvent()}
               className="primary-button mt-7 w-full justify-center py-3.5 disabled:opacity-40"
             >
@@ -2441,7 +2644,11 @@ export default function Home() {
                 Your table
               </p>
               <p className="font-display text-lg font-semibold">
-                {menu.accepting && myRsvp?.status === 'yes'
+                {menu.requireGuestApproval && myRsvp && !guestHasEventAccess
+                  ? approvalStatus(myRsvp) === 'pending'
+                    ? 'Waiting for host approval'
+                    : 'This invitation was not approved'
+                  : menu.accepting && myRsvp?.status === 'yes'
                   ? count
                     ? `${count} dish${count === 1 ? '' : 'es'} selected`
                     : 'Choose what calls to you'
@@ -2453,7 +2660,7 @@ export default function Home() {
                 <ListChecks size={17} /> {rsvpButtonLabel}
               </button>
               <button
-                disabled={!count || !menu.accepting || myRsvp?.status !== 'yes'}
+                disabled={!count || !menu.accepting || myRsvp?.status !== 'yes' || !guestHasEventAccess}
                 onClick={() =>
                   (
                     document.getElementById('checkout') as HTMLDialogElement
@@ -2503,13 +2710,13 @@ export default function Home() {
               <div className="guest-rsvp-panel">
                 <div className="guest-rsvp-heading">
                   <div><p className="eyebrow">Your response</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
-                  {myRsvp && <span className={`rsvp-status rsvp-${myRsvp.status}`}>{myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+                  {myRsvp && <span className={`rsvp-status ${menu.requireGuestApproval ? `approval-${approvalStatus(myRsvp)}` : `rsvp-${myRsvp.status}`}`}>{menu.requireGuestApproval && approvalStatus(myRsvp) !== 'approved' ? (approvalStatus(myRsvp) === 'pending' ? 'Pending approval' : 'Not approved') : myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
                   <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
                 </div>
-                <p className="guest-rsvp-explainer">Choose Going to place orders. You can still update your RSVP when ordering is closed.</p>
+                <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Send your response for host review. Once approved, a Going RSVP unlocks the event, chat, and ordering.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
                   <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
                     {([['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([value, label]) => (
@@ -2595,6 +2802,8 @@ export default function Home() {
                   <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
                 </div>
                 {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
+                {menu.requireGuestApproval && myRsvp && approvalStatus(myRsvp) === 'pending' && <p className="rsvp-approval-note pending">Your request is with the host. The event name, time, and location remain visible while you wait.</p>}
+                {menu.requireGuestApproval && myRsvp && approvalStatus(myRsvp) === 'declined' && <p className="rsvp-approval-note declined">The host has not approved access to this event. You can update your RSVP details and contact the host if needed.</p>}
                 {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
               </div>
             )}
@@ -2744,7 +2953,9 @@ function GuestMenu({
   cart,
   reserved,
   canOrder,
+  accessGranted,
   rsvpStatus,
+  rsvpApprovalStatus,
   setQty,
 }: {
   menu: EventMenu;
@@ -2752,22 +2963,24 @@ function GuestMenu({
   cart: Record<string, number>;
   reserved: Order[];
   canOrder: boolean;
+  accessGranted: boolean;
   rsvpStatus: Rsvp['status'] | null;
+  rsvpApprovalStatus: Rsvp['approvalStatus'] | null;
   setQty: (id: string, delta: number) => void;
 }) {
   return (
     <div className="guest-experience pb-36">
       <section className="guest-hero">
-        <div className="guest-hero-photo" />
+        <div className="guest-hero-photo" style={{ backgroundImage: `url(${eventBackground(menu)})` }} />
         <div className="guest-hero-shade" />
         <div className="guest-hero-content">
           <div className="guest-invite-mark">
-            <span>Private table</span>
+            <span>{eventTypeLabel(menu)}</span>
             <i />
           </div>
           <p className="guest-kicker">You’re invited</p>
           <h1 className="font-display">{menu.title}</h1>
-          <p className="guest-welcome">{menu.welcome}</p>
+          {accessGranted && <p className="guest-welcome">{menu.welcome}</p>}
           <div className="guest-event-meta">
             <div className="guest-event-detail">
               <span>When</span>
@@ -2783,7 +2996,9 @@ function GuestMenu({
               className={`guest-order-state ${menu.accepting ? 'open' : 'closed'}`}
             >
               <i />
-              {menu.accepting ? 'Orders are open' : 'Ordering has closed'}
+              {!accessGranted
+                ? rsvpApprovalStatus === 'declined' ? 'Access not approved' : 'Host approval required'
+                : menu.accepting ? 'Orders are open' : 'Ordering has closed'}
             </div>
           </div>
         </div>
@@ -2793,6 +3008,27 @@ function GuestMenu({
         </div>
       </section>
       <section className="guest-menu-shell">
+        {!accessGranted ? (
+          <div className="guest-access-gate">
+            <span><LockKeyhole size={24} /></span>
+            <p className="eyebrow">Private event</p>
+            <h2 className="font-display">
+              {rsvpApprovalStatus === 'pending'
+                ? 'Your request is with the host.'
+                : rsvpApprovalStatus === 'declined'
+                  ? 'This invitation was not approved.'
+                  : 'RSVP to request access.'}
+            </h2>
+            <p>
+              {rsvpApprovalStatus === 'pending'
+                ? 'You’ll see the welcome message, event menu, ordering, and chat here as soon as the host approves you.'
+                : rsvpApprovalStatus === 'declined'
+                  ? 'The event name, time, and location remain available above. Contact the host if you believe this was a mistake.'
+                  : 'Share your name, phone number, RSVP, and temporary PIN. The host will review the request before revealing the rest of the event.'}
+            </p>
+          </div>
+        ) : (
+          <>
         <header className="guest-menu-intro">
           <div>
             <p className="eyebrow">Tonight’s table</p>
@@ -2924,6 +3160,8 @@ function GuestMenu({
             </div>
           </section>
         ))}
+          </>
+        )}
       </section>
     </div>
   );
@@ -2951,11 +3189,13 @@ function EventChat({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [reactionFor, setReactionFor] = useState<string | null>(null);
   const [reactionDetailsFor, setReactionDetailsFor] = useState<string | null>(null);
+  const [pollVotersFor, setPollVotersFor] = useState<string | null>(null);
   const [messageMenuFor, setMessageMenuFor] = useState<string | null>(null);
   const [pollOpen, setPollOpen] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
   const [allowGuestOptions, setAllowGuestOptions] = useState(false);
+  const [allowMultipleVotes, setAllowMultipleVotes] = useState(false);
   const [addingOptionFor, setAddingOptionFor] = useState<string | null>(null);
   const [newOption, setNewOption] = useState('');
   const [busy, setBusy] = useState(false);
@@ -3122,7 +3362,10 @@ function EventChat({
           pollQuestion: '',
           pollOptions: [],
           pollVotes: {},
+          pollVoterNames: {},
           allowGuestOptions: false,
+          allowMultipleVotes: false,
+          pollBumpedAt: 0,
           pinned: false,
           pinnedAt: 0,
           pinnedByName: '',
@@ -3180,7 +3423,10 @@ function EventChat({
           addedByName: 'Host',
         })),
         pollVotes: {},
+        pollVoterNames: {},
         allowGuestOptions,
+        allowMultipleVotes,
+        pollBumpedAt: 0,
         pinned: false,
         pinnedAt: 0,
         pinnedByName: '',
@@ -3201,6 +3447,7 @@ function EventChat({
       setPollQuestion('');
       setPollOptions(['', '']);
       setAllowGuestOptions(false);
+      setAllowMultipleVotes(false);
       setPollOpen(false);
       focusComposer();
     } catch {
@@ -3224,9 +3471,35 @@ function EventChat({
   const vote = async (message: ChatMessage, optionId: string) => {
     await updateMessage(message.id, (current, resolvedActor) => {
       const pollVotes = { ...current.pollVotes };
-      if (pollVotes[resolvedActor.uid] === optionId) delete pollVotes[resolvedActor.uid];
-      else pollVotes[resolvedActor.uid] = optionId;
-      return { pollVotes };
+      const pollVoterNames = { ...current.pollVoterNames };
+      const currentVote = pollVotes[resolvedActor.uid];
+      if (current.allowMultipleVotes) {
+        const selected = Array.isArray(currentVote)
+          ? currentVote
+          : typeof currentVote === 'string' && currentVote
+            ? [currentVote]
+            : [];
+        const next = selected.includes(optionId)
+          ? selected.filter((entry) => entry !== optionId)
+          : [...selected, optionId];
+        if (next.length) {
+          pollVotes[resolvedActor.uid] = next;
+          pollVoterNames[resolvedActor.uid] = resolvedActor.name;
+        } else {
+          delete pollVotes[resolvedActor.uid];
+          delete pollVoterNames[resolvedActor.uid];
+        }
+      } else {
+        const selected = Array.isArray(currentVote) ? currentVote[0] : currentVote;
+        if (selected === optionId) {
+          delete pollVotes[resolvedActor.uid];
+          delete pollVoterNames[resolvedActor.uid];
+        } else {
+          pollVotes[resolvedActor.uid] = optionId;
+          pollVoterNames[resolvedActor.uid] = resolvedActor.name;
+        }
+      }
+      return { pollVotes, pollVoterNames };
     });
     focusComposer();
   };
@@ -3240,6 +3513,7 @@ function EventChat({
         addedByUid: resolvedActor.uid,
         addedByName: resolvedActor.name,
       }].slice(0, 20),
+      pollBumpedAt: eventTimestamp(),
     }));
     setNewOption('');
     setAddingOptionFor(null);
@@ -3265,6 +3539,8 @@ function EventChat({
       pollQuestion: '',
       pollOptions: [],
       pollVotes: {},
+      pollVoterNames: {},
+      pollBumpedAt: 0,
       reactions: {},
       replyTo: null,
       edited: false,
@@ -3280,7 +3556,27 @@ function EventChat({
     }
     focusComposer();
   };
-  const orderedMessages = [...messages].sort((left, right) => left.createdAt - right.createdAt);
+  const orderedMessages = messages
+    .flatMap((message) => {
+      const original = {
+        ...message,
+        _displayKey: message.id,
+        _displayAt: message.createdAt,
+        _pollRepeat: false,
+      };
+      return message.type === 'poll' && (message.pollBumpedAt || 0) > message.createdAt
+        ? [
+            original,
+            {
+              ...message,
+              _displayKey: `${message.id}-poll-update-${message.pollBumpedAt}`,
+              _displayAt: message.pollBumpedAt || message.updatedAt || message.createdAt,
+              _pollRepeat: true,
+            },
+          ]
+        : [original];
+    })
+    .sort((left, right) => left._displayAt - right._displayAt);
   const pinnedMessages = messages
     .filter((message) => message.pinned && !message.deleted)
     .sort((left, right) => (right.pinnedAt || right.createdAt) - (left.pinnedAt || left.createdAt));
@@ -3337,6 +3633,7 @@ function EventChat({
             <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
           )}
           {orderedMessages.map((message) => {
+            const displayKey = message._displayKey;
             const mine = message.authorUid === actor.uid || (actor.role === 'host' && message.authorRole === 'host');
             const reactionEntries = Object.entries(message.reactions || {}).map(([uid, reaction]) => ({
               uid,
@@ -3353,27 +3650,36 @@ function EventChat({
             }, []);
             const myReaction = message.reactions?.[actor.uid];
             const myReactionEmoji = typeof myReaction === 'string' ? myReaction : myReaction?.emoji;
-            const totalVotes = Object.keys(message.pollVotes || {}).length;
+            const voterCount = Object.keys(message.pollVotes || {}).length;
+            const votersByOption = (message.pollOptions || []).map((option) => ({
+              option,
+              names: Object.entries(message.pollVotes || {})
+                .filter(([, value]) => Array.isArray(value) ? value.includes(option.id) : value === option.id)
+                .map(([uid]) => message.pollVoterNames?.[uid]
+                  || messages.find((candidate) => candidate.authorUid === uid)?.authorName
+                  || 'Guest'),
+            }));
+            const isLatestPollInstance = !message.pollBumpedAt || message._pollRepeat;
             return (
               <article
-                key={message.id}
+                key={displayKey}
                 ref={(node) => { messageRefs.current[message.id] = node; }}
-                className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
+                className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message._pollRepeat ? 'poll-repeat' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
                 onPointerUp={(event) => {
                   if (event.button !== 0) return;
                   if ((event.target as HTMLElement).closest('button, input, textarea, label')) return;
-                  setMessageMenuFor(messageMenuFor === message.id ? null : message.id);
+                  setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey);
                 }}
               >
                 <div className="chat-message-meta">
                   <strong>{message.authorName}</strong>
                   {message.authorRole === 'host' && <b>Host</b>}
                   {message.pinned && <b className="chat-pinned-badge"><Pin size={10} /> Pinned</b>}
-                  <time>{new Date(message.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
+                  <time>{new Date(message._displayAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>
                   {message.edited && <em>edited</em>}
-                  {!message.deleted && !locked && <button type="button" className="chat-message-options" aria-label={`Options for ${message.authorName}'s message`} onClick={() => setMessageMenuFor(messageMenuFor === message.id ? null : message.id)}>•••</button>}
+                  {!message.deleted && !locked && <button type="button" className="chat-message-options" aria-label={`Options for ${message.authorName}'s message`} onClick={() => setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey)}>•••</button>}
                 </div>
-                {messageMenuFor === message.id && !locked && (
+                {messageMenuFor === displayKey && !locked && (
                   <div className="chat-message-menu">
                     {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
                     {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
@@ -3386,12 +3692,14 @@ function EventChat({
                 )}
                 {message.deleted ? <p className="chat-deleted-copy">Message deleted</p> : message.type === 'message' ? <p>{message.text}</p> : (
                   <div className="chat-poll">
+                    {message._pollRepeat && <span className="chat-poll-update"><Sparkles size={12} /> Poll updated · new option added</span>}
                     <strong>{message.pollQuestion}</strong>
-                    <span>{totalVotes} vote{totalVotes === 1 ? '' : 's'} · {message.allowGuestOptions ? 'Guests can add options' : 'Fixed options'}</span>
+                    <span>{voterCount} voter{voterCount === 1 ? '' : 's'} · {message.allowMultipleVotes ? 'Choose any that apply' : 'Choose one'} · {message.allowGuestOptions ? 'Guests can add options' : 'Fixed options'}</span>
                     <div className="chat-poll-options">
                       {(message.pollOptions || []).map((option) => {
-                        const votes = Object.values(message.pollVotes || {}).filter((value) => value === option.id).length;
-                        const selected = message.pollVotes?.[actor.uid] === option.id;
+                        const votes = Object.values(message.pollVotes || {}).filter((value) => Array.isArray(value) ? value.includes(option.id) : value === option.id).length;
+                        const myVotes = message.pollVotes?.[actor.uid];
+                        const selected = Array.isArray(myVotes) ? myVotes.includes(option.id) : myVotes === option.id;
                         return (
                           <button key={option.id} type="button" disabled={locked} className={selected ? 'selected' : ''} onClick={() => void vote(message, option.id)}>
                             <span>{option.text}{option.addedByName !== 'Host' && <small>Added by {option.addedByName}</small>}</span>
@@ -3400,18 +3708,29 @@ function EventChat({
                         );
                       })}
                     </div>
-                    {!locked && (message.allowGuestOptions || actor.role === 'host') && (
-                      addingOptionFor === message.id ? (
+                    <button type="button" className="chat-poll-voters-toggle" onClick={() => setPollVotersFor(pollVotersFor === displayKey ? null : displayKey)}><UsersRound size={13} /> {pollVotersFor === displayKey ? 'Hide voters' : 'Who voted'}</button>
+                    {pollVotersFor === displayKey && (
+                      <div className="chat-poll-voters">
+                        {votersByOption.map(({ option, names }) => (
+                          <div key={option.id}>
+                            <strong>{option.text}</strong>
+                            <span>{names.length ? names.join(', ') : 'No votes yet'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {!locked && isLatestPollInstance && (message.allowGuestOptions || actor.role === 'host') && (
+                      addingOptionFor === displayKey ? (
                         <div className="chat-add-option"><input value={newOption} onChange={(event) => setNewOption(event.target.value)} maxLength={120} placeholder="New poll option" autoFocus /><button type="button" onClick={() => void addPollOption(message)}>Add</button><button type="button" onClick={() => { setAddingOptionFor(null); setNewOption(''); }}>Cancel</button></div>
-                      ) : <button type="button" className="chat-add-option-trigger" onClick={() => setAddingOptionFor(message.id)}><Plus size={14} /> Add an option</button>
+                      ) : <button type="button" className="chat-add-option-trigger" onClick={() => setAddingOptionFor(displayKey)}><Plus size={14} /> Add an option</button>
                     )}
                   </div>
                 )}
                 {!message.deleted && reactionGroups.length > 0 && (
                   <div className="chat-reaction-summary">
                     {reactionGroups.slice(0, 3).map(({ emoji, names }) => <button type="button" disabled={locked} className={myReactionEmoji === emoji ? 'selected' : ''} key={emoji} data-tooltip={`${names.join(', ')} reacted ${emoji}`} aria-label={`${names.join(', ')} reacted ${emoji}`} onClick={() => void react(message, emoji)}>{emoji} {names.length}</button>)}
-                    {reactionGroups.length > 3 && <button type="button" className="chat-reaction-more" onClick={() => setReactionDetailsFor(reactionDetailsFor === message.id ? null : message.id)}>+{reactionGroups.length - 3}</button>}
-                    {reactionDetailsFor === message.id && (
+                    {reactionGroups.length > 3 && <button type="button" className="chat-reaction-more" onClick={() => setReactionDetailsFor(reactionDetailsFor === displayKey ? null : displayKey)}>+{reactionGroups.length - 3}</button>}
+                    {reactionDetailsFor === displayKey && (
                       <div className="chat-reaction-details">
                         {reactionEntries.map((reaction) => <span key={reaction.uid}><strong>{reaction.name}</strong><b>{reaction.emoji}</b></span>)}
                       </div>
@@ -3422,8 +3741,8 @@ function EventChat({
                   <div className="chat-message-actions">
                     <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); focusComposer(); }}><Reply size={13} /> Reply</button>
                     {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); focusComposer(); }}><Pencil size={13} /> Edit</button>}
-                    <button type="button" onClick={() => setReactionFor(reactionFor === message.id ? null : message.id)}><Smile size={13} /> React</button>
-                    {reactionFor === message.id && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); focusComposer(); }} /></div>}
+                    <button type="button" onClick={() => setReactionFor(reactionFor === displayKey ? null : displayKey)}><Smile size={13} /> React</button>
+                    {reactionFor === displayKey && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); focusComposer(); }} /></div>}
                   </div>
                 )}
               </article>
@@ -3438,6 +3757,7 @@ function EventChat({
             {pollOptions.map((option, index) => <div key={index}><input value={option} onChange={(event) => setPollOptions((current) => current.map((value, optionIndex) => optionIndex === index ? event.target.value : value))} maxLength={120} placeholder={`Option ${index + 1}`} />{pollOptions.length > 2 && <button type="button" onClick={() => setPollOptions((current) => current.filter((_, optionIndex) => optionIndex !== index))}><XCircle size={16} /></button>}</div>)}
             {pollOptions.length < 12 && <button type="button" className="chat-add-option-trigger" onClick={() => setPollOptions((current) => [...current, ''])}><Plus size={14} /> Add option</button>}
             <label><input type="checkbox" checked={allowGuestOptions} onChange={(event) => setAllowGuestOptions(event.target.checked)} /> Let guests add poll options</label>
+            <label><input type="checkbox" checked={allowMultipleVotes} onChange={(event) => setAllowMultipleVotes(event.target.checked)} /> Guests can select multiple choices</label>
             <button type="button" className="primary-button" disabled={busy || !pollQuestion.trim() || pollOptions.filter((option) => option.trim()).length < 2} onClick={() => void createPoll()}>Publish poll</button>
           </section>
         )}
@@ -3473,11 +3793,13 @@ function HostWorkspace({
   saveMenu,
   cancelMenuEdits,
   uploadItemImage,
+  uploadEventBackground,
   acceptTasks,
   rejectOrder,
   rejectWaitingItems,
   clearOrderHistory,
   deleteGuest,
+  setGuestApproval,
   finishTask,
   serveTask,
   setAccepting,
@@ -3499,11 +3821,13 @@ function HostWorkspace({
   saveMenu: () => Promise<void>;
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
+  uploadEventBackground: (file: File) => Promise<void>;
   acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   rejectWaitingItems: (order: Order, itemId: string) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
+  setGuestApproval: (rsvp: Rsvp, status: 'approved' | 'declined') => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
   setAccepting: (accepting: boolean) => Promise<void>;
@@ -3662,6 +3986,7 @@ function HostWorkspace({
                 saveMenu={saveMenu}
                 cancelMenuEdits={cancelMenuEdits}
                 uploadItemImage={uploadItemImage}
+                uploadEventBackground={uploadEventBackground}
               />
             ) : (
               <>
@@ -3683,6 +4008,7 @@ function HostWorkspace({
                   rejectWaitingItems={rejectWaitingItems}
                   clearOrderHistory={clearOrderHistory}
                   deleteGuest={deleteGuest}
+                  setGuestApproval={setGuestApproval}
                   finishTask={finishTask}
                   serveTask={serveTask}
                 />
@@ -3921,6 +4247,7 @@ function SchedulerBoard({
   rejectWaitingItems,
   clearOrderHistory,
   deleteGuest,
+  setGuestApproval,
   finishTask,
   serveTask,
 }: {
@@ -3932,6 +4259,7 @@ function SchedulerBoard({
   rejectWaitingItems: (order: Order, itemId: string) => Promise<void>;
   clearOrderHistory: () => Promise<void>;
   deleteGuest: (rsvp: Rsvp) => Promise<void>;
+  setGuestApproval: (rsvp: Rsvp, status: 'approved' | 'declined') => Promise<void>;
   finishTask: (orderId: string, taskId: string) => Promise<void>;
   serveTask: (orderId: string, taskId: string) => Promise<void>;
 }) {
@@ -3946,6 +4274,11 @@ function SchedulerBoard({
   const usage = resourceUsage(orders, menu);
   const queuePlan = planResourceQueue(orders, menu);
   const sortedRsvps = [...rsvps].sort((left, right) => {
+    if (menu.requireGuestApproval) {
+      const accessOrder = { pending: 0, approved: 1, declined: 2 };
+      const accessDifference = accessOrder[approvalStatus(left)] - accessOrder[approvalStatus(right)];
+      if (accessDifference) return accessDifference;
+    }
     const statusOrder = { yes: 0, maybe: 1, no: 2 };
     return statusOrder[left.status] - statusOrder[right.status]
       || left.guestName.localeCompare(right.guestName);
@@ -3953,8 +4286,11 @@ function SchedulerBoard({
   const partySize = (rsvp: Rsvp) =>
     rsvp.status === 'no' ? 0 : 1 + (rsvp.companions?.length || 0);
   const attendingCount = sortedRsvps
-    .filter((rsvp) => rsvp.status === 'yes')
+    .filter((rsvp) => rsvp.status === 'yes' && guestIsApproved(menu, rsvp))
     .reduce((total, rsvp) => total + partySize(rsvp), 0);
+  const pendingApprovalCount = menu.requireGuestApproval
+    ? sortedRsvps.filter((rsvp) => approvalStatus(rsvp) === 'pending').length
+    : 0;
   const downloadGuestFile = (content: string, extension: 'csv' | 'vcf', type: string) => {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement('a');
@@ -3973,20 +4309,21 @@ function SchedulerBoard({
     const rows = sortedRsvps.flatMap((rsvp) => {
       const response = rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going';
       return [
-        [rsvp.guestName, formatPhone(rsvp.guestPhone), 'Primary guest', '', response, partySize(rsvp), rsvp.activeOrderCount || 0],
+        [rsvp.guestName, formatPhone(rsvp.guestPhone), 'Primary guest', '', response, menu.requireGuestApproval ? approvalStatus(rsvp) : 'Not required', partySize(rsvp), rsvp.activeOrderCount || 0],
         ...(rsvp.companions || []).map((companion) => [
           companionName(companion),
           companionPhone(companion),
           'Additional guest',
           rsvp.guestName,
           response,
+          menu.requireGuestApproval ? approvalStatus(rsvp) : 'Not required',
           '',
           '',
         ]),
       ];
     });
     downloadGuestFile([
-      ['Name', 'Phone', 'Guest type', 'Invited by', 'RSVP', 'Party size', 'Active orders'].map(escapeCell).join(','),
+      ['Name', 'Phone', 'Guest type', 'Invited by', 'RSVP', 'Access', 'Party size', 'Active orders'].map(escapeCell).join(','),
       ...rows.map((row) => row.map(escapeCell).join(',')),
     ].join('\n'), 'csv', 'text/csv;charset=utf-8');
   };
@@ -4205,6 +4542,17 @@ function SchedulerBoard({
       ? `Waiting for ${blocked.map(({ resource }) => resource?.name || 'a removed resource').join(' + ')}`
       : 'Waiting behind an earlier order';
   };
+  const guestAccessControls = (rsvp: Rsvp) => {
+    if (!menu.requireGuestApproval) return null;
+    const status = approvalStatus(rsvp);
+    return (
+      <div className="guest-approval-controls">
+        <span className={`approval-badge ${status}`}>{status === 'pending' ? 'Awaiting review' : status === 'approved' ? 'Approved' : 'Declined'}</span>
+        {status !== 'approved' && <button type="button" className="approve" onClick={() => void setGuestApproval(rsvp, 'approved')}><Check size={13} /> Accept</button>}
+        {status !== 'declined' && <button type="button" className="decline" onClick={() => void setGuestApproval(rsvp, 'declined')}><XCircle size={13} /> Decline</button>}
+      </div>
+    );
+  };
   return (
     <div className="scheduler-shell">
       <section className="resource-rack">
@@ -4214,7 +4562,7 @@ function SchedulerBoard({
             <h3 className="font-display">RSVPs</h3>
           </div>
           <div className="rsvp-header-actions">
-            <span>{attendingCount} attending · {rsvps.filter((rsvp) => rsvp.status === 'yes').length} going RSVPs · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
+            <span>{pendingApprovalCount ? `${pendingApprovalCount} awaiting approval · ` : ''}{attendingCount} approved attending · {rsvps.filter((rsvp) => rsvp.status === 'yes').length} going RSVPs · {rsvps.filter((rsvp) => rsvp.status === 'maybe').length} maybe · {rsvps.filter((rsvp) => rsvp.status === 'no').length} not going</span>
             <button type="button" onClick={() => setGuestListOpen(true)} disabled={!rsvps.length}><ListChecks size={15} /> Open guest list</button>
           </div>
         </header>
@@ -4223,7 +4571,7 @@ function SchedulerBoard({
             {sortedRsvps.map((rsvp) => (
               <article key={rsvp.guestUid}>
                 <div><strong>{rsvp.guestName}</strong><span>{formatPhone(rsvp.guestPhone)} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}</div>
-                <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
+                <div className="rsvp-card-actions">{guestAccessControls(rsvp)}<span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
               </article>
             ))}
           </div>
@@ -4267,7 +4615,7 @@ function SchedulerBoard({
                       </details>
                     ) : null}
                   </div>
-                  <div className="rsvp-card-actions"><span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
+                  <div className="rsvp-card-actions">{guestAccessControls(rsvp)}<span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
                 </article>
               ))}
             </div>
@@ -4707,6 +5055,7 @@ function MenuEditor({
   saveMenu,
   cancelMenuEdits,
   uploadItemImage,
+  uploadEventBackground,
 }: {
   menu: EventMenu;
   orders: Order[];
@@ -4714,6 +5063,7 @@ function MenuEditor({
   saveMenu: () => Promise<void>;
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
+  uploadEventBackground: (file: File) => Promise<void>;
 }) {
   const [addingCategoryFor, setAddingCategoryFor] = useState<string | null>(
     null,
@@ -4957,6 +5307,64 @@ function MenuEditor({
           />
         </label>
       </div>
+      <div className="event-identity-grid">
+        <label className="field-label">
+          Event type
+          <select
+            className="field-input"
+            value={menu.eventType || 'meal'}
+            onChange={(event) => {
+              const eventType = event.target.value as EventType;
+              setMenu({ ...menu, eventType, customEventType: eventType === 'custom' ? menu.customEventType : '', backgroundImageUrl: undefined });
+            }}
+          >
+            {EVENT_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+          </select>
+        </label>
+        {(menu.eventType || 'meal') === 'custom' && (
+          <label className="field-label">
+            Custom event type
+            <input
+              className="field-input"
+              value={menu.customEventType || ''}
+              onChange={(event) => setMenu({ ...menu, customEventType: event.target.value })}
+              placeholder="Book club, housewarming, watch party…"
+              maxLength={80}
+            />
+          </label>
+        )}
+        <label className="invite-approval-option compact" aria-label="Require host approval for guests">
+          <input
+            type="checkbox"
+            checked={Boolean(menu.requireGuestApproval)}
+            onChange={(event) => setMenu({ ...menu, requireGuestApproval: event.target.checked })}
+          />
+          <span>
+            <strong>Host approval required</strong>
+            <small>New guests wait for approval before seeing private details.</small>
+          </span>
+        </label>
+      </div>
+      <section className="event-background-editor">
+        <div
+          style={{ backgroundImage: `linear-gradient(90deg, rgb(24 3 8 / .76), rgb(24 3 8 / .06)), url(${eventBackground(menu)})` }}
+          title={`${eventTypeLabel(menu)} background preview`}
+        >
+          <span>{eventTypeLabel(menu)}</span>
+        </div>
+        <section>
+          <p className="eyebrow">Event backdrop</p>
+          <strong>Set the mood before guests arrive.</strong>
+          <small>Changing the event type selects its curated image. A custom upload overrides it.</small>
+          <div>
+            <label className="secondary-button">
+              <ImagePlus size={15} /> Replace background
+              <input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && void uploadEventBackground(event.target.files[0])} />
+            </label>
+            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: undefined })}>Use curated image</button>}
+          </div>
+        </section>
+      </section>
       <label className="field-label mt-5">
         Address
         <input
@@ -5448,11 +5856,11 @@ function MenuEditor({
           </p>
         )}
       </section>
-      <div className="mt-7 flex items-center justify-between gap-4">
+      <div className="host-editor-actions" role="toolbar" aria-label="Event editing actions">
         <p className="text-xs text-black/40">
           Saving updates every open guest tab for this event.
         </p>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div>
           <button onClick={() => void cancelMenuEdits()} className="secondary-button">
             <XCircle size={16} /> Cancel
           </button>
