@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
@@ -44,6 +45,7 @@ import {
 
 type EventResource = { id: string; name: string; capacity: number };
 type EventType = 'meal' | 'movie' | 'game' | 'birthday' | 'custom';
+type EventPalette = 'wine' | 'midnight' | 'forest' | 'celebration' | 'twilight';
 type MenuItem = {
   id: string;
   name: string;
@@ -73,6 +75,7 @@ type EventMenu = {
   eventType?: EventType;
   customEventType?: string;
   backgroundImageUrl?: string;
+  colorPalette?: EventPalette;
   maxAdditionalGuests?: number;
   categories?: string[];
   resources?: EventResource[];
@@ -204,6 +207,75 @@ const EVENT_BACKGROUNDS: Record<EventType, string> = {
   birthday: '/gather-birthday-party-hero.jpg',
   custom: '/gather-custom-event-hero.jpg',
 };
+const EVENT_PALETTES: Array<{
+  value: EventPalette;
+  label: string;
+  colors: [string, string, string];
+  theme: Record<string, string>;
+}> = [
+  {
+    value: 'wine',
+    label: 'Warm burgundy',
+    colors: ['#4b111d', '#d9543d', '#f2a68e'],
+    theme: {
+      '--cream': '#f7f2e8', '--ink': '#20231f', '--tomato': '#d9543d', '--sage': '#55725b',
+      '--sage-light': '#e6eee5', '--paper': '#fffdf8', '--wine': '#4b111d', '--wine-deep': '#25090f',
+      '--night': '#11130f', '--parchment': '#f3ecdf', '--acid': '#d8f06a', '--peach': '#f2a68e',
+      '--theme-rgb': '75 17 29', '--theme-deep-rgb': '24 3 8',
+    },
+  },
+  {
+    value: 'midnight',
+    label: 'Midnight blue',
+    colors: ['#263f61', '#4d78a8', '#9ec5ee'],
+    theme: {
+      '--cream': '#edf1f5', '--ink': '#1d2530', '--tomato': '#4d78a8', '--sage': '#5b7187',
+      '--sage-light': '#dde7f0', '--paper': '#f9fbfd', '--wine': '#263f61', '--wine-deep': '#111c2d',
+      '--night': '#0e1724', '--parchment': '#e8edf3', '--acid': '#b9d7f4', '--peach': '#9ec5ee',
+      '--theme-rgb': '38 63 97', '--theme-deep-rgb': '14 25 41',
+    },
+  },
+  {
+    value: 'forest',
+    label: 'Forest table',
+    colors: ['#1c5148', '#39695d', '#e7bd86'],
+    theme: {
+      '--cream': '#eef1e8', '--ink': '#1c2925', '--tomato': '#bd7442', '--sage': '#39695d',
+      '--sage-light': '#dce9e2', '--paper': '#fbfcf8', '--wine': '#1c5148', '--wine-deep': '#0a2521',
+      '--night': '#0d1c19', '--parchment': '#e8eee7', '--acid': '#a9d9b7', '--peach': '#e7bd86',
+      '--theme-rgb': '28 81 72', '--theme-deep-rgb': '10 37 33',
+    },
+  },
+  {
+    value: 'celebration',
+    label: 'Celebration rose',
+    colors: ['#73304f', '#ca607d', '#f1cf78'],
+    theme: {
+      '--cream': '#f8eef2', '--ink': '#2d2029', '--tomato': '#ca607d', '--sage': '#7b6075',
+      '--sage-light': '#eee0ea', '--paper': '#fffafd', '--wine': '#73304f', '--wine-deep': '#321322',
+      '--night': '#211019', '--parchment': '#f4e7ed', '--acid': '#f1cf78', '--peach': '#f2afbd',
+      '--theme-rgb': '115 48 79', '--theme-deep-rgb': '50 19 34',
+    },
+  },
+  {
+    value: 'twilight',
+    label: 'Twilight violet',
+    colors: ['#443b6a', '#7465aa', '#dfc978'],
+    theme: {
+      '--cream': '#f1eff7', '--ink': '#252238', '--tomato': '#7465aa', '--sage': '#625d81',
+      '--sage-light': '#e5e1f0', '--paper': '#fcfbff', '--wine': '#443b6a', '--wine-deep': '#1b172b',
+      '--night': '#14111f', '--parchment': '#ece9f4', '--acid': '#dfc978', '--peach': '#c5b9ec',
+      '--theme-rgb': '68 59 106', '--theme-deep-rgb': '27 23 43',
+    },
+  },
+];
+const DEFAULT_EVENT_PALETTE: Record<EventType, EventPalette> = {
+  meal: 'wine', movie: 'midnight', game: 'forest', birthday: 'celebration', custom: 'twilight',
+};
+const eventPalette = (menu: Pick<EventMenu, 'eventType' | 'colorPalette'>) =>
+  menu.colorPalette || DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'];
+const eventThemeStyle = (menu: Pick<EventMenu, 'eventType' | 'colorPalette'>) =>
+  EVENT_PALETTES.find((palette) => palette.value === eventPalette(menu))?.theme as CSSProperties;
 const eventTypeLabel = (menu: EventMenu) =>
   menu.eventType === 'custom' && menu.customEventType?.trim()
     ? menu.customEventType.trim()
@@ -212,7 +284,7 @@ const eventBackground = (menu: EventMenu) =>
   menu.backgroundImageUrl || EVENT_BACKGROUNDS[menu.eventType || 'meal'];
 const approvalStatus = (rsvp?: Rsvp | null) => rsvp?.approvalStatus || 'approved';
 const guestIsApproved = (menu: EventMenu, rsvp?: Rsvp | null) =>
-  !menu.requireGuestApproval || approvalStatus(rsvp) === 'approved';
+  !menu.requireGuestApproval || rsvp?.status !== 'yes' || approvalStatus(rsvp) === 'approved';
 const companionName = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? companion : companion.name;
 const phoneDigits = (value: string) => {
@@ -409,6 +481,24 @@ const itemDescription = (item: MenuItem) =>
   item.description === DESCRIPTION_EXAMPLE
     ? ''
     : item.description || '';
+const withoutUndefined = <T,>(value: T): T => {
+  if (Array.isArray(value)) return value.map((entry) => withoutUndefined(entry)) as T;
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entry]) => entry !== undefined)
+        .map(([key, entry]) => [key, withoutUndefined(entry)]),
+    ) as T;
+  }
+  return value;
+};
+const unfinishedMenuItem = (item: MenuItem) =>
+  !item.name.trim() && Boolean(
+    item.description.trim()
+    || item.imageUrl
+    || item.imagePath
+    || Object.keys(item.requirements || {}).length,
+  );
 const itemPrepMinutes = (item?: MenuItem) =>
   Math.max(1, item?.prepMinutes || 10);
 const reservedServings = (orders: Order[], itemId: string) =>
@@ -675,6 +765,7 @@ export default function Home() {
     eventType: 'meal' as EventType,
     customEventType: '',
     backgroundImageUrl: '',
+    colorPalette: '' as EventPalette | '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
@@ -716,7 +807,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=8', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=10', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1091,9 +1182,9 @@ export default function Home() {
   } : null);
   const guestHasEventAccess = guestIsApproved(menu, myRsvp);
   const rsvpButtonLabel = myRsvp
-    ? menu.requireGuestApproval && approvalStatus(myRsvp) === 'pending'
+    ? menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) === 'pending'
       ? 'RSVP: Pending approval'
-      : menu.requireGuestApproval && approvalStatus(myRsvp) === 'declined'
+      : menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) === 'declined'
         ? 'RSVP: Not approved'
         : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
@@ -1206,7 +1297,7 @@ export default function Home() {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         .slice(0, 36) || 'event';
-    const event: EventMenu = {
+    const event = withoutUndefined<EventMenu>({
       id: `${baseSlug}-${crypto.randomUUID().slice(0, 5)}`,
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
@@ -1219,7 +1310,8 @@ export default function Home() {
       requireGuestApproval: newEvent.requireGuestApproval,
       eventType: newEvent.eventType,
       customEventType: newEvent.eventType === 'custom' ? newEvent.customEventType.trim() : '',
-      backgroundImageUrl: newEvent.backgroundImageUrl || undefined,
+      backgroundImageUrl: newEvent.backgroundImageUrl,
+      colorPalette: newEvent.colorPalette || undefined,
       maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
       resources: [],
@@ -1233,7 +1325,7 @@ export default function Home() {
           prepMinutes: 15,
         },
       ],
-    };
+    });
     try {
       if (firebaseConfigured) {
         const [{ getApp }, store, authModule] = await Promise.all([
@@ -1279,6 +1371,7 @@ export default function Home() {
       eventType: 'meal',
       customEventType: '',
       backgroundImageUrl: '',
+      colorPalette: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     history.replaceState({}, '', `?view=host&event=${event.id}`);
@@ -1542,6 +1635,8 @@ export default function Home() {
       notify('Cancel new orders and wait until accepted food is served before changing your RSVP');
       return;
     }
+    const nextApprovalStatus = myRsvp?.approvalStatus
+      || (menu.requireGuestApproval ? 'pending' : 'approved');
     setRsvpBusy(true);
     try {
       if (firebaseConfigured) {
@@ -1576,7 +1671,7 @@ export default function Home() {
         const saved: Rsvp = {
           guestUid: profile.guestUid, guestName: profile.guestName, guestPhone: profile.guestPhone,
           status: rsvpChoice, companions, activeOrderCount: myRsvp?.activeOrderCount || 0,
-          approvalStatus: myRsvp?.approvalStatus || (menu.requireGuestApproval ? 'pending' : 'approved'),
+          approvalStatus: nextApprovalStatus,
           createdAt: myRsvp?.createdAt || Date.now(), updatedAt: Date.now(),
         };
         const next = [saved, ...others];
@@ -1590,13 +1685,16 @@ export default function Home() {
         guestPhone: profile.guestPhone,
         status: rsvpChoice,
         companions,
-        approvalStatus: myRsvp?.approvalStatus || (menu.requireGuestApproval ? 'pending' : 'approved'),
+        approvalStatus: nextApprovalStatus,
         activeOrderCount: myRsvp?.activeOrderCount || 0,
         createdAt: myRsvp?.createdAt || Date.now(),
         updatedAt: Date.now(),
       });
       setRsvpPanelOpen(false);
-      notify(menu.requireGuestApproval && !myRsvp
+      const waitingForApproval = menu.requireGuestApproval
+        && rsvpChoice === 'yes'
+        && nextApprovalStatus !== 'approved';
+      notify(waitingForApproval
         ? 'RSVP sent — the host will review your request'
         : `RSVP saved: ${rsvpChoice === 'yes' ? 'Going' : rsvpChoice === 'maybe' ? 'Maybe' : 'Not going'}`);
     } catch (error) {
@@ -1952,13 +2050,17 @@ export default function Home() {
     }
   }
   async function saveMenu() {
-    const cleanedMenu = {
+    if (menu.items.some(unfinishedMenuItem)) {
+      notify('Name or delete the unfinished menu item before saving');
+      return;
+    }
+    const cleanedMenu = withoutUndefined<EventMenu>({
       ...menu,
-      items: menu.items.map((item) => ({
+      items: menu.items.filter((item) => item.name.trim()).map((item) => ({
         ...item,
         description: itemDescription(item),
       })),
-    };
+    });
     setMenu(cleanedMenu);
     if (!firebaseConfigured) {
       const nextEvents = events.some((event) => event.id === cleanedMenu.id)
@@ -1978,21 +2080,35 @@ export default function Home() {
       notify('Event and menu saved for every open tab');
       return;
     }
-    const [{ getApp }, store, authModule] = await Promise.all([
-      import('firebase/app'),
-      import('firebase/firestore'),
-      import('firebase/auth'),
-    ]);
-    const user = authModule.getAuth(getApp()).currentUser;
-    if (!user || user.isAnonymous) return;
-    await store.setDoc(
-      store.doc(store.getFirestore(getApp()), 'events', cleanedMenu.id),
-      { ...cleanedMenu, ownerUid: user.uid },
-      { merge: true },
-    );
-    await persistScheduledOrders(orders);
-    setEditing(false);
-    notify('Menu saved');
+    try {
+      const [{ getApp }, store, authModule] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/firestore'),
+        import('firebase/auth'),
+      ]);
+      const user = authModule.getAuth(getApp()).currentUser;
+      if (!user || user.isAnonymous) {
+        notify('Sign in with the approved host account before saving');
+        return;
+      }
+      await store.setDoc(
+        store.doc(store.getFirestore(getApp()), 'events', cleanedMenu.id),
+        withoutUndefined({ ...cleanedMenu, ownerUid: user.uid }),
+        { merge: true },
+      );
+      await persistScheduledOrders(orders);
+      setEditing(false);
+      notify('Menu saved');
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(
+        code === 'permission-denied'
+          ? 'This host account does not have permission to save the event.'
+          : code === 'resource-exhausted'
+            ? 'The event is too large to save. Remove an image and try again.'
+            : 'The event could not be saved. Your edits are still here — please try again.',
+      );
+    }
   }
   async function cancelMenuEdits() {
     let savedMenu = events.find((event) => event.id === menu.id);
@@ -2237,6 +2353,7 @@ export default function Home() {
   return (
     <main
       className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'}`}
+      style={mode === 'guest' ? eventThemeStyle(menu) : undefined}
     >
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
@@ -2440,7 +2557,7 @@ export default function Home() {
                       name="event-type"
                       value={type.value}
                       checked={newEvent.eventType === type.value}
-                      onChange={() => setNewEvent({ ...newEvent, eventType: type.value, backgroundImageUrl: '' })}
+                      onChange={() => setNewEvent({ ...newEvent, eventType: type.value, backgroundImageUrl: '', colorPalette: '' })}
                     />
                     <strong>{type.label}</strong>
                     <small>{type.description}</small>
@@ -2463,7 +2580,10 @@ export default function Home() {
             <section className="new-event-appearance">
               <div
                 className="new-event-background-preview"
-                style={{ backgroundImage: `linear-gradient(90deg, rgb(24 3 8 / .88), rgb(24 3 8 / .14)), url(${newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]})` }}
+                style={{
+                  ...eventThemeStyle({ eventType: newEvent.eventType, colorPalette: newEvent.colorPalette || undefined }),
+                  backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / .88), rgb(var(--theme-deep-rgb) / .14)), url(${newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]})`,
+                }}
                 aria-label={`${EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label} background preview`}
               >
                 <span>{newEvent.customEventType || EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label}</span>
@@ -2478,6 +2598,12 @@ export default function Home() {
                 {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '' })}>Use curated image</button>}
               </div>
             </section>
+            {newEvent.backgroundImageUrl && (
+              <EventPalettePicker
+                value={newEvent.colorPalette || DEFAULT_EVENT_PALETTE[newEvent.eventType]}
+                onChange={(colorPalette) => setNewEvent({ ...newEvent, colorPalette })}
+              />
+            )}
             <div className="new-event-schedule-grid">
               <label className="field-label">
                 Event date and time
@@ -2527,7 +2653,7 @@ export default function Home() {
               />
               <span>
                 <strong>Approve guests before revealing event details</strong>
-                <small>The event name, date, time, and location stay visible. The welcome message, menu, ordering, and chat unlock after you approve each guest.</small>
+                <small>Only Going responses wait for approval. Maybe and Not going are saved immediately.</small>
               </span>
             </label>
             <label className="field-label mt-5">
@@ -2644,7 +2770,7 @@ export default function Home() {
                 Your table
               </p>
               <p className="font-display text-lg font-semibold">
-                {menu.requireGuestApproval && myRsvp && !guestHasEventAccess
+                {menu.requireGuestApproval && myRsvp?.status === 'yes' && !guestHasEventAccess
                   ? approvalStatus(myRsvp) === 'pending'
                     ? 'Waiting for host approval'
                     : 'This invitation was not approved'
@@ -2710,13 +2836,13 @@ export default function Home() {
               <div className="guest-rsvp-panel">
                 <div className="guest-rsvp-heading">
                   <div><p className="eyebrow">Your response</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
-                  {myRsvp && <span className={`rsvp-status ${menu.requireGuestApproval ? `approval-${approvalStatus(myRsvp)}` : `rsvp-${myRsvp.status}`}`}>{menu.requireGuestApproval && approvalStatus(myRsvp) !== 'approved' ? (approvalStatus(myRsvp) === 'pending' ? 'Pending approval' : 'Not approved') : myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+                  {myRsvp && <span className={`rsvp-status ${menu.requireGuestApproval && myRsvp.status === 'yes' ? `approval-${approvalStatus(myRsvp)}` : `rsvp-${myRsvp.status}`}`}>{menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) !== 'approved' ? (approvalStatus(myRsvp) === 'pending' ? 'Pending approval' : 'Not approved') : myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
                   <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
                 </div>
-                <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Send your response for host review. Once approved, a Going RSVP unlocks the event, chat, and ordering.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
+                <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Going responses need host approval. Maybe and Not going are saved immediately; only approved Going guests can chat or order.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
                   <div className="rsvp-choices" role="radiogroup" aria-label="RSVP response">
                     {([['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([value, label]) => (
@@ -2802,8 +2928,8 @@ export default function Home() {
                   <button type="button" onClick={() => void saveRsvp()} disabled={rsvpBusy || menu.rsvpOpen === false} className="primary-button">{menu.rsvpOpen === false ? 'RSVPs closed' : myRsvp ? 'Update RSVP' : 'Save RSVP'}</button>
                 </div>
                 {menu.rsvpOpen === false && <p className="rsvp-closed-note">The host has locked RSVPs. Your saved response remains unchanged.</p>}
-                {menu.requireGuestApproval && myRsvp && approvalStatus(myRsvp) === 'pending' && <p className="rsvp-approval-note pending">Your request is with the host. The event name, time, and location remain visible while you wait.</p>}
-                {menu.requireGuestApproval && myRsvp && approvalStatus(myRsvp) === 'declined' && <p className="rsvp-approval-note declined">The host has not approved access to this event. You can update your RSVP details and contact the host if needed.</p>}
+                {menu.requireGuestApproval && myRsvp?.status === 'yes' && approvalStatus(myRsvp) === 'pending' && <p className="rsvp-approval-note pending">Your Going response is with the host. The event name, time, and location remain visible while you wait.</p>}
+                {menu.requireGuestApproval && myRsvp?.status === 'yes' && approvalStatus(myRsvp) === 'declined' && <p className="rsvp-approval-note declined">The host has not approved this Going response. You can choose Maybe or Not going without approval.</p>}
                 {myRsvp?.activeOrderCount ? <p className="rsvp-order-lock">Your RSVP is locked while {myRsvp.activeOrderCount} active order{myRsvp.activeOrderCount === 1 ? '' : 's'} is being handled.</p> : null}
               </div>
             )}
@@ -4276,7 +4402,9 @@ function SchedulerBoard({
   const sortedRsvps = [...rsvps].sort((left, right) => {
     if (menu.requireGuestApproval) {
       const accessOrder = { pending: 0, approved: 1, declined: 2 };
-      const accessDifference = accessOrder[approvalStatus(left)] - accessOrder[approvalStatus(right)];
+      const leftAccess = left.status === 'yes' ? accessOrder[approvalStatus(left)] : 3;
+      const rightAccess = right.status === 'yes' ? accessOrder[approvalStatus(right)] : 3;
+      const accessDifference = leftAccess - rightAccess;
       if (accessDifference) return accessDifference;
     }
     const statusOrder = { yes: 0, maybe: 1, no: 2 };
@@ -4289,8 +4417,12 @@ function SchedulerBoard({
     .filter((rsvp) => rsvp.status === 'yes' && guestIsApproved(menu, rsvp))
     .reduce((total, rsvp) => total + partySize(rsvp), 0);
   const pendingApprovalCount = menu.requireGuestApproval
-    ? sortedRsvps.filter((rsvp) => approvalStatus(rsvp) === 'pending').length
+    ? sortedRsvps.filter((rsvp) => rsvp.status === 'yes' && approvalStatus(rsvp) === 'pending').length
     : 0;
+  const rsvpAccessLabel = (rsvp: Rsvp) =>
+    menu.requireGuestApproval && rsvp.status === 'yes'
+      ? approvalStatus(rsvp)
+      : 'Not required';
   const downloadGuestFile = (content: string, extension: 'csv' | 'vcf', type: string) => {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const anchor = document.createElement('a');
@@ -4309,14 +4441,14 @@ function SchedulerBoard({
     const rows = sortedRsvps.flatMap((rsvp) => {
       const response = rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going';
       return [
-        [rsvp.guestName, formatPhone(rsvp.guestPhone), 'Primary guest', '', response, menu.requireGuestApproval ? approvalStatus(rsvp) : 'Not required', partySize(rsvp), rsvp.activeOrderCount || 0],
+        [rsvp.guestName, formatPhone(rsvp.guestPhone), 'Primary guest', '', response, rsvpAccessLabel(rsvp), partySize(rsvp), rsvp.activeOrderCount || 0],
         ...(rsvp.companions || []).map((companion) => [
           companionName(companion),
           companionPhone(companion),
           'Additional guest',
           rsvp.guestName,
           response,
-          menu.requireGuestApproval ? approvalStatus(rsvp) : 'Not required',
+          rsvpAccessLabel(rsvp),
           '',
           '',
         ]),
@@ -4543,7 +4675,7 @@ function SchedulerBoard({
       : 'Waiting behind an earlier order';
   };
   const guestAccessControls = (rsvp: Rsvp) => {
-    if (!menu.requireGuestApproval) return null;
+    if (!menu.requireGuestApproval || rsvp.status !== 'yes') return null;
     const status = approvalStatus(rsvp);
     return (
       <div className="guest-approval-controls">
@@ -4569,9 +4701,16 @@ function SchedulerBoard({
         {rsvps.length ? (
           <div className="resource-meter-grid rsvp-card-strip">
             {sortedRsvps.map((rsvp) => (
-              <article key={rsvp.guestUid}>
-                <div><strong>{rsvp.guestName}</strong><span>{formatPhone(rsvp.guestPhone)} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : rsvp.status === 'no' ? 'Not going' : 'Previous RSVP'}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</span>{rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}</div>
-                <div className="rsvp-card-actions">{guestAccessControls(rsvp)}<span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Yes' : rsvp.status === 'maybe' ? 'Maybe' : 'No'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
+              <article key={rsvp.guestUid} className="rsvp-ticket">
+                <div className="rsvp-ticket-copy">
+                  <div className="rsvp-ticket-title">
+                    <strong>{rsvp.guestName}</strong>
+                    <button className="rsvp-delete" type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button>
+                  </div>
+                  <span className="rsvp-ticket-meta">{formatPhone(rsvp.guestPhone)} · {rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'} · party of {partySize(rsvp)}</span>
+                  {rsvp.companions?.length ? <small>Bringing: {rsvp.companions.map(companionName).join(', ')}</small> : null}
+                </div>
+                {guestAccessControls(rsvp)}
               </article>
             ))}
           </div>
@@ -4595,8 +4734,11 @@ function SchedulerBoard({
             <div className="guest-list-scroll">
               {sortedRsvps.map((rsvp) => (
                 <article key={rsvp.guestUid}>
-                  <div>
-                    <strong>{rsvp.guestName}{rsvp.status !== 'no' ? ` · party of ${partySize(rsvp)}` : ''}</strong>
+                  <div className="guest-list-copy">
+                    <div className="rsvp-ticket-title">
+                      <strong>{rsvp.guestName}</strong>
+                      <button className="rsvp-delete" type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button>
+                    </div>
                     <a href={`tel:${phoneDigits(rsvp.guestPhone)}`}>{formatPhone(rsvp.guestPhone)}</a>
                     {rsvp.companions?.length ? (
                       <details className="guest-companion-details">
@@ -4615,7 +4757,7 @@ function SchedulerBoard({
                       </details>
                     ) : null}
                   </div>
-                  <div className="rsvp-card-actions">{guestAccessControls(rsvp)}<span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span><button type="button" onClick={() => void deleteGuest(rsvp)} aria-label={`Delete ${rsvp.guestName}`} title="Delete test guest"><Trash2 size={14} /></button></div>
+                  <div className="rsvp-card-actions">{guestAccessControls(rsvp)}<span className={`host-rsvp-badge rsvp-${rsvp.status}`}>{rsvp.status === 'yes' ? 'Going' : rsvp.status === 'maybe' ? 'Maybe' : 'Not going'} · party of {partySize(rsvp)}</span></div>
                 </article>
               ))}
             </div>
@@ -5048,6 +5190,37 @@ function matchingResources(resources: EventResource[], query: string) {
     .map((match) => match.resource);
 }
 
+function EventPalettePicker({
+  value,
+  onChange,
+}: {
+  value: EventPalette;
+  onChange: (palette: EventPalette) => void;
+}) {
+  return (
+    <fieldset className="event-palette-picker">
+      <legend>Guest page colors</legend>
+      <div>
+        {EVENT_PALETTES.map((palette) => (
+          <label key={palette.value} className={value === palette.value ? 'selected' : ''}>
+            <input
+              type="radio"
+              name="event-color-palette"
+              value={palette.value}
+              checked={value === palette.value}
+              onChange={() => onChange(palette.value)}
+            />
+            <span aria-hidden="true">
+              {palette.colors.map((color) => <i key={color} style={{ background: color }} />)}
+            </span>
+            <small>{palette.label}</small>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function MenuEditor({
   menu,
   orders,
@@ -5073,6 +5246,7 @@ function MenuEditor({
     {},
   );
   const [uploadingItem, setUploadingItem] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
@@ -5248,6 +5422,14 @@ function MenuEditor({
       setUploadingItem(null);
     }
   };
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await saveMenu();
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <section className="editor-shell">
       <div className="mb-7 flex flex-wrap items-center justify-between gap-4 border-b border-black/10 pb-6">
@@ -5308,14 +5490,20 @@ function MenuEditor({
         </label>
       </div>
       <div className="event-identity-grid">
-        <label className="field-label">
+        <label className="field-label event-type-field">
           Event type
           <select
             className="field-input"
             value={menu.eventType || 'meal'}
             onChange={(event) => {
               const eventType = event.target.value as EventType;
-              setMenu({ ...menu, eventType, customEventType: eventType === 'custom' ? menu.customEventType : '', backgroundImageUrl: undefined });
+              setMenu({
+                ...menu,
+                eventType,
+                customEventType: eventType === 'custom' ? menu.customEventType : '',
+                backgroundImageUrl: '',
+                colorPalette: DEFAULT_EVENT_PALETTE[eventType],
+              });
             }}
           >
             {EVENT_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
@@ -5341,13 +5529,16 @@ function MenuEditor({
           />
           <span>
             <strong>Host approval required</strong>
-            <small>New guests wait for approval before seeing private details.</small>
+            <small>Only Going responses wait for approval before seeing private details.</small>
           </span>
         </label>
       </div>
       <section className="event-background-editor">
         <div
-          style={{ backgroundImage: `linear-gradient(90deg, rgb(24 3 8 / .76), rgb(24 3 8 / .06)), url(${eventBackground(menu)})` }}
+          style={{
+            ...eventThemeStyle(menu),
+            backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / .76), rgb(var(--theme-deep-rgb) / .06)), url(${eventBackground(menu)})`,
+          }}
           title={`${eventTypeLabel(menu)} background preview`}
         >
           <span>{eventTypeLabel(menu)}</span>
@@ -5361,10 +5552,16 @@ function MenuEditor({
               <ImagePlus size={15} /> Replace background
               <input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && void uploadEventBackground(event.target.files[0])} />
             </label>
-            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: undefined })}>Use curated image</button>}
+            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: '', colorPalette: DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'] })}>Use curated image</button>}
           </div>
         </section>
       </section>
+      {menu.backgroundImageUrl && (
+        <EventPalettePicker
+          value={eventPalette(menu)}
+          onChange={(colorPalette) => setMenu({ ...menu, colorPalette })}
+        />
+      )}
       <label className="field-label mt-5">
         Address
         <input
@@ -5866,14 +6063,14 @@ function MenuEditor({
           </button>
           <button
             disabled={
+              saving ||
               !menu.title.trim() ||
-              !menu.date.trim() ||
-              menu.items.some((item) => !item.name.trim())
+              !menu.date.trim()
             }
-            onClick={() => void saveMenu()}
+            onClick={() => void handleSave()}
             className="primary-button disabled:opacity-40"
           >
-            <Check size={16} /> Save event & menu
+            <Check size={16} /> {saving ? 'Saving…' : 'Save event & menu'}
           </button>
         </div>
       </div>

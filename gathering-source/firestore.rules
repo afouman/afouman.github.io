@@ -35,7 +35,8 @@ service cloud.firestore {
       return !eventRequiresApproval(eventId) || (
         exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid))
         && (
-          !guestRsvp(eventId, guestUid).data.keys().hasAny(['approvalStatus'])
+          guestRsvp(eventId, guestUid).data.status != 'yes'
+          || !guestRsvp(eventId, guestUid).data.keys().hasAny(['approvalStatus'])
           || guestRsvp(eventId, guestUid).data.approvalStatus == 'approved'
         )
       );
