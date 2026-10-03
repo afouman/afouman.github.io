@@ -481,6 +481,8 @@ const itemDescription = (item: MenuItem) =>
   item.description === DESCRIPTION_EXAMPLE
     ? ''
     : item.description || '';
+const menuHasPublishedItems = (menu: EventMenu) =>
+  menu.items.some((item) => item.name.trim());
 const withoutUndefined = <T,>(value: T): T => {
   if (Array.isArray(value)) return value.map((entry) => withoutUndefined(entry)) as T;
   if (value && typeof value === 'object') {
@@ -807,7 +809,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=12', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=13', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1173,6 +1175,7 @@ export default function Home() {
   }, [menu, myRsvp]);
 
   const count = Object.values(cart).reduce((a, b) => a + b, 0);
+  const hasMenu = menuHasPublishedItems(menu);
   const effectiveGuestProfile = guestProfile || (myRsvp ? {
     guestUid: myRsvp.guestUid,
     guestName: myRsvp.guestName,
@@ -2439,6 +2442,8 @@ export default function Home() {
             rsvpStatus={myRsvp?.status || null}
             rsvpApprovalStatus={myRsvp ? approvalStatus(myRsvp) : null}
             setQty={setQty}
+            rsvpButtonLabel={rsvpButtonLabel}
+            onOpenRsvp={openRsvpPanel}
           />
         </>
       ) : (
@@ -2762,7 +2767,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {mode === 'guest' && !submitted && (
+      {mode === 'guest' && hasMenu && !submitted && (
         <div className="guest-cart-bar fixed inset-x-0 bottom-0 z-40">
           <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
             <div>
@@ -3083,6 +3088,8 @@ function GuestMenu({
   rsvpStatus,
   rsvpApprovalStatus,
   setQty,
+  rsvpButtonLabel,
+  onOpenRsvp,
 }: {
   menu: EventMenu;
   categories: string[];
@@ -3093,9 +3100,13 @@ function GuestMenu({
   rsvpStatus: Rsvp['status'] | null;
   rsvpApprovalStatus: Rsvp['approvalStatus'] | null;
   setQty: (id: string, delta: number) => void;
+  rsvpButtonLabel: string;
+  onOpenRsvp: () => void;
 }) {
+  const hasMenu = menuHasPublishedItems(menu);
+  const eventActionOpen = hasMenu ? menu.accepting : menu.rsvpOpen !== false;
   return (
-    <div className="guest-experience pb-36">
+    <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
       <section className="guest-hero">
         <div
           className="guest-hero-photo"
@@ -3122,20 +3133,30 @@ function GuestMenu({
               </div>
             )}
             <div
-              className={`guest-order-state ${menu.accepting ? 'open' : 'closed'}`}
+              className={`guest-order-state ${eventActionOpen ? 'open' : 'closed'}`}
             >
               <i />
               {!accessGranted
                 ? rsvpApprovalStatus === 'declined' ? 'Access not approved' : 'Host approval required'
-                : menu.accepting ? 'Orders are open' : 'Ordering has closed'}
+                : !hasMenu
+                  ? menu.rsvpOpen === false ? 'RSVPs are closed' : 'RSVPs are open'
+                  : menu.accepting ? 'Orders are open' : 'Ordering has closed'}
             </div>
+            {!hasMenu && (
+              <button type="button" onClick={onOpenRsvp} className="guest-rsvp-button guest-hero-rsvp">
+                <ListChecks size={17} /> {rsvpButtonLabel}
+              </button>
+            )}
           </div>
         </div>
-        <div className="guest-scroll-cue">
-          <span>Explore the menu</span>
-          <i />
-        </div>
+        {hasMenu && accessGranted && (
+          <div className="guest-scroll-cue">
+            <span>Explore the menu</span>
+            <i />
+          </div>
+        )}
       </section>
+      {hasMenu && (
       <section className="guest-menu-shell">
         {!accessGranted ? (
           <div className="guest-access-gate">
@@ -3292,6 +3313,7 @@ function GuestMenu({
           </>
         )}
       </section>
+      )}
     </div>
   );
 }
