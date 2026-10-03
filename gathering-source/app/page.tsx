@@ -5472,24 +5472,6 @@ function MenuEditor({
           />
           {menu.startsAt && <small className="date-preview">{menu.date}</small>}
         </label>
-        <label className="field-label compact-integer-field">
-          Max friends per guest
-          <input
-            type="number"
-            min="0"
-            max="20"
-            className="field-input"
-            value={menu.maxAdditionalGuests || 0}
-            onChange={(event) =>
-              setMenu({
-                ...menu,
-                maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
-              })
-            }
-          />
-        </label>
-      </div>
-      <div className="event-identity-grid">
         <label className="field-label event-type-field">
           Event type
           <select
@@ -5509,6 +5491,24 @@ function MenuEditor({
             {EVENT_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
           </select>
         </label>
+        <label className="field-label compact-integer-field">
+          Max friends per guest
+          <input
+            type="number"
+            min="0"
+            max="20"
+            className="field-input"
+            value={menu.maxAdditionalGuests || 0}
+            onChange={(event) =>
+              setMenu({
+                ...menu,
+                maxAdditionalGuests: Math.min(20, Math.max(0, Number(event.target.value) || 0)),
+              })
+            }
+          />
+        </label>
+      </div>
+      <div className="event-identity-grid">
         {(menu.eventType || 'meal') === 'custom' && (
           <label className="field-label">
             Custom event type
