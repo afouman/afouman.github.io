@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
@@ -46,6 +46,7 @@ import {
 type EventResource = { id: string; name: string; capacity: number };
 type EventType = 'meal' | 'movie' | 'game' | 'birthday' | 'custom';
 type EventPalette = 'wine' | 'midnight' | 'forest' | 'celebration' | 'twilight';
+type BackgroundFocus = { x: number; y: number };
 type MenuItem = {
   id: string;
   name: string;
@@ -75,6 +76,7 @@ type EventMenu = {
   eventType?: EventType;
   customEventType?: string;
   backgroundImageUrl?: string;
+  backgroundFocus?: BackgroundFocus;
   colorPalette?: EventPalette;
   maxAdditionalGuests?: number;
   categories?: string[];
@@ -282,6 +284,11 @@ const eventTypeLabel = (menu: EventMenu) =>
     : EVENT_TYPES.find((type) => type.value === (menu.eventType || 'meal'))?.label || 'Gathering';
 const eventBackground = (menu: EventMenu) =>
   menu.backgroundImageUrl || EVENT_BACKGROUNDS[menu.eventType || 'meal'];
+const centerBackgroundFocus = (): BackgroundFocus => ({ x: 50, y: 50 });
+const eventBackgroundFocus = (menu: Pick<EventMenu, 'backgroundFocus'>): BackgroundFocus => ({
+  x: Math.min(100, Math.max(0, menu.backgroundFocus?.x ?? 50)),
+  y: Math.min(100, Math.max(0, menu.backgroundFocus?.y ?? 50)),
+});
 const approvalStatus = (rsvp?: Rsvp | null) => rsvp?.approvalStatus || 'approved';
 const guestIsApproved = (menu: EventMenu, rsvp?: Rsvp | null) =>
   !menu.requireGuestApproval || rsvp?.status !== 'yes' || approvalStatus(rsvp) === 'approved';
@@ -694,19 +701,27 @@ async function guestPinHash(guestUid: string, pin: string) {
   return guestNameIndexId(`${guestUid}:${pin}`);
 }
 
-async function resizeImageFile(file: File, longestEdge: number, quality: number) {
+async function resizeImageFile(file: Blob, longestEdge: number, quality: number) {
   return new Promise<string>((resolve, reject) => {
     const source = URL.createObjectURL(file);
     const image = new window.Image();
     image.onload = () => {
-      const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
-      const scale = Math.min(1, longestEdge / longestSide);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-      canvas.getContext('2d')?.drawImage(image, 0, 0, canvas.width, canvas.height);
-      URL.revokeObjectURL(source);
-      resolve(canvas.toDataURL('image/jpeg', quality));
+      try {
+        const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+        if (!longestSide) throw new Error('Image has no readable dimensions');
+        const scale = Math.min(1, longestEdge / longestSide);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Image canvas unavailable');
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } catch {
+        reject(new Error('Could not prepare that image'));
+      } finally {
+        URL.revokeObjectURL(source);
+      }
     };
     image.onerror = () => {
       URL.revokeObjectURL(source);
@@ -714,6 +729,49 @@ async function resizeImageFile(file: File, longestEdge: number, quality: number)
     };
     image.src = source;
   });
+}
+
+const heicFile = (file: File) =>
+  /\.(heic|heif)$/i.test(file.name)
+  || ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'].includes(file.type.toLowerCase());
+
+async function browserReadableImage(file: File): Promise<File> {
+  if (!heicFile(file)) return file;
+  if (typeof window === 'undefined')
+    throw new Error('HEIC conversion is only available in the browser');
+  try {
+    const { default: convert } = await import('heic2any');
+    if (typeof convert !== 'function') throw new Error('HEIC converter unavailable');
+    const converted = await convert({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+    const firstFrame = Array.isArray(converted) ? converted[0] : converted;
+    if (!(firstFrame instanceof Blob)) throw new Error('No usable image found');
+    return new File(
+      [firstFrame],
+      `${file.name.replace(/\.(heic|heif)$/i, '') || 'image'}.jpg`,
+      { type: 'image/jpeg', lastModified: file.lastModified },
+    );
+  } catch {
+    throw new Error('Could not convert that HEIC or HEIF photo');
+  }
+}
+
+async function compressImageForDocument(file: File, maxDataUrlLength: number) {
+  const readable = await browserReadableImage(file);
+  const attempts = [
+    [2000, 0.82],
+    [1800, 0.76],
+    [1600, 0.7],
+    [1400, 0.64],
+    [1200, 0.58],
+    [1000, 0.52],
+    [840, 0.48],
+    [720, 0.44],
+  ] as const;
+  for (const [longestEdge, quality] of attempts) {
+    const imageUrl = await resizeImageFile(readable, longestEdge, quality);
+    if (imageUrl.length <= maxDataUrlLength) return imageUrl;
+  }
+  throw new Error('This photo could not be compressed safely. Try a cropped copy');
 }
 
 export default function Home() {
@@ -767,6 +825,7 @@ export default function Home() {
     eventType: 'meal' as EventType,
     customEventType: '',
     backgroundImageUrl: '',
+    backgroundFocus: centerBackgroundFocus(),
     colorPalette: '' as EventPalette | '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
@@ -1314,6 +1373,7 @@ export default function Home() {
       eventType: newEvent.eventType,
       customEventType: newEvent.eventType === 'custom' ? newEvent.customEventType.trim() : '',
       backgroundImageUrl: newEvent.backgroundImageUrl,
+      backgroundFocus: newEvent.backgroundFocus,
       colorPalette: newEvent.colorPalette || undefined,
       maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
@@ -1374,6 +1434,7 @@ export default function Home() {
       eventType: 'meal',
       customEventType: '',
       backgroundImageUrl: '',
+      backgroundFocus: centerBackgroundFocus(),
       colorPalette: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
@@ -2228,20 +2289,24 @@ export default function Home() {
     }
   }
 
-  async function prepareEventBackground(file: File) {
-    if (!file.type.startsWith('image/')) throw new Error('Choose an image file');
-    if (file.size > 8 * 1024 * 1024) throw new Error('Choose an image smaller than 8 MB');
-    const imageUrl = await resizeImageFile(file, 1600, 0.72);
-    if (imageUrl.length > 320_000)
-      throw new Error('That image is still too large. Choose a simpler or smaller image');
-    return imageUrl;
+  async function prepareEventBackground(file: File, maxDataUrlLength = 360_000) {
+    if (!file.type.startsWith('image/') && !heicFile(file))
+      throw new Error('Choose a JPEG, PNG, WebP, HEIC, or HEIF image');
+    if (file.size > 40 * 1024 * 1024)
+      throw new Error('The original photo is over 40 MB. Export a smaller copy first');
+    return compressImageForDocument(file, maxDataUrlLength);
   }
 
   async function chooseNewEventBackground(file?: File) {
     if (!file) return;
     try {
+      notify(heicFile(file) ? 'Converting HEIC photo…' : 'Optimizing background photo…');
       const backgroundImageUrl = await prepareEventBackground(file);
-      setNewEvent((current) => ({ ...current, backgroundImageUrl }));
+      setNewEvent((current) => ({
+        ...current,
+        backgroundImageUrl,
+        backgroundFocus: centerBackgroundFocus(),
+      }));
       notify('Custom event background ready');
     } catch (error) {
       notify((error as Error).message || 'Could not use that image');
@@ -2250,8 +2315,20 @@ export default function Home() {
 
   async function uploadEventBackground(file: File) {
     try {
-      const backgroundImageUrl = await prepareEventBackground(file);
-      setMenu((current) => ({ ...current, backgroundImageUrl }));
+      notify(heicFile(file) ? 'Converting HEIC photo…' : 'Optimizing background photo…');
+      const itemImageBytes = menu.items.reduce(
+        (total, item) => total + (item.imageUrl?.startsWith('data:') ? item.imageUrl.length : 0),
+        0,
+      );
+      const availableForBackground = Math.min(360_000, 900_000 - itemImageBytes);
+      if (availableForBackground < 90_000)
+        throw new Error('Remove a menu-item photo before adding this background');
+      const backgroundImageUrl = await prepareEventBackground(file, availableForBackground);
+      setMenu((current) => ({
+        ...current,
+        backgroundImageUrl,
+        backgroundFocus: centerBackgroundFocus(),
+      }));
       notify('Background updated — save the event when ready');
     } catch (error) {
       notify((error as Error).message || 'Could not use that image');
@@ -2562,7 +2639,13 @@ export default function Home() {
                       name="event-type"
                       value={type.value}
                       checked={newEvent.eventType === type.value}
-                      onChange={() => setNewEvent({ ...newEvent, eventType: type.value, backgroundImageUrl: '', colorPalette: '' })}
+                      onChange={() => setNewEvent({
+                        ...newEvent,
+                        eventType: type.value,
+                        backgroundImageUrl: '',
+                        backgroundFocus: centerBackgroundFocus(),
+                        colorPalette: '',
+                      })}
                     />
                     <strong>{type.label}</strong>
                     <small>{type.description}</small>
@@ -2583,24 +2666,33 @@ export default function Home() {
               </label>
             )}
             <section className="new-event-appearance">
-              <div
+              <BackgroundPositionPreview
                 className="new-event-background-preview"
-                style={{
-                  ...eventThemeStyle({ eventType: newEvent.eventType, colorPalette: newEvent.colorPalette || undefined }),
-                  backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / .88), rgb(var(--theme-deep-rgb) / .14)), url(${newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]})`,
-                }}
-                aria-label={`${EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label} background preview`}
-              >
-                <span>{newEvent.customEventType || EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label}</span>
-              </div>
+                theme={eventThemeStyle({ eventType: newEvent.eventType, colorPalette: newEvent.colorPalette || undefined })}
+                imageUrl={newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]}
+                focus={newEvent.backgroundFocus}
+                onFocusChange={newEvent.backgroundImageUrl
+                  ? (backgroundFocus) => setNewEvent((current) => ({ ...current, backgroundFocus }))
+                  : undefined}
+                label={newEvent.customEventType || EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label || 'Gathering'}
+                shadeOpacity={0.88}
+              />
               <div>
                 <strong>Event background</strong>
-                <small>Use the curated image or upload your own.</small>
+                <small>Use the curated image or upload your own. Drag a custom image to frame it.</small>
                 <label className="secondary-button">
                   <ImagePlus size={15} /> Choose image
-                  <input type="file" accept="image/*" onChange={(event) => void chooseNewEventBackground(event.target.files?.[0])} />
+                  <input
+                    type="file"
+                    accept="image/*,.heic,.heif,image/heic,image/heif"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.currentTarget.value = '';
+                      void chooseNewEventBackground(file);
+                    }}
+                  />
                 </label>
-                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '' })}>Use curated image</button>}
+                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus() })}>Use curated image</button>}
               </div>
             </section>
             {newEvent.backgroundImageUrl && (
@@ -3110,7 +3202,10 @@ function GuestMenu({
       <section className="guest-hero">
         <div
           className="guest-hero-photo"
-          style={{ backgroundImage: `url(${eventBackground(menu)})` }}
+          style={{
+            backgroundImage: `url(${eventBackground(menu)})`,
+            backgroundPosition: `${eventBackgroundFocus(menu).x}% ${eventBackgroundFocus(menu).y}%`,
+          }}
         />
         <div className="guest-hero-shade" />
         <div className="guest-hero-content">
@@ -5215,6 +5310,125 @@ function matchingResources(resources: EventResource[], query: string) {
     .map((match) => match.resource);
 }
 
+function BackgroundPositionPreview({
+  imageUrl,
+  focus,
+  onFocusChange,
+  label,
+  className,
+  theme,
+  shadeOpacity = 0.76,
+}: {
+  imageUrl: string;
+  focus: BackgroundFocus;
+  onFocusChange?: (focus: BackgroundFocus) => void;
+  label: string;
+  className: string;
+  theme?: CSSProperties;
+  shadeOpacity?: number;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const dragStart = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    focus: BackgroundFocus;
+  } | null>(null);
+
+  useEffect(() => {
+    const image = new window.Image();
+    image.onload = () => setImageSize({ width: image.naturalWidth, height: image.naturalHeight });
+    image.src = imageUrl;
+    return () => {
+      image.onload = null;
+    };
+  }, [imageUrl]);
+
+  const endDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (dragStart.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    dragStart.current = null;
+    setDragging(false);
+  };
+
+  return (
+    <div className="background-position-control">
+      <button
+        type="button"
+        disabled={!onFocusChange}
+        className={`${className} ${onFocusChange ? 'is-positionable' : ''} ${dragging ? 'is-dragging' : ''}`}
+        style={{
+          ...theme,
+          backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / ${shadeOpacity}), rgb(var(--theme-deep-rgb) / .06)), url(${imageUrl})`,
+          backgroundPosition: `${focus.x}% ${focus.y}%`,
+        }}
+        aria-label={onFocusChange ? `${label} background. Drag or use arrow keys to reposition the image` : `${label} background preview`}
+        onPointerDown={(event) => {
+          if (!onFocusChange || event.button !== 0) return;
+          dragStart.current = {
+            pointerId: event.pointerId,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            focus,
+          };
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+        }}
+        onPointerMove={(event) => {
+          const start = dragStart.current;
+          if (!onFocusChange || !start || start.pointerId !== event.pointerId) return;
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const scale = imageSize.width && imageSize.height
+            ? Math.max(bounds.width / imageSize.width, bounds.height / imageSize.height)
+            : 1;
+          const overflowX = Math.max(0, imageSize.width * scale - bounds.width);
+          const overflowY = Math.max(0, imageSize.height * scale - bounds.height);
+          onFocusChange({
+            x: overflowX > 0
+              ? Math.min(100, Math.max(0, start.focus.x - ((event.clientX - start.clientX) / overflowX) * 100))
+              : start.focus.x,
+            y: overflowY > 0
+              ? Math.min(100, Math.max(0, start.focus.y - ((event.clientY - start.clientY) / overflowY) * 100))
+              : start.focus.y,
+          });
+        }}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onKeyDown={(event) => {
+          if (!onFocusChange) return;
+          const step = event.shiftKey ? 10 : 2;
+          const next = { ...focus };
+          if (event.key === 'ArrowLeft') next.x -= step;
+          else if (event.key === 'ArrowRight') next.x += step;
+          else if (event.key === 'ArrowUp') next.y -= step;
+          else if (event.key === 'ArrowDown') next.y += step;
+          else if (event.key === 'Home') Object.assign(next, centerBackgroundFocus());
+          else return;
+          event.preventDefault();
+          onFocusChange({
+            x: Math.min(100, Math.max(0, next.x)),
+            y: Math.min(100, Math.max(0, next.y)),
+          });
+        }}
+      >
+        <span className="background-preview-label">{label}</span>
+        {onFocusChange && <small className="background-position-hint"><GripVertical size={14} /> Drag to reposition</small>}
+      </button>
+      {onFocusChange && (
+        <button
+          type="button"
+          className="background-position-reset"
+          onClick={() => onFocusChange(centerBackgroundFocus())}
+        >
+          Center
+        </button>
+      )}
+    </div>
+  );
+}
+
 function EventPalettePicker({
   value,
   onChange,
@@ -5509,6 +5723,7 @@ function MenuEditor({
                 eventType,
                 customEventType: eventType === 'custom' ? menu.customEventType : '',
                 backgroundImageUrl: '',
+                backgroundFocus: centerBackgroundFocus(),
                 colorPalette: DEFAULT_EVENT_PALETTE[eventType],
               });
             }}
@@ -5559,25 +5774,34 @@ function MenuEditor({
         </label>
       </div>
       <section className="event-background-editor">
-        <div
-          style={{
-            ...eventThemeStyle(menu),
-            backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / .76), rgb(var(--theme-deep-rgb) / .06)), url(${eventBackground(menu)})`,
-          }}
-          title={`${eventTypeLabel(menu)} background preview`}
-        >
-          <span>{eventTypeLabel(menu)}</span>
-        </div>
+        <BackgroundPositionPreview
+          className="event-background-preview"
+          theme={eventThemeStyle(menu)}
+          imageUrl={eventBackground(menu)}
+          focus={eventBackgroundFocus(menu)}
+          onFocusChange={menu.backgroundImageUrl
+            ? (backgroundFocus) => setMenu({ ...menu, backgroundFocus })
+            : undefined}
+          label={eventTypeLabel(menu)}
+        />
         <section>
           <p className="eyebrow">Event backdrop</p>
           <strong>Set the mood before guests arrive.</strong>
-          <small>Changing the event type selects its curated image. A custom upload overrides it.</small>
+          <small>Changing the event type selects its curated image. Upload a custom image, then drag it to choose the framing.</small>
           <div>
             <label className="secondary-button">
               <ImagePlus size={15} /> Replace background
-              <input type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && void uploadEventBackground(event.target.files[0])} />
+              <input
+                type="file"
+                accept="image/*,.heic,.heif,image/heic,image/heif"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.currentTarget.value = '';
+                  if (file) void uploadEventBackground(file);
+                }}
+              />
             </label>
-            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: '', colorPalette: DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'] })}>Use curated image</button>}
+            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus(), colorPalette: DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'] })}>Use curated image</button>}
           </div>
         </section>
       </section>
