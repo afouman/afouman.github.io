@@ -807,7 +807,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=11', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=12', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -3097,7 +3097,10 @@ function GuestMenu({
   return (
     <div className="guest-experience pb-36">
       <section className="guest-hero">
-        <div className="guest-hero-photo" style={{ backgroundImage: `url(${eventBackground(menu)})` }} />
+        <div
+          className="guest-hero-photo"
+          style={{ backgroundImage: `url(${eventBackground(menu)})` }}
+        />
         <div className="guest-hero-shade" />
         <div className="guest-hero-content">
           <div className="guest-invite-mark">

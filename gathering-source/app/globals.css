@@ -1314,9 +1314,23 @@ button:disabled {
   inset: 0;
 }
 .guest-hero-photo {
+  overflow: hidden;
   background: var(--wine-deep);
-  transform: scale(1.015);
+}
+.guest-hero-photo::before,
+.guest-hero-photo::after {
+  position: absolute;
+  content: '';
+}
+.guest-hero-photo::before {
+  inset: -1.5rem;
+  background-image: inherit;
+  background-position: center;
+  background-size: cover;
   animation: hero-breathe 16s ease-in-out infinite alternate;
+}
+.guest-hero-photo::after {
+  display: none;
 }
 .guest-hero-shade {
   background:
@@ -2694,12 +2708,33 @@ button:disabled {
     min-height: 800px;
   }
   .guest-hero-photo {
-    background-position: 62% center;
+    background: var(--wine-deep);
+  }
+  .guest-hero-photo::before {
+    inset: -2rem;
+    background-position: center;
+    filter: blur(18px) saturate(0.82);
+    opacity: 0.64;
+    animation: none;
+    transform: scale(1.12);
+  }
+  .guest-hero-photo::after {
+    display: block;
+    top: clamp(4.5rem, 11svh, 6.5rem);
+    right: 0;
+    left: 0;
+    height: 56.28vw;
+    background-image: inherit;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
   }
   .guest-hero-shade {
     background:
-      linear-gradient(90deg, rgb(24 3 8/0.94), rgb(37 9 15/0.42)),
-      linear-gradient(0deg, rgb(20 3 7/0.85), transparent 60%);
+      linear-gradient(90deg, rgb(var(--theme-deep-rgb)/0.94), rgb(var(--theme-rgb)/0.42)),
+      linear-gradient(0deg, rgb(var(--theme-deep-rgb)/0.85), transparent 60%);
   }
   .guest-hero-content {
     padding-right: 1.25rem;
