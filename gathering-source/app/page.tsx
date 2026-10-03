@@ -201,11 +201,11 @@ const EVENT_TYPES: Array<{ value: EventType; label: string; description: string 
   { value: 'custom', label: 'Something else', description: 'Name your own kind of gathering' },
 ];
 const EVENT_BACKGROUNDS: Record<EventType, string> = {
-  meal: '/gather-dinner-hero.jpg',
-  movie: '/gather-movie-night-hero.jpg',
-  game: '/gather-game-night-hero.jpg',
-  birthday: '/gather-birthday-party-hero.jpg',
-  custom: '/gather-custom-event-hero.jpg',
+  meal: './gather-dinner-hero.jpg',
+  movie: './gather-movie-night-hero.jpg',
+  game: './gather-game-night-hero.jpg',
+  birthday: './gather-birthday-party-hero.jpg',
+  custom: './gather-custom-event-hero.jpg',
 };
 const EVENT_PALETTES: Array<{
   value: EventPalette;
@@ -807,7 +807,7 @@ export default function Home() {
     ) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=10', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=11', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);

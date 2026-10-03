@@ -322,9 +322,23 @@ button:disabled {
 .event-type-field {
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: center;
+  border: 1px solid rgb(33 28 24 / 0.12);
+  border-radius: 0.85rem;
+  background: rgb(255 255 255 / 0.35);
+  padding: 0.62rem 0.85rem;
 }
-.event-type-field .field-input { min-height: 46px; }
+.event-type-field .field-input {
+  min-height: 28px;
+  margin-top: 0.12rem;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
 .invite-approval-option.compact { align-items: center; }
 .invite-approval-option {
   display: flex;
@@ -1300,7 +1314,7 @@ button:disabled {
   inset: 0;
 }
 .guest-hero-photo {
-  background: url('/gather-dinner-hero.jpg') center/cover no-repeat;
+  background: var(--wine-deep);
   transform: scale(1.015);
   animation: hero-breathe 16s ease-in-out infinite alternate;
 }
