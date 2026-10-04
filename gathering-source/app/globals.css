@@ -2205,7 +2205,7 @@ button:disabled {
 .chat-header .eyebrow { margin: 0 0 0.1rem; font-size: 0.5rem; }
 .chat-header h2 { margin: 0; font-size: 1.35rem; line-height: 1.05; }
 .chat-header span { display: block; margin-top: 0.2rem; color: rgb(246 240 228 / 0.5); font-size: 0.66rem; }
-.chat-header > button,
+.chat-header-actions > button,
 .chat-poll-composer > div > button {
   display: grid;
   width: 34px;
@@ -2217,7 +2217,18 @@ button:disabled {
   background: transparent;
   color: rgb(246 240 228 / 0.6);
 }
-.chat-header > button:hover { background: rgb(255 255 255 / 0.07); color: #f6f0e4; }
+.chat-header-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.2rem;
+}
+.chat-header-actions > button:hover { background: rgb(255 255 255 / 0.07); color: #f6f0e4; }
+.chat-header-actions > button.enabled {
+  background: rgb(242 166 142 / 0.16);
+  color: var(--peach);
+}
+.chat-header-actions > button:disabled { cursor: not-allowed; opacity: 0.35; }
 .chat-pinned-banner {
   display: flex;
   min-width: 0;

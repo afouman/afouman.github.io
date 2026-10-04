@@ -6,6 +6,9 @@ import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
   ArrowLeft,
+  Bell,
+  BellOff,
+  BellRing,
   CalendarPlus,
   Camera,
   Check,
@@ -138,6 +141,7 @@ type ChatActor = {
   name: string;
   role: 'host' | 'guest';
 };
+type PushNotificationState = 'unsupported' | 'disabled' | 'blocked' | 'enabled';
 type ChatReply = { id: string; authorName: string; text: string };
 type ChatPollOption = {
   id: string;
@@ -431,6 +435,17 @@ const demoMenu: EventMenu = {
     },
   ],
 };
+const EMPTY_EVENT_ID = 'no-event-selected';
+const emptyEventMenu: EventMenu = {
+  id: EMPTY_EVENT_ID,
+  title: 'Gather',
+  date: '',
+  welcome: 'Open an event link to see its invitation.',
+  accepting: false,
+  rsvpOpen: false,
+  chatOpen: false,
+  items: [],
+};
 const sampleOrders: Order[] = [
   {
     id: 'o1',
@@ -480,8 +495,14 @@ const firebaseConfigured = Boolean(
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY &&
   process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
 );
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim() || '';
+const PUSH_NOTIFICATIONS_ENABLED =
+  process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
+const LAST_EVENT_KEY = 'gather-last-event';
+const pushSubscriptionKey = (eventId: string, actorUid: string) =>
+  `gather-chat-push:${eventId}:${actorUid}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
 const demoOrdersKey = (eventId: string) => `gather-demo-orders-v2:${eventId}`;
 const DEMO_CHANNEL = 'gather-demo-sync';
@@ -701,12 +722,22 @@ function saveReceipt(eventId: string, orderId: string, createdAt: number) {
 
 const guestNameKey = (name: string) => name.trim().toLocaleLowerCase();
 const guestDisplayName = (order: Order) => order.guestLabel || order.guestName;
-async function guestNameIndexId(name: string) {
-  const bytes = new TextEncoder().encode(guestNameKey(name));
+async function sha256Text(value: string) {
+  const bytes = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('');
+}
+
+async function guestNameIndexId(name: string) {
+  return sha256Text(guestNameKey(name));
+}
+
+function vapidKeyBytes(value: string) {
+  const padding = '='.repeat((4 - value.length % 4) % 4);
+  const base64 = (value + padding).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }
 
 async function guestPinHash(guestUid: string, pin: string) {
@@ -788,8 +819,8 @@ async function compressImageForDocument(file: File, maxDataUrlLength: number) {
 
 export default function Home() {
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
-  const [menu, setMenu] = useState<EventMenu>(demoMenu);
-  const [events, setEvents] = useState<EventMenu[]>([demoMenu]);
+  const [menu, setMenu] = useState<EventMenu>(firebaseConfigured ? emptyEventMenu : demoMenu);
+  const [events, setEvents] = useState<EventMenu[]>(firebaseConfigured ? [] : [demoMenu]);
   const [orders, setOrders] = useState<Order[]>(sampleOrders);
   const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [eventIncomingCounts, setEventIncomingCounts] = useState<Record<string, number>>({});
@@ -813,6 +844,9 @@ export default function Home() {
   const [rsvpPanelOpen, setRsvpPanelOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatStarted, setChatStarted] = useState(false);
+  const [pushNotificationState, setPushNotificationState] =
+    useState<PushNotificationState>('disabled');
+  const [pushNotificationBusy, setPushNotificationBusy] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
   const [rsvpChoice, setRsvpChoice] = useState<Rsvp['status']>('yes');
   const [rsvpCompanionNames, setRsvpCompanionNames] = useState<string[]>([]);
@@ -845,10 +879,23 @@ export default function Home() {
   });
 
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('view') === 'host')
+    const parameters = new URLSearchParams(window.location.search);
+    const hostView = parameters.get('view') === 'host';
+    if (hostView)
       queueMicrotask(() => setMode('host'));
-    const eventId =
-      new URLSearchParams(window.location.search).get('event') || demoMenu.id;
+    const linkedEventId = parameters.get('event');
+    const rememberedEventId = localStorage.getItem(LAST_EVENT_KEY);
+    const eventId = linkedEventId
+      || rememberedEventId
+      || (firebaseConfigured ? EMPTY_EVENT_ID : demoMenu.id);
+    if (linkedEventId) localStorage.setItem(LAST_EVENT_KEY, linkedEventId);
+    else if (rememberedEventId) {
+      history.replaceState(
+        {},
+        '',
+        hostView ? `?view=host&event=${rememberedEventId}` : `?event=${rememberedEventId}`,
+      );
+    }
     queueMicrotask(() => setReceipts(readReceipts(eventId)));
     const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
     if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
@@ -875,14 +922,10 @@ export default function Home() {
       window.matchMedia('(display-mode: standalone)').matches ||
       Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
     queueMicrotask(() => setIsStandalone(installed));
-    if (
-      mode === 'host' &&
-      location.protocol === 'https:' &&
-      'serviceWorker' in navigator
-    ) {
+    if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=13', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=17', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1010,8 +1053,9 @@ export default function Home() {
         ) setHostUser(hostAuthUser.email || hostAuthUser.uid);
       }
       const db = store.getFirestore(app);
-      const eventId =
-        new URLSearchParams(location.search).get('event') || menu.id;
+      const eventId = new URLSearchParams(location.search).get('event')
+        || localStorage.getItem(LAST_EVENT_KEY)
+        || menu.id;
       const unsubMenu = store.onSnapshot(
         store.doc(db, 'events', eventId),
         (snap) => {
@@ -1319,6 +1363,139 @@ export default function Home() {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
   };
+  const pushActorUid = chatActor?.uid;
+  useEffect(() => {
+    let nextState: PushNotificationState = 'disabled';
+    if (!pushActorUid) {
+      queueMicrotask(() => setPushNotificationState(nextState));
+      return;
+    }
+    if (
+      typeof Notification === 'undefined'
+      || !('serviceWorker' in navigator)
+      || !('PushManager' in window)
+    ) {
+      nextState = 'unsupported';
+    } else if (Notification.permission === 'denied') {
+      nextState = 'blocked';
+    } else {
+      const enabled = Notification.permission === 'granted'
+        && Boolean(localStorage.getItem(pushSubscriptionKey(menu.id, pushActorUid)));
+      nextState = enabled ? 'enabled' : 'disabled';
+    }
+    queueMicrotask(() => setPushNotificationState(nextState));
+  }, [menu.id, pushActorUid]);
+
+  const enableChatNotifications = async () => {
+    if (!chatActor || pushNotificationBusy) return;
+    if (!firebaseConfigured || !VAPID_PUBLIC_KEY || !PUSH_NOTIFICATIONS_ENABLED) {
+      notify('Push notifications are not configured for this release yet.');
+      return;
+    }
+    if (
+      typeof Notification === 'undefined'
+      || !('serviceWorker' in navigator)
+      || !('PushManager' in window)
+    ) {
+      setPushNotificationState('unsupported');
+      notify('This browser does not support web-app notifications.');
+      return;
+    }
+    const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isAppleMobile && !isStandalone) {
+      notify('On iPhone, add Gather to the Home Screen before enabling notifications.');
+      return;
+    }
+    setPushNotificationBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setPushNotificationState(permission === 'denied' ? 'blocked' : 'disabled');
+        notify(permission === 'denied'
+          ? 'Notifications are blocked. Enable them for Gather in iPhone Settings.'
+          : 'Notification permission was not enabled.');
+        return;
+      }
+      const workerUrl = new URL('sw.js?v=17', document.baseURI);
+      const registration = await navigator.serviceWorker.register(workerUrl.href, {
+        scope: './',
+        updateViaCache: 'none',
+      });
+      await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription()
+        || await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
+        });
+      const serialized = subscription.toJSON();
+      if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
+        throw new Error('The browser returned an incomplete push subscription.');
+      const subscriptionId = await sha256Text(serialized.endpoint);
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/firestore'),
+      ]);
+      await store.setDoc(
+        store.doc(
+          store.getFirestore(getApp()),
+          'events',
+          menu.id,
+          'pushSubscriptions',
+          subscriptionId,
+        ),
+        {
+          endpoint: serialized.endpoint,
+          expirationTime: serialized.expirationTime ?? null,
+          keys: { p256dh: serialized.keys.p256dh, auth: serialized.keys.auth },
+          actorUid: chatActor.uid,
+          actorRole: chatActor.role,
+          actorName: chatActor.name,
+          createdAt: store.serverTimestamp(),
+          updatedAt: store.serverTimestamp(),
+        },
+      );
+      localStorage.setItem(
+        pushSubscriptionKey(menu.id, chatActor.uid),
+        subscriptionId,
+      );
+      setPushNotificationState('enabled');
+      notify('Chat notifications are on for this event.');
+    } catch (error) {
+      setPushNotificationState('disabled');
+      notify(error instanceof Error ? error.message : 'Could not enable notifications.');
+    } finally {
+      setPushNotificationBusy(false);
+    }
+  };
+
+  const disableChatNotifications = async () => {
+    if (!chatActor || pushNotificationBusy) return;
+    const storageKey = pushSubscriptionKey(menu.id, chatActor.uid);
+    const subscriptionId = localStorage.getItem(storageKey);
+    setPushNotificationBusy(true);
+    try {
+      if (firebaseConfigured && subscriptionId) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        await store.deleteDoc(store.doc(
+          store.getFirestore(getApp()),
+          'events',
+          menu.id,
+          'pushSubscriptions',
+          subscriptionId,
+        ));
+      }
+      localStorage.removeItem(storageKey);
+      setPushNotificationState('disabled');
+      notify('Chat notifications are off for this event.');
+    } catch {
+      notify('Could not turn off notifications. Try again.');
+    } finally {
+      setPushNotificationBusy(false);
+    }
+  };
   const adjustDemoRsvpActiveCount = (uid: string | undefined, delta: number) => {
     if (!uid) return;
     const nextRsvps = rsvps.map((entry) => entry.guestUid === uid
@@ -1331,10 +1508,14 @@ export default function Home() {
   };
   const switchMode = (next: 'guest' | 'host') => {
     setMode(next);
+    const selectedEventId = menu.id === EMPTY_EVENT_ID ? '' : menu.id;
+    if (selectedEventId) localStorage.setItem(LAST_EVENT_KEY, selectedEventId);
     history.replaceState(
       {},
       '',
-      next === 'host' ? `?view=host&event=${menu.id}` : `?event=${menu.id}`,
+      next === 'host'
+        ? selectedEventId ? `?view=host&event=${selectedEventId}` : '?view=host'
+        : selectedEventId ? `?event=${selectedEventId}` : './',
     );
   };
   const useAnotherGuestProfile = () => {
@@ -1358,6 +1539,7 @@ export default function Home() {
           localStorage.getItem(demoOrdersKey(event.id)) || '[]',
         ) as Order[]);
     setOrders(nextOrders);
+    localStorage.setItem(LAST_EVENT_KEY, event.id);
     history.replaceState({}, '', `?view=host&event=${event.id}`);
   }
 
@@ -1454,6 +1636,7 @@ export default function Home() {
       colorPalette: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
+    localStorage.setItem(LAST_EVENT_KEY, event.id);
     history.replaceState({}, '', `?view=host&event=${event.id}`);
     notify('Event created — now finish the menu');
   }
@@ -2619,6 +2802,11 @@ export default function Home() {
             setChatOpen(true);
           }}
           onMinimize={() => setChatOpen(false)}
+          pushNotificationState={pushNotificationState}
+          pushNotificationBusy={pushNotificationBusy}
+          onTogglePush={() => void (pushNotificationState === 'enabled'
+            ? disableChatNotifications()
+            : enableChatNotifications())}
           notify={notify}
         />
       )}
@@ -2642,12 +2830,14 @@ export default function Home() {
             >
               Continue with Google
             </button>
-            <button
-              onClick={() => switchMode('guest')}
-              className="mt-4 block w-full text-sm font-semibold text-black/45"
-            >
-              Back to the menu
-            </button>
+            {menu.id !== EMPTY_EVENT_ID && (
+              <button
+                onClick={() => switchMode('guest')}
+                className="mt-4 block w-full text-sm font-semibold text-black/45"
+              >
+                Back to the menu
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2881,7 +3071,7 @@ export default function Home() {
             </div>
             <p className="eyebrow mt-6">iPhone app</p>
             <h2 className="font-display mt-2 text-3xl font-semibold">
-              Add Gather Host to your Home Screen
+              Add this Gather event to your Home Screen
             </h2>
             <p className="mt-3 text-sm leading-6 text-black/55">
               Open this host page in Safari, then follow these two steps.
@@ -2907,8 +3097,8 @@ export default function Home() {
               </li>
             </ol>
             <p className="install-note">
-              The icon will open directly to your private host dashboard. Guest
-              menu links stay regular web pages.
+              The icon will reopen this event and this host view. Install from a
+              guest link instead when you want an icon that opens the guest view.
             </p>
             <button
               onClick={() => setShowInstallGuide(false)}
@@ -3487,6 +3677,9 @@ function EventChat({
   visible,
   onOpen,
   onMinimize,
+  pushNotificationState,
+  pushNotificationBusy,
+  onTogglePush,
   notify,
 }: {
   menu: EventMenu;
@@ -3494,6 +3687,9 @@ function EventChat({
   visible: boolean;
   onOpen: () => void;
   onMinimize: () => void;
+  pushNotificationState: PushNotificationState;
+  pushNotificationBusy: boolean;
+  onTogglePush: () => void;
   notify: (message: string) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -3916,7 +4112,33 @@ function EventChat({
               <h2 id="event-chat-title" className="font-display">Event chat</h2>
               <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
             </div>
-            <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={20} /></button>
+            <div className="chat-header-actions">
+              {PUSH_NOTIFICATIONS_ENABLED && (
+                <button
+                  type="button"
+                  className={pushNotificationState === 'enabled' ? 'enabled' : ''}
+                  onClick={onTogglePush}
+                  disabled={pushNotificationBusy || pushNotificationState === 'unsupported'}
+                  aria-label={pushNotificationState === 'enabled'
+                    ? 'Turn off chat notifications for this event'
+                    : 'Turn on chat notifications for this event'}
+                  title={pushNotificationState === 'enabled'
+                    ? 'Notifications on'
+                    : pushNotificationState === 'blocked'
+                      ? 'Notifications blocked in device settings'
+                      : pushNotificationState === 'unsupported'
+                        ? 'Notifications are not supported here'
+                        : 'Notify me about new messages'}
+                >
+                  {pushNotificationState === 'enabled'
+                    ? <BellRing size={18} />
+                    : pushNotificationState === 'blocked'
+                      ? <BellOff size={18} />
+                      : <Bell size={18} />}
+                </button>
+              )}
+              <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={20} /></button>
+            </div>
           </header>
           {visiblePinnedMessage && (
             <aside className="chat-pinned-banner" aria-label="Pinned messages">

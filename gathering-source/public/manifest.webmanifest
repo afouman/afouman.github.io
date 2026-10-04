@@ -1,8 +1,7 @@
 {
-  "name": "Gather Host",
-  "short_name": "Gather Host",
-  "description": "Create event menus and manage incoming guest orders live.",
-  "start_url": "./?view=host&app=host",
+  "name": "Gather",
+  "short_name": "Gather",
+  "description": "Plan gatherings, RSVP, chat, and manage event orders live.",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",

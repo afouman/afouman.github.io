@@ -306,6 +306,49 @@ service cloud.firestore {
         allow delete: if canManageEvent(eventId);
       }
 
+      match /pushSubscriptions/{subscriptionId} {
+        allow read: if false;
+        allow create, update: if request.resource.data.keys().hasOnly([
+            'endpoint', 'expirationTime', 'keys', 'actorUid', 'actorRole',
+            'actorName', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.endpoint is string
+          && request.resource.data.endpoint.size() > 20
+          && request.resource.data.endpoint.size() <= 2000
+          && (request.resource.data.expirationTime == null
+            || request.resource.data.expirationTime is int)
+          && request.resource.data.keys is map
+          && request.resource.data.keys.keys().hasOnly(['p256dh', 'auth'])
+          && request.resource.data.keys.p256dh is string
+          && request.resource.data.keys.auth is string
+          && request.resource.data.actorUid is string
+          && request.resource.data.actorName is string
+          && request.resource.data.actorName.size() > 0
+          && request.resource.data.actorName.size() <= 80
+          && request.resource.data.actorRole in ['host', 'guest']
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time
+          && (
+            (request.resource.data.actorRole == 'host'
+              && canManageEvent(eventId)
+              && request.resource.data.actorUid == request.auth.uid
+              && request.resource.data.actorName == 'Host')
+            ||
+            (request.resource.data.actorRole == 'guest'
+              && guestCanChat(eventId, request.resource.data.actorUid)
+              && request.resource.data.actorName
+                == guestRsvp(eventId, request.resource.data.actorUid).data.guestName)
+          )
+          && (resource == null || (
+            request.resource.data.endpoint == resource.data.endpoint
+            && request.resource.data.keys == resource.data.keys
+          ));
+        allow delete: if canManageEvent(eventId) || (
+          resource.data.actorRole == 'guest'
+          && guestCanChat(eventId, resource.data.actorUid)
+        );
+      }
+
       match /chat/{messageId} {
         allow read: if true;
         allow create: if chatIsOpen(eventId)
