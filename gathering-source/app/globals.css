@@ -289,8 +289,7 @@ button:disabled {
   align-items: end;
   border: 0;
   border-radius: 0.72rem;
-  background-position: center;
-  background-size: cover;
+  background: #191511;
   color: #fff8eb;
   overflow: hidden;
   padding: 0.9rem;
@@ -303,29 +302,33 @@ button:disabled {
 .new-event-background-preview > .background-preview-label,
 .event-background-preview > .background-preview-label {
   position: relative;
-  z-index: 1;
+  z-index: 3;
   font-family: var(--font-display), Georgia, serif;
   font-size: 1.35rem;
   text-shadow: 0 2px 18px rgb(0 0 0 / 0.42);
 }
-.new-event-background-preview.is-positionable,
-.event-background-preview.is-positionable {
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
+.background-preview-image,
+.background-preview-shade {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
-.new-event-background-preview.is-dragging,
-.event-background-preview.is-dragging {
-  cursor: grabbing;
+.background-preview-image {
+  background-position: center;
+  background-size: cover;
+  transition: transform 180ms ease;
 }
-.new-event-background-preview.is-positionable:focus-visible,
-.event-background-preview.is-positionable:focus-visible {
+.background-preview-shade { z-index: 1; }
+.new-event-background-preview.is-adjustable,
+.event-background-preview.is-adjustable { cursor: pointer; }
+.new-event-background-preview.is-adjustable:focus-visible,
+.event-background-preview.is-adjustable:focus-visible {
   outline: 3px solid var(--tomato);
   outline-offset: 3px;
 }
 .background-position-hint {
   position: absolute;
-  z-index: 2;
+  z-index: 3;
   right: 0.7rem;
   bottom: 0.7rem;
   display: inline-flex;
@@ -341,22 +344,134 @@ button:disabled {
   pointer-events: none;
   backdrop-filter: blur(8px);
 }
-.background-position-reset {
+.background-crop-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(12 10 8 / 0.78);
+  padding: 1rem;
+  backdrop-filter: blur(12px);
+}
+.background-crop-dialog {
+  position: relative;
+  width: min(940px, 100%);
+  max-width: none;
+  max-height: calc(100svh - 2rem);
+  margin: 0;
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 1.4rem;
+  background: #f6efe3;
+  color: #211c18;
+  overflow: auto;
+  padding: 0;
+  box-shadow: 0 28px 90px rgb(0 0 0 / 0.45);
+}
+.background-crop-dialog > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.35rem 1rem;
+}
+.background-crop-dialog > header h2 { margin-top: 0.15rem; font-size: clamp(1.8rem, 4vw, 2.7rem); }
+.background-crop-dialog > header p:last-child { margin-top: 0.25rem; color: rgb(33 28 24 / 0.58); font-size: 0.78rem; }
+.background-crop-dialog > header > button {
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgb(33 28 24 / 0.12);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.58);
+}
+.background-crop-viewport {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  width: calc(100% - 2.7rem);
+  height: min(52svh, 500px);
+  margin: 0 1.35rem;
+  border: 0;
+  border-radius: 1rem;
+  background: #16130f;
+  cursor: grab;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+  padding: 0;
+  text-align: left;
+}
+.background-crop-viewport:focus-visible { box-shadow: 0 0 0 3px var(--tomato); }
+.background-crop-viewport.is-dragging { cursor: grabbing; }
+.background-crop-viewport > img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  will-change: transform, object-position;
+}
+.background-crop-viewport > .background-crop-hint {
   position: absolute;
   z-index: 3;
-  top: 0.65rem;
-  right: 0.65rem;
-  border: 1px solid rgb(255 255 255 / 0.34);
+  right: 0.8rem;
+  bottom: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   border-radius: 999px;
-  background: rgb(15 13 11 / 0.58);
-  color: #fff8eb !important;
-  padding: 0.38rem 0.58rem;
-  font-size: 0.58rem !important;
-  font-weight: 850 !important;
+  background: rgb(10 8 7 / 0.68);
+  color: #fff;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  pointer-events: none;
   backdrop-filter: blur(8px);
 }
-.background-position-reset:hover {
-  background: rgb(15 13 11 / 0.82);
+.background-crop-grid { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
+.background-crop-grid i { position: absolute; background: rgb(255 255 255 / 0.38); }
+.background-crop-grid i:nth-child(1),
+.background-crop-grid i:nth-child(2) { top: 0; bottom: 0; width: 1px; }
+.background-crop-grid i:nth-child(1) { left: 33.333%; }
+.background-crop-grid i:nth-child(2) { left: 66.666%; }
+.background-crop-grid i:nth-child(3),
+.background-crop-grid i:nth-child(4) { right: 0; left: 0; height: 1px; }
+.background-crop-grid i:nth-child(3) { top: 33.333%; }
+.background-crop-grid i:nth-child(4) { top: 66.666%; }
+.background-crop-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 1rem 1.35rem 0.8rem;
+}
+.background-crop-controls > button:not(.background-crop-reset) {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid rgb(33 28 24 / 0.12);
+  border-radius: 50%;
+  background: #fffaf1;
+}
+.background-crop-controls > button:disabled { opacity: 0.35; }
+.background-crop-controls label { display: flex; min-width: 0; flex: 1; align-items: center; gap: 0.65rem; }
+.background-crop-controls label span { font-size: 0.7rem; font-weight: 850; text-transform: uppercase; letter-spacing: 0.08em; }
+.background-crop-controls input[type='range'] { width: 100%; accent-color: var(--tomato); }
+.background-crop-controls output { width: 3.2rem; color: rgb(33 28 24 / 0.62); font-size: 0.73rem; font-variant-numeric: tabular-nums; text-align: right; }
+.background-crop-reset { border: 0; color: var(--wine); font-size: 0.72rem; font-weight: 850; }
+.background-crop-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.7rem;
+  border-top: 1px solid rgb(33 28 24 / 0.1);
+  padding: 1rem 1.35rem calc(1rem + env(safe-area-inset-bottom));
 }
 .new-event-appearance > div:last-child,
 .event-background-editor > section {
@@ -491,6 +606,22 @@ button:disabled {
   .event-identity-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+  .background-crop-backdrop { align-items: end; padding: 0; }
+  .background-crop-dialog {
+    width: 100%;
+    max-height: 96svh;
+    border-radius: 1.25rem 1.25rem 0 0;
+  }
+  .background-crop-dialog > header { padding: 1rem 1rem 0.8rem; }
+  .background-crop-dialog > header h2 { font-size: 2rem; }
+  .background-crop-dialog > header p:last-child { max-width: 28rem; }
+  .background-crop-viewport { width: calc(100% - 2rem); margin: 0 1rem; }
+  .background-crop-viewport { height: auto; }
+  .background-crop-controls { gap: 0.45rem; padding: 0.85rem 1rem 0.7rem; }
+  .background-crop-controls label span { display: none; }
+  .background-crop-controls output { width: 2.7rem; }
+  .background-crop-dialog > footer { padding: 0.85rem 1rem calc(0.85rem + env(safe-area-inset-bottom)); }
+  .background-crop-dialog > footer button { flex: 1; justify-content: center; }
 }
 .app-header {
   padding-top: env(safe-area-inset-top);
@@ -1393,6 +1524,8 @@ button:disabled {
   background-image: inherit;
   background-position: inherit;
   background-size: cover;
+  transform: scale(var(--background-zoom, 1));
+  transform-origin: var(--background-origin-x, 50%) var(--background-origin-y, 50%);
   animation: hero-breathe 16s ease-in-out infinite alternate;
 }
 .guest-hero-photo::after {
@@ -1824,10 +1957,10 @@ button:disabled {
 }
 @keyframes hero-breathe {
   from {
-    transform: scale(1.015);
+    transform: scale(var(--background-zoom-start, 1.015));
   }
   to {
-    transform: scale(1.045);
+    transform: scale(var(--background-zoom-end, 1.045));
   }
 }
 
@@ -2782,7 +2915,8 @@ button:disabled {
     filter: blur(18px) saturate(0.82);
     opacity: 0.64;
     animation: none;
-    transform: scale(1.12);
+    transform: scale(var(--background-backdrop-zoom, 1.12));
+    transform-origin: var(--background-origin-x, 50%) var(--background-origin-y, 50%);
   }
   .guest-hero-photo::after {
     display: block;
@@ -2794,6 +2928,8 @@ button:disabled {
     background-position: inherit;
     background-repeat: no-repeat;
     background-size: contain;
+    transform: scale(var(--background-zoom, 1));
+    transform-origin: var(--background-origin-x, 50%) var(--background-origin-y, 50%);
     -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
     mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
   }

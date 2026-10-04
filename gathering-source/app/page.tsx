@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react';
+import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
@@ -24,6 +24,7 @@ import {
   LockKeyhole,
   MessageCircle,
   Minus,
+  Move,
   Pencil,
   Pin,
   PinOff,
@@ -41,12 +42,20 @@ import {
   UtensilsCrossed,
   UsersRound,
   XCircle,
+  ZoomIn,
+  ZoomOut,
 } from 'lucide-react';
 
 type EventResource = { id: string; name: string; capacity: number };
 type EventType = 'meal' | 'movie' | 'game' | 'birthday' | 'custom';
 type EventPalette = 'wine' | 'midnight' | 'forest' | 'celebration' | 'twilight';
 type BackgroundFocus = { x: number; y: number };
+type BackgroundEditorState = {
+  target: 'new' | 'existing';
+  imageUrl: string;
+  focus: BackgroundFocus;
+  zoom: number;
+};
 type MenuItem = {
   id: string;
   name: string;
@@ -77,6 +86,7 @@ type EventMenu = {
   customEventType?: string;
   backgroundImageUrl?: string;
   backgroundFocus?: BackgroundFocus;
+  backgroundZoom?: number;
   colorPalette?: EventPalette;
   maxAdditionalGuests?: number;
   categories?: string[];
@@ -289,6 +299,8 @@ const eventBackgroundFocus = (menu: Pick<EventMenu, 'backgroundFocus'>): Backgro
   x: Math.min(100, Math.max(0, menu.backgroundFocus?.x ?? 50)),
   y: Math.min(100, Math.max(0, menu.backgroundFocus?.y ?? 50)),
 });
+const eventBackgroundZoom = (menu: Pick<EventMenu, 'backgroundZoom'>) =>
+  Math.min(3, Math.max(1, menu.backgroundZoom ?? 1));
 const approvalStatus = (rsvp?: Rsvp | null) => rsvp?.approvalStatus || 'approved';
 const guestIsApproved = (menu: EventMenu, rsvp?: Rsvp | null) =>
   !menu.requireGuestApproval || rsvp?.status !== 'yes' || approvalStatus(rsvp) === 'approved';
@@ -812,6 +824,7 @@ export default function Home() {
   );
   const [creatingEvent, setCreatingEvent] = useState(false);
   const [deletingEvent, setDeletingEvent] = useState<EventMenu | null>(null);
+  const [backgroundEditor, setBackgroundEditor] = useState<BackgroundEditorState | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -826,6 +839,7 @@ export default function Home() {
     customEventType: '',
     backgroundImageUrl: '',
     backgroundFocus: centerBackgroundFocus(),
+    backgroundZoom: 1,
     colorPalette: '' as EventPalette | '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
@@ -1374,6 +1388,7 @@ export default function Home() {
       customEventType: newEvent.eventType === 'custom' ? newEvent.customEventType.trim() : '',
       backgroundImageUrl: newEvent.backgroundImageUrl,
       backgroundFocus: newEvent.backgroundFocus,
+      backgroundZoom: newEvent.backgroundZoom,
       colorPalette: newEvent.colorPalette || undefined,
       maxAdditionalGuests: newEvent.maxAdditionalGuests,
       categories: ['Main plates'],
@@ -1435,6 +1450,7 @@ export default function Home() {
       customEventType: '',
       backgroundImageUrl: '',
       backgroundFocus: centerBackgroundFocus(),
+      backgroundZoom: 1,
       colorPalette: '',
       welcome: 'Choose what you’d like and send your order to the host.',
     });
@@ -2302,12 +2318,13 @@ export default function Home() {
     try {
       notify(heicFile(file) ? 'Converting HEIC photo…' : 'Optimizing background photo…');
       const backgroundImageUrl = await prepareEventBackground(file);
-      setNewEvent((current) => ({
-        ...current,
-        backgroundImageUrl,
-        backgroundFocus: centerBackgroundFocus(),
-      }));
-      notify('Custom event background ready');
+      setBackgroundEditor({
+        target: 'new',
+        imageUrl: backgroundImageUrl,
+        focus: centerBackgroundFocus(),
+        zoom: 1,
+      });
+      notify('Photo ready — adjust the framing');
     } catch (error) {
       notify((error as Error).message || 'Could not use that image');
     }
@@ -2324,15 +2341,38 @@ export default function Home() {
       if (availableForBackground < 90_000)
         throw new Error('Remove a menu-item photo before adding this background');
       const backgroundImageUrl = await prepareEventBackground(file, availableForBackground);
-      setMenu((current) => ({
-        ...current,
-        backgroundImageUrl,
-        backgroundFocus: centerBackgroundFocus(),
-      }));
-      notify('Background updated — save the event when ready');
+      setBackgroundEditor({
+        target: 'existing',
+        imageUrl: backgroundImageUrl,
+        focus: centerBackgroundFocus(),
+        zoom: 1,
+      });
+      notify('Photo ready — adjust the framing');
     } catch (error) {
       notify((error as Error).message || 'Could not use that image');
     }
+  }
+
+  function applyBackgroundFraming(focus: BackgroundFocus, zoom: number) {
+    if (!backgroundEditor) return;
+    if (backgroundEditor.target === 'new') {
+      setNewEvent((current) => ({
+        ...current,
+        backgroundImageUrl: backgroundEditor.imageUrl,
+        backgroundFocus: focus,
+        backgroundZoom: zoom,
+      }));
+      notify('Custom event background ready');
+    } else {
+      setMenu((current) => ({
+        ...current,
+        backgroundImageUrl: backgroundEditor.imageUrl,
+        backgroundFocus: focus,
+        backgroundZoom: zoom,
+      }));
+      notify('Background updated — save the event when ready');
+    }
+    setBackgroundEditor(null);
   }
 
   async function uploadItemImage(itemId: string, file: File) {
@@ -2540,6 +2580,12 @@ export default function Home() {
           cancelMenuEdits={cancelMenuEdits}
           uploadItemImage={uploadItemImage}
           uploadEventBackground={uploadEventBackground}
+          adjustEventBackground={() => menu.backgroundImageUrl && setBackgroundEditor({
+            target: 'existing',
+            imageUrl: menu.backgroundImageUrl,
+            focus: eventBackgroundFocus(menu),
+            zoom: eventBackgroundZoom(menu),
+          })}
           acceptTasks={acceptTasks}
           rejectOrder={rejectOrder}
           rejectWaitingItems={rejectWaitingItems}
@@ -2552,6 +2598,14 @@ export default function Home() {
           setRsvpOpen={setEventRsvpOpen}
           setChatOpen={setEventChatOpen}
           notify={notify}
+        />
+      )}
+
+      {backgroundEditor && (
+        <BackgroundCropModal
+          editor={backgroundEditor}
+          onCancel={() => setBackgroundEditor(null)}
+          onApply={applyBackgroundFraming}
         />
       )}
 
@@ -2644,6 +2698,7 @@ export default function Home() {
                         eventType: type.value,
                         backgroundImageUrl: '',
                         backgroundFocus: centerBackgroundFocus(),
+                        backgroundZoom: 1,
                         colorPalette: '',
                       })}
                     />
@@ -2671,15 +2726,19 @@ export default function Home() {
                 theme={eventThemeStyle({ eventType: newEvent.eventType, colorPalette: newEvent.colorPalette || undefined })}
                 imageUrl={newEvent.backgroundImageUrl || EVENT_BACKGROUNDS[newEvent.eventType]}
                 focus={newEvent.backgroundFocus}
-                onFocusChange={newEvent.backgroundImageUrl
-                  ? (backgroundFocus) => setNewEvent((current) => ({ ...current, backgroundFocus }))
-                  : undefined}
+                zoom={newEvent.backgroundZoom}
+                onOpen={newEvent.backgroundImageUrl ? () => setBackgroundEditor({
+                  target: 'new',
+                  imageUrl: newEvent.backgroundImageUrl,
+                  focus: newEvent.backgroundFocus,
+                  zoom: newEvent.backgroundZoom,
+                }) : undefined}
                 label={newEvent.customEventType || EVENT_TYPES.find((type) => type.value === newEvent.eventType)?.label || 'Gathering'}
                 shadeOpacity={0.88}
               />
               <div>
                 <strong>Event background</strong>
-                <small>Use the curated image or upload your own. Drag a custom image to frame it.</small>
+                <small>Use the curated image or upload your own. Custom framing opens in a dedicated editor.</small>
                 <label className="secondary-button">
                   <ImagePlus size={15} /> Choose image
                   <input
@@ -2692,7 +2751,8 @@ export default function Home() {
                     }}
                   />
                 </label>
-                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus() })}>Use curated image</button>}
+                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setBackgroundEditor({ target: 'new', imageUrl: newEvent.backgroundImageUrl, focus: newEvent.backgroundFocus, zoom: newEvent.backgroundZoom })}><Move size={15} /> Adjust framing</button>}
+                {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus(), backgroundZoom: 1 })}>Use curated image</button>}
               </div>
             </section>
             {newEvent.backgroundImageUrl && (
@@ -3197,6 +3257,8 @@ function GuestMenu({
 }) {
   const hasMenu = menuHasPublishedItems(menu);
   const eventActionOpen = hasMenu ? menu.accepting : menu.rsvpOpen !== false;
+  const backgroundFocus = eventBackgroundFocus(menu);
+  const backgroundZoom = eventBackgroundZoom(menu);
   return (
     <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
       <section className="guest-hero">
@@ -3204,8 +3266,14 @@ function GuestMenu({
           className="guest-hero-photo"
           style={{
             backgroundImage: `url(${eventBackground(menu)})`,
-            backgroundPosition: `${eventBackgroundFocus(menu).x}% ${eventBackgroundFocus(menu).y}%`,
-          }}
+            backgroundPosition: `${backgroundFocus.x}% ${backgroundFocus.y}%`,
+            '--background-zoom': backgroundZoom,
+            '--background-backdrop-zoom': backgroundZoom * 1.12,
+            '--background-zoom-start': backgroundZoom * 1.015,
+            '--background-zoom-end': backgroundZoom * 1.045,
+            '--background-origin-x': `${backgroundFocus.x}%`,
+            '--background-origin-y': `${backgroundFocus.y}%`,
+          } as CSSProperties}
         />
         <div className="guest-hero-shade" />
         <div className="guest-hero-content">
@@ -4040,6 +4108,7 @@ function HostWorkspace({
   cancelMenuEdits,
   uploadItemImage,
   uploadEventBackground,
+  adjustEventBackground,
   acceptTasks,
   rejectOrder,
   rejectWaitingItems,
@@ -4068,6 +4137,7 @@ function HostWorkspace({
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
   uploadEventBackground: (file: File) => Promise<void>;
+  adjustEventBackground: () => void;
   acceptTasks: (taskRefs: OrderTaskRef[]) => Promise<void>;
   rejectOrder: (order: Order) => Promise<void>;
   rejectWaitingItems: (order: Order, itemId: string) => Promise<void>;
@@ -4233,6 +4303,7 @@ function HostWorkspace({
                 cancelMenuEdits={cancelMenuEdits}
                 uploadItemImage={uploadItemImage}
                 uploadEventBackground={uploadEventBackground}
+                adjustEventBackground={adjustEventBackground}
               />
             ) : (
               <>
@@ -5313,7 +5384,8 @@ function matchingResources(resources: EventResource[], query: string) {
 function BackgroundPositionPreview({
   imageUrl,
   focus,
-  onFocusChange,
+  zoom,
+  onOpen,
   label,
   className,
   theme,
@@ -5321,110 +5393,229 @@ function BackgroundPositionPreview({
 }: {
   imageUrl: string;
   focus: BackgroundFocus;
-  onFocusChange?: (focus: BackgroundFocus) => void;
+  zoom: number;
+  onOpen?: () => void;
   label: string;
   className: string;
   theme?: CSSProperties;
   shadeOpacity?: number;
 }) {
-  const [dragging, setDragging] = useState(false);
-  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
-  const dragStart = useRef<{
-    pointerId: number;
-    clientX: number;
-    clientY: number;
-    focus: BackgroundFocus;
-  } | null>(null);
-
-  useEffect(() => {
-    const image = new window.Image();
-    image.onload = () => setImageSize({ width: image.naturalWidth, height: image.naturalHeight });
-    image.src = imageUrl;
-    return () => {
-      image.onload = null;
-    };
-  }, [imageUrl]);
-
-  const endDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (dragStart.current?.pointerId !== event.pointerId) return;
-    if (event.currentTarget.hasPointerCapture(event.pointerId))
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    dragStart.current = null;
-    setDragging(false);
-  };
-
   return (
     <div className="background-position-control">
       <button
         type="button"
-        disabled={!onFocusChange}
-        className={`${className} ${onFocusChange ? 'is-positionable' : ''} ${dragging ? 'is-dragging' : ''}`}
-        style={{
-          ...theme,
-          backgroundImage: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / ${shadeOpacity}), rgb(var(--theme-deep-rgb) / .06)), url(${imageUrl})`,
-          backgroundPosition: `${focus.x}% ${focus.y}%`,
-        }}
-        aria-label={onFocusChange ? `${label} background. Drag or use arrow keys to reposition the image` : `${label} background preview`}
-        onPointerDown={(event) => {
-          if (!onFocusChange || event.button !== 0) return;
-          dragStart.current = {
-            pointerId: event.pointerId,
-            clientX: event.clientX,
-            clientY: event.clientY,
-            focus,
-          };
-          event.currentTarget.setPointerCapture(event.pointerId);
-          setDragging(true);
-        }}
-        onPointerMove={(event) => {
-          const start = dragStart.current;
-          if (!onFocusChange || !start || start.pointerId !== event.pointerId) return;
-          const bounds = event.currentTarget.getBoundingClientRect();
-          const scale = imageSize.width && imageSize.height
-            ? Math.max(bounds.width / imageSize.width, bounds.height / imageSize.height)
-            : 1;
-          const overflowX = Math.max(0, imageSize.width * scale - bounds.width);
-          const overflowY = Math.max(0, imageSize.height * scale - bounds.height);
-          onFocusChange({
-            x: overflowX > 0
-              ? Math.min(100, Math.max(0, start.focus.x - ((event.clientX - start.clientX) / overflowX) * 100))
-              : start.focus.x,
-            y: overflowY > 0
-              ? Math.min(100, Math.max(0, start.focus.y - ((event.clientY - start.clientY) / overflowY) * 100))
-              : start.focus.y,
-          });
-        }}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-        onKeyDown={(event) => {
-          if (!onFocusChange) return;
-          const step = event.shiftKey ? 10 : 2;
-          const next = { ...focus };
-          if (event.key === 'ArrowLeft') next.x -= step;
-          else if (event.key === 'ArrowRight') next.x += step;
-          else if (event.key === 'ArrowUp') next.y -= step;
-          else if (event.key === 'ArrowDown') next.y += step;
-          else if (event.key === 'Home') Object.assign(next, centerBackgroundFocus());
-          else return;
-          event.preventDefault();
-          onFocusChange({
-            x: Math.min(100, Math.max(0, next.x)),
-            y: Math.min(100, Math.max(0, next.y)),
-          });
-        }}
+        disabled={!onOpen}
+        className={`${className} ${onOpen ? 'is-adjustable' : ''}`}
+        style={theme}
+        aria-label={onOpen ? `Adjust ${label} background framing` : `${label} background preview`}
+        onClick={onOpen}
       >
+        <span
+          className="background-preview-image"
+          aria-hidden="true"
+          style={{
+            backgroundImage: `url(${imageUrl})`,
+            backgroundPosition: `${focus.x}% ${focus.y}%`,
+            transform: `scale(${zoom})`,
+            transformOrigin: `${focus.x}% ${focus.y}%`,
+          }}
+        />
+        <span
+          className="background-preview-shade"
+          aria-hidden="true"
+          style={{ background: `linear-gradient(90deg, rgb(var(--theme-deep-rgb) / ${shadeOpacity}), rgb(var(--theme-deep-rgb) / .06))` }}
+        />
         <span className="background-preview-label">{label}</span>
-        {onFocusChange && <small className="background-position-hint"><GripVertical size={14} /> Drag to reposition</small>}
+        {onOpen && <small className="background-position-hint"><Move size={14} /> Adjust framing</small>}
       </button>
-      {onFocusChange && (
+    </div>
+  );
+}
+
+function BackgroundCropModal({
+  editor,
+  onCancel,
+  onApply,
+}: {
+  editor: BackgroundEditorState;
+  onCancel: () => void;
+  onApply: (focus: BackgroundFocus, zoom: number) => void;
+}) {
+  const clamp = (value: number, minimum: number, maximum: number) =>
+    Math.min(maximum, Math.max(minimum, value));
+  const [focus, setFocus] = useState(editor.focus);
+  const [zoom, setZoom] = useState(clamp(editor.zoom, 1, 3));
+  const [dragging, setDragging] = useState(false);
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const dragStart = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    focus: BackgroundFocus;
+    zoom: number;
+  } | null>(null);
+  const pinchStart = useRef<{ distance: number; zoom: number } | null>(null);
+
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [onCancel]);
+
+  useEffect(() => {
+    const image = new window.Image();
+    image.onload = () => setImageSize({ width: image.naturalWidth, height: image.naturalHeight });
+    image.src = editor.imageUrl;
+    return () => {
+      image.onload = null;
+    };
+  }, [editor.imageUrl]);
+
+  const pointerDistance = () => {
+    const points = [...pointers.current.values()];
+    if (points.length < 2) return 0;
+    return Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  };
+
+  const releasePointer = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    pointers.current.delete(event.pointerId);
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    pinchStart.current = null;
+    const remaining = [...pointers.current.entries()][0];
+    if (remaining) {
+      dragStart.current = {
+        pointerId: remaining[0],
+        x: remaining[1].x,
+        y: remaining[1].y,
+        focus,
+        zoom,
+      };
+    } else {
+      dragStart.current = null;
+      setDragging(false);
+    }
+  };
+
+  const updateZoom = (next: number) => setZoom(clamp(next, 1, 3));
+
+  return (
+    <div className="background-crop-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onCancel();
+    }}>
+      <dialog open className="background-crop-dialog" aria-labelledby="background-crop-title" aria-describedby="background-crop-help">
+        <header>
+          <div>
+            <p className="eyebrow">Custom backdrop</p>
+            <h2 id="background-crop-title" className="font-display">Frame your event</h2>
+            <p id="background-crop-help">Drag to reposition. Pinch, scroll, or use the slider to zoom.</p>
+          </div>
+          <button type="button" onClick={onCancel} aria-label="Close background editor"><XCircle size={24} /></button>
+        </header>
         <button
           type="button"
-          className="background-position-reset"
-          onClick={() => onFocusChange(centerBackgroundFocus())}
+          className={`background-crop-viewport ${dragging ? 'is-dragging' : ''}`}
+          aria-label="Background image framing area"
+          onPointerDown={(event) => {
+            if (event.button !== 0 && event.pointerType === 'mouse') return;
+            event.currentTarget.setPointerCapture(event.pointerId);
+            pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+            if (pointers.current.size === 1) {
+              dragStart.current = {
+                pointerId: event.pointerId,
+                x: event.clientX,
+                y: event.clientY,
+                focus,
+                zoom,
+              };
+              setDragging(true);
+            } else if (pointers.current.size === 2) {
+              pinchStart.current = { distance: pointerDistance(), zoom };
+              dragStart.current = null;
+            }
+          }}
+          onPointerMove={(event) => {
+            if (!pointers.current.has(event.pointerId)) return;
+            pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+            if (pointers.current.size >= 2 && pinchStart.current) {
+              const distance = pointerDistance();
+              if (pinchStart.current.distance > 0)
+                updateZoom(pinchStart.current.zoom * (distance / pinchStart.current.distance));
+              return;
+            }
+            const start = dragStart.current;
+            if (!start || start.pointerId !== event.pointerId) return;
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const coverScale = imageSize.width && imageSize.height
+              ? Math.max(bounds.width / imageSize.width, bounds.height / imageSize.height)
+              : 1;
+            const overflowX = Math.max(0, imageSize.width * coverScale * start.zoom - bounds.width);
+            const overflowY = Math.max(0, imageSize.height * coverScale * start.zoom - bounds.height);
+            setFocus({
+              x: overflowX > 0 ? clamp(start.focus.x - ((event.clientX - start.x) / overflowX) * 100, 0, 100) : start.focus.x,
+              y: overflowY > 0 ? clamp(start.focus.y - ((event.clientY - start.y) / overflowY) * 100, 0, 100) : start.focus.y,
+            });
+          }}
+          onPointerUp={releasePointer}
+          onPointerCancel={releasePointer}
+          onWheel={(event: ReactWheelEvent<HTMLButtonElement>) => {
+            event.preventDefault();
+            updateZoom(zoom * Math.exp(-event.deltaY * (event.ctrlKey ? 0.01 : 0.0015)));
+          }}
+          onKeyDown={(event) => {
+            const step = event.shiftKey ? 10 : 2;
+            if (event.key === 'ArrowLeft') setFocus((current) => ({ ...current, x: clamp(current.x - step, 0, 100) }));
+            else if (event.key === 'ArrowRight') setFocus((current) => ({ ...current, x: clamp(current.x + step, 0, 100) }));
+            else if (event.key === 'ArrowUp') setFocus((current) => ({ ...current, y: clamp(current.y - step, 0, 100) }));
+            else if (event.key === 'ArrowDown') setFocus((current) => ({ ...current, y: clamp(current.y + step, 0, 100) }));
+            else if (event.key === '+' || event.key === '=') updateZoom(zoom + 0.1);
+            else if (event.key === '-' || event.key === '_') updateZoom(zoom - 0.1);
+            else if (event.key === 'Home' || event.key === '0') {
+              setFocus(centerBackgroundFocus());
+              setZoom(1);
+            } else return;
+            event.preventDefault();
+          }}
         >
-          Center
+          <Image
+            src={editor.imageUrl}
+            alt=""
+            fill
+            unoptimized
+            sizes="(max-width: 600px) 100vw, 900px"
+            draggable={false}
+            style={{
+              objectPosition: `${focus.x}% ${focus.y}%`,
+              transform: `scale(${zoom})`,
+              transformOrigin: `${focus.x}% ${focus.y}%`,
+            }}
+          />
+          <span className="background-crop-grid" aria-hidden="true"><i /><i /><i /><i /></span>
+          <span className="background-crop-hint"><Move size={15} /> Drag image</span>
         </button>
-      )}
+        <section className="background-crop-controls">
+          <button type="button" onClick={() => updateZoom(zoom - 0.1)} disabled={zoom <= 1} aria-label="Zoom out"><ZoomOut size={19} /></button>
+          <label>
+            <span>Zoom</span>
+            <input type="range" min="1" max="3" step="0.01" value={zoom} onChange={(event) => updateZoom(Number(event.target.value))} />
+          </label>
+          <button type="button" onClick={() => updateZoom(zoom + 0.1)} disabled={zoom >= 3} aria-label="Zoom in"><ZoomIn size={19} /></button>
+          <output>{Math.round(zoom * 100)}%</output>
+          <button type="button" className="background-crop-reset" onClick={() => { setFocus(centerBackgroundFocus()); setZoom(1); }}>Reset</button>
+        </section>
+        <footer>
+          <button type="button" className="secondary-button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary-button" onClick={() => onApply(focus, zoom)}><Check size={17} /> Apply framing</button>
+        </footer>
+      </dialog>
     </div>
   );
 }
@@ -5468,6 +5659,7 @@ function MenuEditor({
   cancelMenuEdits,
   uploadItemImage,
   uploadEventBackground,
+  adjustEventBackground,
 }: {
   menu: EventMenu;
   orders: Order[];
@@ -5476,6 +5668,7 @@ function MenuEditor({
   cancelMenuEdits: () => Promise<void>;
   uploadItemImage: (itemId: string, file: File) => Promise<void>;
   uploadEventBackground: (file: File) => Promise<void>;
+  adjustEventBackground: () => void;
 }) {
   const [addingCategoryFor, setAddingCategoryFor] = useState<string | null>(
     null,
@@ -5724,6 +5917,7 @@ function MenuEditor({
                 customEventType: eventType === 'custom' ? menu.customEventType : '',
                 backgroundImageUrl: '',
                 backgroundFocus: centerBackgroundFocus(),
+                backgroundZoom: 1,
                 colorPalette: DEFAULT_EVENT_PALETTE[eventType],
               });
             }}
@@ -5779,15 +5973,14 @@ function MenuEditor({
           theme={eventThemeStyle(menu)}
           imageUrl={eventBackground(menu)}
           focus={eventBackgroundFocus(menu)}
-          onFocusChange={menu.backgroundImageUrl
-            ? (backgroundFocus) => setMenu({ ...menu, backgroundFocus })
-            : undefined}
+          zoom={eventBackgroundZoom(menu)}
+          onOpen={menu.backgroundImageUrl ? adjustEventBackground : undefined}
           label={eventTypeLabel(menu)}
         />
         <section>
           <p className="eyebrow">Event backdrop</p>
           <strong>Set the mood before guests arrive.</strong>
-          <small>Changing the event type selects its curated image. Upload a custom image, then drag it to choose the framing.</small>
+          <small>Changing the event type selects its curated image. Custom framing opens in a dedicated editor.</small>
           <div>
             <label className="secondary-button">
               <ImagePlus size={15} /> Replace background
@@ -5801,7 +5994,8 @@ function MenuEditor({
                 }}
               />
             </label>
-            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus(), colorPalette: DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'] })}>Use curated image</button>}
+            {menu.backgroundImageUrl && <button type="button" onClick={adjustEventBackground}><Move size={15} /> Adjust framing</button>}
+            {menu.backgroundImageUrl && <button type="button" onClick={() => setMenu({ ...menu, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus(), backgroundZoom: 1, colorPalette: DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'] })}>Use curated image</button>}
           </div>
         </section>
       </section>
