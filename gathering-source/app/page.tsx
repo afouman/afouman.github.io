@@ -860,6 +860,8 @@ export default function Home() {
   const [deletingEvent, setDeletingEvent] = useState<EventMenu | null>(null);
   const [backgroundEditor, setBackgroundEditor] = useState<BackgroundEditorState | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
+  const [guestInvitationOpen, setGuestInvitationOpen] = useState(false);
+  const [guestInvitation, setGuestInvitation] = useState('');
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [guestPin, setGuestPin] = useState('');
@@ -1517,6 +1519,27 @@ export default function Home() {
         ? selectedEventId ? `?view=host&event=${selectedEventId}` : '?view=host'
         : selectedEventId ? `?event=${selectedEventId}` : './',
     );
+  };
+  const openGuestInvitation = () => {
+    const entered = guestInvitation.trim();
+    if (!entered) {
+      notify('Paste the invitation link or enter its event code.');
+      return;
+    }
+    let eventId = entered;
+    try {
+      const invitationUrl = new URL(entered, window.location.href);
+      eventId = invitationUrl.searchParams.get('event') || entered;
+    } catch {
+      eventId = entered;
+    }
+    eventId = eventId.trim();
+    if (!/^[a-zA-Z0-9_-]{2,120}$/.test(eventId)) {
+      notify('That invitation link or event code is not valid.');
+      return;
+    }
+    localStorage.setItem(LAST_EVENT_KEY, eventId);
+    window.location.assign(`?event=${encodeURIComponent(eventId)}`);
   };
   const useAnotherGuestProfile = () => {
     setChangingGuestPhone(true);
@@ -2830,15 +2853,59 @@ export default function Home() {
             >
               Continue with Google
             </button>
-            {menu.id !== EMPTY_EVENT_ID && (
-              <button
-                onClick={() => switchMode('guest')}
-                className="mt-4 block w-full text-sm font-semibold text-black/45"
-              >
-                Back to the menu
-              </button>
-            )}
+            <button
+              onClick={() => menu.id === EMPTY_EVENT_ID
+                ? setGuestInvitationOpen(true)
+                : switchMode('guest')}
+              className="mt-4 block w-full text-sm font-semibold text-black/45"
+            >
+              {menu.id === EMPTY_EVENT_ID ? 'Open a guest invitation' : 'Continue as guest'}
+            </button>
           </div>
+        </div>
+      )}
+      {guestInvitationOpen && (
+        <div className="fixed inset-0 z-[75] grid place-items-center bg-black/45 p-5 backdrop-blur-sm">
+          <section className="new-event-dialog w-full max-w-md rounded-3xl bg-[var(--cream)] p-7 shadow-2xl sm:p-9">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="eyebrow">Guest access</p>
+                <h2 className="font-display mt-2 text-3xl font-semibold">Open your invitation</h2>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setGuestInvitationOpen(false)}
+                aria-label="Close guest invitation"
+              >
+                <XCircle size={18} />
+              </button>
+            </div>
+            <p className="mt-3 text-sm leading-6 text-black/55">
+              Paste the link the host sent you. You can also enter the event code from the end of that link.
+            </p>
+            <label className="field-label mt-6">
+              Invitation link or event code
+              <input
+                inputMode="url"
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={guestInvitation}
+                onChange={(event) => setGuestInvitation(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') openGuestInvitation();
+                }}
+                placeholder="https://…?event=your-event"
+              />
+            </label>
+            <button
+              type="button"
+              className="primary-button mt-6 w-full justify-center py-3.5"
+              onClick={openGuestInvitation}
+            >
+              Continue as guest
+            </button>
+          </section>
         </div>
       )}
       {creatingEvent && (
