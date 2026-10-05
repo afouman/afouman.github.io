@@ -2,5 +2,12 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "gathering-domain",
   "main": "worker.js",
-  "compatibility_date": "2026-10-04"
+  "compatibility_date": "2026-10-04",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "gaemaj.tech/*",
+      "zone_name": "gaemaj.tech"
+    }
+  ]
 }
