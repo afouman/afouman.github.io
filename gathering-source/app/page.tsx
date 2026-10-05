@@ -501,6 +501,45 @@ const PUSH_NOTIFICATIONS_ENABLED =
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const LAST_EVENT_KEY = 'gather-last-event';
+const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
+const RESERVED_EVENT_PATHS = new Set([
+  '_next',
+  'gathering',
+  'icons',
+  'favicon.svg',
+  'manifest.webmanifest',
+  'og.png',
+  'sw.js',
+]);
+const eventIdFromUrl = (url: URL) => {
+  const queryEventId = url.searchParams.get('event')?.trim();
+  if (queryEventId && EVENT_ID_PATTERN.test(queryEventId)) return queryEventId;
+  const segments = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+  if (segments[0] === 'gathering') segments.shift();
+  const pathEventId = segments.length === 1 ? segments[0] : '';
+  return pathEventId
+    && !RESERVED_EVENT_PATHS.has(pathEventId)
+    && EVENT_ID_PATTERN.test(pathEventId)
+    ? pathEventId
+    : null;
+};
+const currentEventId = () => eventIdFromUrl(new URL(window.location.href));
+const usesCleanEventUrls = () =>
+  typeof window !== 'undefined' && !window.location.pathname.startsWith('/gathering');
+const eventRoute = (eventId: string, view: 'guest' | 'host' = 'guest') => {
+  const encodedEventId = encodeURIComponent(eventId);
+  if (usesCleanEventUrls())
+    return `/${encodedEventId}${view === 'host' ? '?view=host' : ''}`;
+  return view === 'host'
+    ? `?view=host&event=${encodedEventId}`
+    : `?event=${encodedEventId}`;
+};
+const hostHomeRoute = () => usesCleanEventUrls() ? '/?view=host' : '?view=host';
+const guestEventUrl = (eventId: string) =>
+  new URL(eventRoute(eventId), window.location.origin).toString();
 const pushSubscriptionKey = (eventId: string, actorUid: string) =>
   `gather-chat-push:${eventId}:${actorUid}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
@@ -885,7 +924,7 @@ export default function Home() {
     const hostView = parameters.get('view') === 'host';
     if (hostView)
       queueMicrotask(() => setMode('host'));
-    const linkedEventId = parameters.get('event');
+    const linkedEventId = currentEventId();
     const rememberedEventId = localStorage.getItem(LAST_EVENT_KEY);
     const eventId = linkedEventId
       || rememberedEventId
@@ -895,7 +934,7 @@ export default function Home() {
       history.replaceState(
         {},
         '',
-        hostView ? `?view=host&event=${rememberedEventId}` : `?event=${rememberedEventId}`,
+        eventRoute(rememberedEventId, hostView ? 'host' : 'guest'),
       );
     }
     queueMicrotask(() => setReceipts(readReceipts(eventId)));
@@ -927,7 +966,7 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=17', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=18', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -951,8 +990,7 @@ export default function Home() {
 
   useEffect(() => {
     if (firebaseConfigured) return;
-    const eventId =
-      new URLSearchParams(window.location.search).get('event') || menu.id;
+    const eventId = currentEventId() || menu.id;
     const applyOrders = (next: Order[]) => {
       setOrders(next);
       const savedReceipts = readReceipts(eventId);
@@ -1055,7 +1093,7 @@ export default function Home() {
         ) setHostUser(hostAuthUser.email || hostAuthUser.uid);
       }
       const db = store.getFirestore(app);
-      const eventId = new URLSearchParams(location.search).get('event')
+      const eventId = currentEventId()
         || localStorage.getItem(LAST_EVENT_KEY)
         || menu.id;
       const unsubMenu = store.onSnapshot(
@@ -1119,7 +1157,7 @@ export default function Home() {
               history.replaceState(
                 {},
                 '',
-                `?view=host&event=${ownedEvents[0].id}`,
+                eventRoute(ownedEvents[0].id, 'host'),
               );
             }
           },
@@ -1418,7 +1456,7 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = new URL('sw.js?v=17', document.baseURI);
+      const workerUrl = new URL('sw.js?v=18', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1516,8 +1554,8 @@ export default function Home() {
       {},
       '',
       next === 'host'
-        ? selectedEventId ? `?view=host&event=${selectedEventId}` : '?view=host'
-        : selectedEventId ? `?event=${selectedEventId}` : './',
+        ? selectedEventId ? eventRoute(selectedEventId, 'host') : hostHomeRoute()
+        : selectedEventId ? eventRoute(selectedEventId) : '/',
     );
   };
   const openGuestInvitation = () => {
@@ -1529,17 +1567,17 @@ export default function Home() {
     let eventId = entered;
     try {
       const invitationUrl = new URL(entered, window.location.href);
-      eventId = invitationUrl.searchParams.get('event') || entered;
+      eventId = eventIdFromUrl(invitationUrl) || entered;
     } catch {
       eventId = entered;
     }
     eventId = eventId.trim();
-    if (!/^[a-zA-Z0-9_-]{2,120}$/.test(eventId)) {
+    if (!EVENT_ID_PATTERN.test(eventId)) {
       notify('That invitation link or event code is not valid.');
       return;
     }
     localStorage.setItem(LAST_EVENT_KEY, eventId);
-    window.location.assign(`?event=${encodeURIComponent(eventId)}`);
+    window.location.assign(eventRoute(eventId));
   };
   const useAnotherGuestProfile = () => {
     setChangingGuestPhone(true);
@@ -1563,7 +1601,7 @@ export default function Home() {
         ) as Order[]);
     setOrders(nextOrders);
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', `?view=host&event=${event.id}`);
+    history.replaceState({}, '', eventRoute(event.id, 'host'));
   }
 
   async function createEvent() {
@@ -1578,8 +1616,14 @@ export default function Home() {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '')
         .slice(0, 36) || 'event';
+    let eventId = baseSlug;
+    let eventSuffix = 2;
+    while (events.some((existingEvent) => existingEvent.id === eventId)) {
+      eventId = `${baseSlug}-${eventSuffix}`;
+      eventSuffix += 1;
+    }
     const event = withoutUndefined<EventMenu>({
-      id: `${baseSlug}-${crypto.randomUUID().slice(0, 5)}`,
+      id: eventId,
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
       startsAt: newEvent.date,
@@ -1660,7 +1704,7 @@ export default function Home() {
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', `?view=host&event=${event.id}`);
+    history.replaceState({}, '', eventRoute(event.id, 'host'));
     notify('Event created — now finish the menu');
   }
 
@@ -2663,7 +2707,7 @@ export default function Home() {
     setEditing(false);
     setOrders([]);
     if (remaining[0]) selectHostEvent(remaining[0]);
-    else history.replaceState({}, '', '?view=host');
+    else history.replaceState({}, '', hostHomeRoute());
     notify('Event deleted');
   }
 
@@ -2895,7 +2939,7 @@ export default function Home() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') openGuestInvitation();
                 }}
-                placeholder="https://…?event=your-event"
+                placeholder="https://gaemaj.tech/movie-night"
               />
             </label>
             <button
@@ -4550,14 +4594,14 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={`?event=${menu.id}`} target="_blank" rel="noreferrer">
+                <a href={eventRoute(menu.id)} target="_blank" rel="noreferrer">
                   <ExternalLink size={16} />
                   <span>Preview</span>
                 </a>
                 <button
                   onClick={() => {
                     void navigator.clipboard?.writeText(
-                      `${location.origin}${location.pathname}?event=${menu.id}`,
+                      guestEventUrl(menu.id),
                     );
                     notify('Guest link copied');
                   }}

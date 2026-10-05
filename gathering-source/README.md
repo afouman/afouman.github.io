@@ -15,6 +15,19 @@ A static event-menu and real-time ordering app designed for GitHub Pages. Guests
 
 The private dashboard is `/?view=host`. On first use, sign in as host and choose **New event**. After saving its menu, use **Open guest preview** or **Copy guest link** for that event.
 
+## Custom domain
+
+Production supports clean event links on `gaemaj.tech`. A new event named
+“Movie Night” receives the slug `movie-night`, so its guest link is
+`https://gaemaj.tech/movie-night`. If that slug already exists, the next event
+uses `movie-night-2`. Existing GitHub Pages links that use `?event=` continue to
+work.
+
+The static application remains deployed in `gathering/`. The small Cloudflare
+Worker in `domain-worker/` proxies the custom domain to that directory while
+preserving the clean URL in the browser. Firebase remains the direct data
+service; the Worker does not receive event, RSVP, chat, or order data.
+
 ## Local development
 
 ```bash
