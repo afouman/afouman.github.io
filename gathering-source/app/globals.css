@@ -587,6 +587,20 @@ button:disabled {
 .new-event-schedule-grid > * {
   min-width: 0;
 }
+.event-settings-grid > label > .field-input {
+  box-sizing: border-box;
+  height: 3.55rem;
+  min-height: 3.55rem;
+  border-radius: 0.9rem;
+  background-color: white;
+  padding: 0 1rem;
+  font-size: 1rem;
+  font-weight: 500;
+  line-height: 1.2;
+}
+.event-settings-grid > label > select.field-input {
+  padding-right: 2.5rem;
+}
 .compact-integer-field input {
   text-align: center;
   font-weight: 800;
