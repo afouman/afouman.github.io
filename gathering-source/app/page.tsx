@@ -218,11 +218,11 @@ const EVENT_TYPES: Array<{ value: EventType; label: string; description: string 
   { value: 'custom', label: 'Something else', description: 'Name your own kind of gathering' },
 ];
 const EVENT_BACKGROUNDS: Record<EventType, string> = {
-  meal: './gather-dinner-hero.jpg',
-  movie: './gather-movie-night-hero.jpg',
-  game: './gather-game-night-hero.jpg',
-  birthday: './gather-birthday-party-hero.jpg',
-  custom: './gather-custom-event-hero.jpg',
+  meal: '/gathering/gather-dinner-hero.jpg',
+  movie: '/gathering/gather-movie-night-hero.jpg',
+  game: '/gathering/gather-game-night-hero.jpg',
+  birthday: '/gathering/gather-birthday-party-hero.jpg',
+  custom: '/gathering/gather-custom-event-hero.jpg',
 };
 const EVENT_PALETTES: Array<{
   value: EventPalette;
@@ -1023,7 +1023,9 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=21', document.baseURI);
+      const serviceWorkerUrl = usesCleanEventUrls()
+        ? new URL('/sw.js?v=22', window.location.origin)
+        : new URL('sw.js?v=22', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1538,7 +1540,9 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = new URL('sw.js?v=21', document.baseURI);
+      const workerUrl = usesCleanEventUrls()
+        ? new URL('/sw.js?v=22', window.location.origin)
+        : new URL('sw.js?v=22', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
