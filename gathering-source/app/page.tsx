@@ -569,6 +569,13 @@ const normalizedPublicEventPath = (value?: string) => {
   const parts = value.split('/').map((part) => normalizeEventPathSegment(part));
   return parts.length === 2 && parts.every(Boolean) ? parts.join('/') : '';
 };
+const automaticPublicEventPath = (event: Pick<EventMenu, 'title' | 'startsAt' | 'date' | 'publicPath'>) => {
+  const explicitPath = normalizedPublicEventPath(event.publicPath);
+  if (explicitPath) return explicitPath;
+  const category = normalizeEventPathSegment(event.title, 'event');
+  const occurrence = dateEventPathSegment(event.startsAt || '');
+  return occurrence ? `${category}/${occurrence}` : '';
+};
 const eventRoute = (
   eventId: string,
   view: 'guest' | 'host' = 'guest',
@@ -1016,7 +1023,7 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=20', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=21', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1155,7 +1162,14 @@ export default function Home() {
             store.limit(1),
           ),
         );
-        const aliasedEvent = aliasSnapshot.docs[0];
+        const explicitAlias = aliasSnapshot.docs[0];
+        const eventsSnapshot = explicitAlias
+          ? null
+          : await store.getDocs(store.collection(db, 'events'));
+        const aliasedEvent = explicitAlias || eventsSnapshot?.docs.find((eventDocument) => {
+            const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
+            return automaticPublicEventPath(event) === linkedPublicPath;
+          });
         if (!aliasedEvent) {
           setEventReady(true);
           setToast('This event link does not exist. Ask the host for the current link.');
@@ -1225,7 +1239,7 @@ export default function Home() {
               history.replaceState(
                 {},
                 '',
-                eventRoute(ownedEvents[0].id, 'host', ownedEvents[0].publicPath),
+                eventRoute(ownedEvents[0].id, 'host', automaticPublicEventPath(ownedEvents[0])),
               );
             }
           },
@@ -1524,7 +1538,7 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = new URL('sw.js?v=20', document.baseURI);
+      const workerUrl = new URL('sw.js?v=21', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1622,8 +1636,8 @@ export default function Home() {
       {},
       '',
       next === 'host'
-        ? selectedEventId ? eventRoute(selectedEventId, 'host', menu.publicPath) : hostHomeRoute()
-        : selectedEventId ? eventRoute(selectedEventId, 'guest', menu.publicPath) : '/',
+        ? selectedEventId ? eventRoute(selectedEventId, 'host', automaticPublicEventPath(menu)) : hostHomeRoute()
+        : selectedEventId ? eventRoute(selectedEventId, 'guest', automaticPublicEventPath(menu)) : '/',
     );
   };
   const openGuestInvitation = () => {
@@ -1674,7 +1688,7 @@ export default function Home() {
         ) as Order[]);
     setOrders(nextOrders);
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', eventRoute(event.id, 'host', event.publicPath));
+    history.replaceState({}, '', eventRoute(event.id, 'host', automaticPublicEventPath(event)));
   }
 
   async function createEvent() {
@@ -1781,7 +1795,7 @@ export default function Home() {
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', eventRoute(event.id, 'host', event.publicPath));
+    history.replaceState({}, '', eventRoute(event.id, 'host', automaticPublicEventPath(event)));
     notify('Event created — now finish the menu');
   }
 
@@ -4696,7 +4710,7 @@ function HostWorkspace({
                   <span>
                     {activeOrders} active order{activeOrders === 1 ? '' : 's'}
                   </span>
-                    <span>Link · /{menu.publicPath || menu.id}</span>
+                    <span>Link · /{automaticPublicEventPath(menu) || menu.id}</span>
                 </div>
               </div>
               <div className="event-gates">
@@ -4732,14 +4746,14 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={eventRoute(menu.id, 'guest', menu.publicPath)} target="_blank" rel="noreferrer">
+                <a href={eventRoute(menu.id, 'guest', automaticPublicEventPath(menu))} target="_blank" rel="noreferrer">
                   <ExternalLink size={16} />
                   <span>Preview</span>
                 </a>
                 <button
                   onClick={() => {
                     void navigator.clipboard?.writeText(
-                      guestEventUrl(menu.id, menu.publicPath),
+                      guestEventUrl(menu.id, automaticPublicEventPath(menu)),
                     );
                     notify('Guest link copied');
                   }}
@@ -6155,7 +6169,7 @@ function MenuEditor({
   const publicPathParts = menu.publicPath?.split('/') || [];
   const publicPathCategory = publicPathParts[0] || '';
   const publicPathEvent = publicPathParts[1] || '';
-  const suggestedPathCategory = defaultEventPathCategory(menu.eventType || 'meal');
+  const suggestedPathCategory = normalizeEventPathSegment(menu.title, 'event');
   const suggestedPathEvent = dateEventPathSegment(menu.startsAt || '');
   const setPublicPathPart = (category: string, event: string) =>
     setMenu({
@@ -6449,7 +6463,7 @@ function MenuEditor({
             spellCheck={false}
           />
         </div>
-        <small>This is only a public alias. Changing it does not move or recreate the event, orders, RSVPs, or chat.</small>
+        <small>Leave both fields blank to use the automatic name-and-date link shown as the placeholder. An override never moves or recreates the event, orders, RSVPs, or chat.</small>
       </fieldset>
       <div className="event-identity-grid">
         {(menu.eventType || 'meal') === 'custom' && (
