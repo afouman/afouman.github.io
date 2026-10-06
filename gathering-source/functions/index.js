@@ -8,7 +8,7 @@ const webpush = require('web-push');
 initializeApp();
 
 const vapidPrivateKey = defineSecret('VAPID_PRIVATE_KEY');
-const VAPID_PUBLIC_KEY = 'BATATu6LdZX5GC6f_Lcx1ygawCj8TgHCZGrXaVFma7vNGqvpfsSmfnUm09GW6Q4kpN3rMbnhywBIdT1SMTgiIYI';
+const VAPID_PUBLIC_KEY = 'BBLVoXFRiUDSV72gImtZXfRgu92qgCEmBY-nByHqKDiaQrB7uEkvAWRo-D6VtQlHmtESAFH7bpPMImL2uXOu5dY';
 
 function guestMayChat(eventData, rsvp) {
   if (!rsvp || rsvp.status !== 'yes') return false;

@@ -1,13 +1,19 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "gathering-domain",
-  "main": "worker.js",
-  "compatibility_date": "2026-10-04",
-  "workers_dev": true,
-  "routes": [
-    {
-      "pattern": "gaemaj.tech/*",
-      "zone_name": "gaemaj.tech"
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "gathering-domain",
+	"main": "worker.js",
+	"compatibility_date": "2026-10-04",
+	"workers_dev": true,
+	"routes": [
+		{
+			"pattern": "gaemaj.tech/*",
+			"zone_name": "gaemaj.tech"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "PUSH_SUBSCRIPTIONS",
+			"id": "82b5a8b6e67340598056c1c0cae12219"
+		}
+	]
 }

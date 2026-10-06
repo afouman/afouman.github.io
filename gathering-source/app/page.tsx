@@ -499,6 +499,22 @@ const firebaseConfigured = Boolean(
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim() || '';
 const PUSH_NOTIFICATIONS_ENABLED =
   process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
+const PUSH_API_URL = 'https://gaemaj.tech/api/push';
+const callPushApi = async (
+  path: 'subscribe' | 'send',
+  method: 'POST' | 'DELETE',
+  body: Record<string, unknown>,
+) => {
+  const response = await fetch(`${PUSH_API_URL}/${path}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(result?.error || 'Notification service is unavailable.');
+  }
+};
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const LAST_EVENT_KEY = 'gather-last-event';
@@ -1024,8 +1040,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=24', window.location.origin)
-        : new URL('sw.js?v=24', document.baseURI);
+        ? new URL('/sw.js?v=25', window.location.origin)
+        : new URL('sw.js?v=25', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1439,6 +1455,14 @@ export default function Home() {
     : myRsvp?.status === 'yes' && guestHasEventAccess && effectiveGuestProfile
       ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
       : null;
+  const chatActorUid = chatActor?.uid;
+  useEffect(() => {
+    if (!chatActorUid || new URLSearchParams(window.location.search).get('chat') !== '1') return;
+    queueMicrotask(() => {
+      setChatStarted(true);
+      setChatOpen(true);
+    });
+  }, [chatActorUid]);
   const openRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
@@ -1487,7 +1511,7 @@ export default function Home() {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
   };
-  const pushActorUid = chatActor?.uid;
+  const pushActorUid = chatActorUid;
   useEffect(() => {
     let nextState: PushNotificationState = 'disabled';
     if (!pushActorUid) {
@@ -1541,8 +1565,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=24', window.location.origin)
-        : new URL('sw.js?v=24', document.baseURI);
+        ? new URL('/sw.js?v=25', window.location.origin)
+        : new URL('sw.js?v=25', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1580,6 +1604,14 @@ export default function Home() {
           updatedAt: store.serverTimestamp(),
         },
       );
+      await callPushApi('subscribe', 'POST', {
+        eventId: menu.id,
+        subscriptionId,
+        subscription: serialized,
+        actorUid: chatActor.uid,
+        actorRole: chatActor.role,
+        actorName: chatActor.name,
+      });
       localStorage.setItem(
         pushSubscriptionKey(menu.id, chatActor.uid),
         subscriptionId,
@@ -1612,7 +1644,13 @@ export default function Home() {
           'pushSubscriptions',
           subscriptionId,
         ));
+        await callPushApi('subscribe', 'DELETE', { eventId: menu.id, subscriptionId });
       }
+      const registration = 'serviceWorker' in navigator
+        ? await navigator.serviceWorker.ready
+        : null;
+      const browserSubscription = await registration?.pushManager.getSubscription();
+      await browserSubscription?.unsubscribe();
       localStorage.removeItem(storageKey);
       setPushNotificationState('disabled');
       notify('Chat notifications are off for this event.');
@@ -4159,6 +4197,7 @@ function EventChat({
             store.doc(store.getFirestore(getApp()), 'events', menu.id, 'chat', id),
             { ...message, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
           );
+          void callPushApi('send', 'POST', { eventId: menu.id, messageId: id }).catch(() => undefined);
         } else savePreview([...messages, message]);
       }
       setDraft('');
@@ -4220,6 +4259,7 @@ function EventChat({
           store.doc(store.getFirestore(getApp()), 'events', menu.id, 'chat', id),
           { ...message, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
         );
+        void callPushApi('send', 'POST', { eventId: menu.id, messageId: id }).catch(() => undefined);
       } else savePreview([...messages, message]);
       setPollQuestion('');
       setPollOptions(['', '']);
