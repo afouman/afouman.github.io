@@ -609,7 +609,7 @@ const hostHomeRoute = () => usesCleanEventUrls() ? '/?view=host' : '?view=host';
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(eventRoute(eventId, 'guest', publicPath), window.location.origin).toString();
 const pushSubscriptionKey = (eventId: string, actorUid: string) =>
-  `gather-chat-push:${eventId}:${actorUid}`;
+  `gather-chat-push-v2:${eventId}:${actorUid}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
 const demoOrdersKey = (eventId: string) => `gather-demo-orders-v2:${eventId}`;
 const DEMO_CHANNEL = 'gather-demo-sync';
@@ -990,6 +990,16 @@ export default function Home() {
   });
 
   useEffect(() => {
+    const prime = () => primeChatAudio();
+    window.addEventListener('pointerdown', prime, { once: true });
+    window.addEventListener('keydown', prime, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', prime);
+      window.removeEventListener('keydown', prime);
+    };
+  }, []);
+
+  useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     const hostView = parameters.get('view') === 'host';
     if (hostView)
@@ -1040,8 +1050,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=25', window.location.origin)
-        : new URL('sw.js?v=25', document.baseURI);
+        ? new URL('/sw.js?v=26', window.location.origin)
+        : new URL('sw.js?v=26', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1457,10 +1467,10 @@ export default function Home() {
       : null;
   const chatActorUid = chatActor?.uid;
   useEffect(() => {
-    if (!chatActorUid || new URLSearchParams(window.location.search).get('chat') !== '1') return;
+    if (!chatActorUid) return;
     queueMicrotask(() => {
       setChatStarted(true);
-      setChatOpen(true);
+      if (new URLSearchParams(window.location.search).get('chat') === '1') setChatOpen(true);
     });
   }, [chatActorUid]);
   const openRsvpPanel = () => {
@@ -1565,18 +1575,19 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=25', window.location.origin)
-        : new URL('sw.js?v=25', document.baseURI);
+        ? new URL('/sw.js?v=26', window.location.origin)
+        : new URL('sw.js?v=26', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
       });
       await navigator.serviceWorker.ready;
-      const subscription = await registration.pushManager.getSubscription()
-        || await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
-        });
+      const priorSubscription = await registration.pushManager.getSubscription();
+      if (priorSubscription) await priorSubscription.unsubscribe();
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
+      });
       const serialized = subscription.toJSON();
       if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
         throw new Error('The browser returned an incomplete push subscription.');
@@ -2908,6 +2919,19 @@ export default function Home() {
                 <Smartphone size={14} /> Host app
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => void (pushNotificationState === 'enabled'
+                ? disableChatNotifications()
+                : enableChatNotifications())}
+              disabled={!chatActor || pushNotificationBusy || pushNotificationState === 'unsupported'}
+              className={`chat-header-button ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
+              title={pushNotificationState === 'enabled' ? 'Turn off chat notifications' : 'Turn on chat notifications'}
+              aria-label={pushNotificationState === 'enabled' ? 'Turn off chat notifications' : 'Turn on chat notifications'}
+            >
+              {pushNotificationState === 'enabled' ? <BellRing size={16} /> : <Bell size={16} />}
+              <span>{pushNotificationState === 'enabled' ? 'Notifications on' : 'Notify me'}</span>
+            </button>
             <button
               type="button"
               onClick={() => {

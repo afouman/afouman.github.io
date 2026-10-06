@@ -2162,6 +2162,10 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.38;
 }
+.chat-header-button.notification-enabled {
+  border-color: color-mix(in srgb, var(--tomato) 60%, transparent);
+  background: var(--tomato);
+}
 .chat-float-layer {
   position: fixed;
   z-index: 90;
