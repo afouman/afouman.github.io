@@ -76,8 +76,7 @@ type MenuItem = {
 };
 type EventMenu = {
   id: string;
-  publicPathCategory?: string;
-  publicPathEvent?: string;
+  publicPath?: string;
   title: string;
   date: string;
   startsAt?: string;
@@ -505,7 +504,6 @@ const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`
 const LAST_EVENT_KEY = 'gather-last-event';
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
 const EVENT_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,59}$/;
-const EVENT_PATH_ID_SEPARATOR = '--';
 const RESERVED_EVENT_PATHS = new Set([
   '_next',
   'gathering',
@@ -523,17 +521,26 @@ const eventIdFromUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment));
   if (segments[0] === 'gathering') segments.shift();
-  const pathEventId = segments.length === 2
-    && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
-    ? segments.join(EVENT_PATH_ID_SEPARATOR)
-    : segments.length === 1 ? segments[0] : '';
+  const pathEventId = segments.length === 1 ? segments[0] : '';
   return pathEventId
     && !RESERVED_EVENT_PATHS.has(pathEventId)
     && EVENT_ID_PATTERN.test(pathEventId)
     ? pathEventId
     : null;
 };
+const eventPublicPathFromUrl = (url: URL) => {
+  const segments = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment).toLowerCase());
+  if (segments[0] === 'gathering') segments.shift();
+  return segments.length === 2
+    && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
+    ? segments.join('/')
+    : null;
+};
 const currentEventId = () => eventIdFromUrl(new URL(window.location.href));
+const currentEventPublicPath = () => eventPublicPathFromUrl(new URL(window.location.href));
 const usesCleanEventUrls = () =>
   typeof window !== 'undefined' && !window.location.pathname.startsWith('/gathering');
 const normalizeEventPathSegment = (value: string, fallback = '') =>
@@ -557,23 +564,27 @@ const dateEventPathSegment = (value: string) => {
     .format(new Date(Date.UTC(year, month - 1, day)));
   return `${monthName}${day}`.toLowerCase();
 };
-const publicEventPath = (eventId: string) => {
-  const parts = eventId.split(EVENT_PATH_ID_SEPARATOR);
-  return parts.length === 2 && parts.every((part) => EVENT_PATH_SEGMENT_PATTERN.test(part))
-    ? parts.map(encodeURIComponent).join('/')
-    : encodeURIComponent(eventId);
+const normalizedPublicEventPath = (value?: string) => {
+  if (!value) return '';
+  const parts = value.split('/').map((part) => normalizeEventPathSegment(part));
+  return parts.length === 2 && parts.every(Boolean) ? parts.join('/') : '';
 };
-const eventRoute = (eventId: string, view: 'guest' | 'host' = 'guest') => {
+const eventRoute = (
+  eventId: string,
+  view: 'guest' | 'host' = 'guest',
+  publicPath?: string,
+) => {
   const encodedEventId = encodeURIComponent(eventId);
+  const cleanPath = normalizedPublicEventPath(publicPath);
   if (usesCleanEventUrls())
-    return `/${publicEventPath(eventId)}${view === 'host' ? '?view=host' : ''}`;
+    return `/${cleanPath || encodedEventId}${view === 'host' ? '?view=host' : ''}`;
   return view === 'host'
     ? `?view=host&event=${encodedEventId}`
     : `?event=${encodedEventId}`;
 };
 const hostHomeRoute = () => usesCleanEventUrls() ? '/?view=host' : '?view=host';
-const guestEventUrl = (eventId: string) =>
-  new URL(eventRoute(eventId), window.location.origin).toString();
+const guestEventUrl = (eventId: string, publicPath?: string) =>
+  new URL(eventRoute(eventId, 'guest', publicPath), window.location.origin).toString();
 const pushSubscriptionKey = (eventId: string, actorUid: string) =>
   `gather-chat-push:${eventId}:${actorUid}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
@@ -961,21 +972,24 @@ export default function Home() {
     if (hostView)
       queueMicrotask(() => setMode('host'));
     const linkedEventId = currentEventId();
+    const linkedPublicPath = currentEventPublicPath();
     const rememberedEventId = localStorage.getItem(LAST_EVENT_KEY);
     const eventId = linkedEventId
       || rememberedEventId
       || (firebaseConfigured ? EMPTY_EVENT_ID : demoMenu.id);
     if (linkedEventId) localStorage.setItem(LAST_EVENT_KEY, linkedEventId);
-    else if (rememberedEventId) {
+    else if (rememberedEventId && !linkedPublicPath) {
       history.replaceState(
         {},
         '',
         eventRoute(rememberedEventId, hostView ? 'host' : 'guest'),
       );
     }
-    queueMicrotask(() => setReceipts(readReceipts(eventId)));
-    const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
-    if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
+    if (!linkedPublicPath) {
+      queueMicrotask(() => setReceipts(readReceipts(eventId)));
+      const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
+      if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
+    }
   }, []);
 
   useEffect(() => {
@@ -1129,9 +1143,27 @@ export default function Home() {
         ) setHostUser(hostAuthUser.email || hostAuthUser.uid);
       }
       const db = store.getFirestore(app);
-      const eventId = currentEventId()
-        || localStorage.getItem(LAST_EVENT_KEY)
+      const linkedPublicPath = currentEventPublicPath();
+      let eventId = currentEventId()
+        || (!linkedPublicPath ? localStorage.getItem(LAST_EVENT_KEY) : null)
         || menu.id;
+      if (linkedPublicPath) {
+        const aliasSnapshot = await store.getDocs(
+          store.query(
+            store.collection(db, 'events'),
+            store.where('publicPath', '==', linkedPublicPath),
+            store.limit(1),
+          ),
+        );
+        const aliasedEvent = aliasSnapshot.docs[0];
+        if (!aliasedEvent) {
+          setEventReady(true);
+          setToast('This event link does not exist. Ask the host for the current link.');
+          return;
+        }
+        eventId = aliasedEvent.id;
+        localStorage.setItem(LAST_EVENT_KEY, eventId);
+      }
       const unsubMenu = store.onSnapshot(
         store.doc(db, 'events', eventId),
         (snap) => {
@@ -1193,7 +1225,7 @@ export default function Home() {
               history.replaceState(
                 {},
                 '',
-                eventRoute(ownedEvents[0].id, 'host'),
+                eventRoute(ownedEvents[0].id, 'host', ownedEvents[0].publicPath),
               );
             }
           },
@@ -1298,7 +1330,7 @@ export default function Home() {
         unsubRememberedOrders.forEach((unsubscribe) => unsubscribe());
       };
     })().catch(() =>
-      setToast('Could not connect to live orders. Showing the preview.'),
+      setToast('Could not connect to the live event. Check your connection and reload.'),
     );
     return () => stop();
   }, [mode, hostUser, guestUid, menu.id]);
@@ -1590,8 +1622,8 @@ export default function Home() {
       {},
       '',
       next === 'host'
-        ? selectedEventId ? eventRoute(selectedEventId, 'host') : hostHomeRoute()
-        : selectedEventId ? eventRoute(selectedEventId) : '/',
+        ? selectedEventId ? eventRoute(selectedEventId, 'host', menu.publicPath) : hostHomeRoute()
+        : selectedEventId ? eventRoute(selectedEventId, 'guest', menu.publicPath) : '/',
     );
   };
   const openGuestInvitation = () => {
@@ -1603,6 +1635,11 @@ export default function Home() {
     let eventId = entered;
     try {
       const invitationUrl = new URL(entered, window.location.href);
+      const invitationPublicPath = eventPublicPathFromUrl(invitationUrl);
+      if (invitationPublicPath) {
+        window.location.assign(`/${invitationPublicPath}`);
+        return;
+      }
       eventId = eventIdFromUrl(invitationUrl) || entered;
     } catch {
       eventId = entered;
@@ -1637,7 +1674,7 @@ export default function Home() {
         ) as Order[]);
     setOrders(nextOrders);
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', eventRoute(event.id, 'host'));
+    history.replaceState({}, '', eventRoute(event.id, 'host', event.publicPath));
   }
 
   async function createEvent() {
@@ -1647,15 +1684,21 @@ export default function Home() {
       notify('Add an event name, date, and both parts of its web address');
       return;
     }
-    const eventId = `${pathCategory}${EVENT_PATH_ID_SEPARATOR}${pathEvent}`;
-    if (events.some((existingEvent) => existingEvent.id === eventId)) {
+    const publicPath = `${pathCategory}/${pathEvent}`;
+    if (events.some((existingEvent) => existingEvent.publicPath === publicPath)) {
       notify('That event web address is already in use. Change either part of the link');
       return;
     }
+    const baseSlug = normalizeEventPathSegment(newEvent.title, 'event').slice(0, 36);
+    let eventId = baseSlug;
+    let eventSuffix = 2;
+    while (events.some((existingEvent) => existingEvent.id === eventId)) {
+      eventId = `${baseSlug}-${eventSuffix}`;
+      eventSuffix += 1;
+    }
     const event = withoutUndefined<EventMenu>({
       id: eventId,
-      publicPathCategory: pathCategory,
-      publicPathEvent: pathEvent,
+      publicPath,
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
       startsAt: newEvent.date,
@@ -1738,7 +1781,7 @@ export default function Home() {
       welcome: 'Choose what you’d like and send your order to the host.',
     });
     localStorage.setItem(LAST_EVENT_KEY, event.id);
-    history.replaceState({}, '', eventRoute(event.id, 'host'));
+    history.replaceState({}, '', eventRoute(event.id, 'host', event.publicPath));
     notify('Event created — now finish the menu');
   }
 
@@ -2418,8 +2461,20 @@ export default function Home() {
       notify('Name or delete the unfinished menu item before saving');
       return;
     }
+    const cleanPublicPath = normalizedPublicEventPath(menu.publicPath);
+    if (menu.publicPath && !cleanPublicPath) {
+      notify('The guest link needs two parts, such as movie-night/oct4');
+      return;
+    }
+    if (cleanPublicPath && events.some(
+      (event) => event.id !== menu.id && normalizedPublicEventPath(event.publicPath) === cleanPublicPath,
+    )) {
+      notify('That guest link is already assigned to another event');
+      return;
+    }
     const cleanedMenu = withoutUndefined<EventMenu>({
       ...menu,
+      publicPath: cleanPublicPath || undefined,
       items: menu.items.filter((item) => item.name.trim()).map((item) => ({
         ...item,
         description: itemDescription(item),
@@ -4641,7 +4696,7 @@ function HostWorkspace({
                   <span>
                     {activeOrders} active order{activeOrders === 1 ? '' : 's'}
                   </span>
-                    <span>Link · /{publicEventPath(menu.id)}</span>
+                    <span>Link · /{menu.publicPath || menu.id}</span>
                 </div>
               </div>
               <div className="event-gates">
@@ -4677,14 +4732,14 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={eventRoute(menu.id)} target="_blank" rel="noreferrer">
+                <a href={eventRoute(menu.id, 'guest', menu.publicPath)} target="_blank" rel="noreferrer">
                   <ExternalLink size={16} />
                   <span>Preview</span>
                 </a>
                 <button
                   onClick={() => {
                     void navigator.clipboard?.writeText(
-                      guestEventUrl(menu.id),
+                      guestEventUrl(menu.id, menu.publicPath),
                     );
                     notify('Guest link copied');
                   }}
@@ -6097,6 +6152,16 @@ function MenuEditor({
   const [saving, setSaving] = useState(false);
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  const publicPathParts = menu.publicPath?.split('/') || [];
+  const publicPathCategory = publicPathParts[0] || '';
+  const publicPathEvent = publicPathParts[1] || '';
+  const suggestedPathCategory = defaultEventPathCategory(menu.eventType || 'meal');
+  const suggestedPathEvent = dateEventPathSegment(menu.startsAt || '');
+  const setPublicPathPart = (category: string, event: string) =>
+    setMenu({
+      ...menu,
+      publicPath: `${normalizeEventPathSegment(category)}/${normalizeEventPathSegment(event)}`,
+    });
   const cardRefs = useRef(new Map<string, HTMLElement>());
   const previousCardPositions = useRef(new Map<string, DOMRect>());
   const animateReorderRef = useRef(false);
@@ -6358,6 +6423,34 @@ function MenuEditor({
           />
         </label>
       </div>
+      <fieldset className="event-link-builder event-link-builder-existing">
+        <legend className="field-label">Guest link for this event</legend>
+        <div className="event-link-inputs">
+          <span>gaemaj.tech/</span>
+          <input
+            value={publicPathCategory}
+            onChange={(event) => setPublicPathPart(event.target.value, publicPathEvent)}
+            className="field-input"
+            placeholder={suggestedPathCategory}
+            aria-label="Event link first part"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <span>/</span>
+          <input
+            value={publicPathEvent}
+            onChange={(event) => setPublicPathPart(publicPathCategory, event.target.value)}
+            className="field-input"
+            placeholder={suggestedPathEvent || 'oct4'}
+            aria-label="Event link second part"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+        </div>
+        <small>This is only a public alias. Changing it does not move or recreate the event, orders, RSVPs, or chat.</small>
+      </fieldset>
       <div className="event-identity-grid">
         {(menu.eventType || 'meal') === 'custom' && (
           <label className="field-label">

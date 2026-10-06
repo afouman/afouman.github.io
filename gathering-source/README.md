@@ -17,12 +17,13 @@ The private dashboard is `/?view=host`. On first use, sign in as host and choose
 
 ## Custom domain
 
-Production supports clean, two-part event links on `gaemaj.tech`. When creating
-an event, the host controls both the gathering segment and the event-specific
-segment, for example `https://gaemaj.tech/movie-night/oct4` or
-`https://gaemaj.tech/brunch/nov10`. The app prevents duplicate paths. Existing
-one-part links such as `https://gaemaj.tech/movie-night` and GitHub Pages links
-that use `?event=` continue to work.
+Production supports clean, two-part event aliases on `gaemaj.tech`. In the event
+editor, the host can assign an existing event a link such as
+`https://gaemaj.tech/movie-night/oct4` or `https://gaemaj.tech/brunch/nov10`.
+The alias is stored on the existing event document; its internal ID, orders,
+RSVPs, and chat are not moved or recreated. The app prevents duplicate aliases.
+Existing one-part links and GitHub Pages links that use `?event=` continue to
+work.
 
 The static application remains deployed in `gathering/`. The small Cloudflare
 Worker in `domain-worker/` proxies the custom domain to that directory while
@@ -42,7 +43,10 @@ Without Firebase values the app intentionally runs with polished sample data, so
 
 Run `pnpm preview`, then open `http://localhost:3000/?test=1` in one tab and `http://localhost:3000/?view=host&test=1` in another. To use sample data, start without Firebase environment variables. Preview orders, RSVPs, and saved menu changes synchronize between those tabs through browser-local storage and a live browser channel, without touching production data.
 
-Run `pnpm test` for the repeatable code-quality check and production export. The generated GitHub Pages site is written to `dist/client`.
+Run `GATHER_BASE_PATH=/gathering/ pnpm build` for the GitHub Pages production
+export. The generated site is written to `dist/client`. The Firebase public web
+configuration must be present in `.env.local` or the equivalent build
+environment.
 
 ## Data and security
 
