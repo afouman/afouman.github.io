@@ -1016,7 +1016,7 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=19', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=20', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1524,7 +1524,7 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = new URL('sw.js?v=19', document.baseURI);
+      const workerUrl = new URL('sw.js?v=20', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
