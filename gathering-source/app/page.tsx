@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
@@ -1050,8 +1050,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=26', window.location.origin)
-        : new URL('sw.js?v=26', document.baseURI);
+        ? new URL('/sw.js?v=27', window.location.origin)
+        : new URL('sw.js?v=27', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1575,8 +1575,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=26', window.location.origin)
-        : new URL('sw.js?v=26', document.baseURI);
+        ? new URL('/sw.js?v=27', window.location.origin)
+        : new URL('sw.js?v=27', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -4042,12 +4042,29 @@ function EventChat({
   const [pinnedIndex, setPinnedIndex] = useState(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
+  const restoredForOpen = useRef(false);
   const previewKey = `gather-demo-chat:${menu.id}`;
+  const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
   const locked = menu.chatOpen === false;
+
+  const rememberReadPosition = useCallback(() => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    const bounds = stream.getBoundingClientRect();
+    const visibleMessages = Array.from(
+      stream.querySelectorAll<HTMLElement>('[data-chat-message-id]'),
+    ).filter((element) => {
+      const box = element.getBoundingClientRect();
+      return box.bottom > bounds.top && box.top < bounds.bottom;
+    });
+    const lastVisible = visibleMessages.at(-1)?.dataset.chatMessageId;
+    if (lastVisible) localStorage.setItem(readPositionKey, lastVisible);
+  }, [readPositionKey]);
 
   useEffect(() => {
     knownMessageIds.current = null;
@@ -4093,8 +4110,34 @@ function EventChat({
   }, [menu.id, previewKey]);
 
   useEffect(() => {
+    if (!visible) return;
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length]);
+  }, [messages.length, visible]);
+
+  useEffect(() => {
+    if (!visible) {
+      restoredForOpen.current = false;
+      return;
+    }
+    if (restoredForOpen.current || messages.length === 0) return;
+    restoredForOpen.current = true;
+    const savedMessageId = localStorage.getItem(readPositionKey);
+    requestAnimationFrame(() => {
+      if (!savedMessageId) {
+        endRef.current?.scrollIntoView({ block: 'end' });
+        return;
+      }
+      const chronological = [...messages].sort(
+        (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+      );
+      const savedIndex = chronological.findIndex((message) => message.id === savedMessageId);
+      const target = chronological[savedIndex + 1] || chronological[savedIndex];
+      const targetElement = target ? messageRefs.current[target.id] : null;
+      if (targetElement) targetElement.scrollIntoView({ block: 'center' });
+      else endRef.current?.scrollIntoView({ block: 'end' });
+      requestAnimationFrame(rememberReadPosition);
+    });
+  }, [messages, readPositionKey, rememberReadPosition, visible]);
 
   useEffect(() => {
     const currentIds = new Set(messages.map((message) => message.id));
@@ -4468,7 +4511,7 @@ function EventChat({
                       : <Bell size={18} />}
                 </button>
               )}
-              <button type="button" onClick={onMinimize} aria-label="Minimize chat"><Minus size={20} /></button>
+              <button type="button" onClick={() => { rememberReadPosition(); onMinimize(); }} aria-label="Minimize chat"><Minus size={20} /></button>
             </div>
           </header>
           {visiblePinnedMessage && (
@@ -4495,7 +4538,7 @@ function EventChat({
             </aside>
           )}
         </div>
-        <div className="chat-stream" aria-live="polite">
+        <div ref={streamRef} className="chat-stream" aria-live="polite" onScroll={rememberReadPosition}>
           {messages.length === 0 && (
             <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
           )}
@@ -4530,6 +4573,7 @@ function EventChat({
             return (
               <article
                 key={displayKey}
+                data-chat-message-id={message.id}
                 ref={(node) => { messageRefs.current[message.id] = node; }}
                 className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message._pollRepeat ? 'poll-repeat' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
                 onPointerUp={(event) => {
