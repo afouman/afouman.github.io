@@ -188,11 +188,16 @@ export default {
     originUrl.search = incomingUrl.search;
     const upstreamRequest = new Request(originUrl, request);
     upstreamRequest.headers.set('host', 'afouman.github.io');
+    const releaseFile = incomingUrl.pathname === '/sw.js'
+      || incomingUrl.pathname === `${APP_BASE_PATH}/sw.js`;
     const response = await fetch(upstreamRequest, {
-      cf: { cacheEverything: request.method === 'GET', cacheTtlByStatus: { '200-299': 300, '404': 30, '500-599': 0 } },
+      cf: releaseFile
+        ? { cacheEverything: false, cacheTtl: 0 }
+        : { cacheEverything: request.method === 'GET', cacheTtlByStatus: { '200-299': 300, '404': 30, '500-599': 0 } },
     });
     const headers = new Headers(response.headers);
     headers.set('x-gather-route', incomingUrl.pathname);
+    if (releaseFile) headers.set('cache-control', 'no-cache, no-store, must-revalidate');
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };
