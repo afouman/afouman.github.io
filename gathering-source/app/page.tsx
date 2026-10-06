@@ -76,6 +76,8 @@ type MenuItem = {
 };
 type EventMenu = {
   id: string;
+  publicPathCategory?: string;
+  publicPathEvent?: string;
   title: string;
   date: string;
   startsAt?: string;
@@ -502,6 +504,8 @@ const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const LAST_EVENT_KEY = 'gather-last-event';
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
+const EVENT_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,59}$/;
+const EVENT_PATH_ID_SEPARATOR = '--';
 const RESERVED_EVENT_PATHS = new Set([
   '_next',
   'gathering',
@@ -519,7 +523,10 @@ const eventIdFromUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment));
   if (segments[0] === 'gathering') segments.shift();
-  const pathEventId = segments.length === 1 ? segments[0] : '';
+  const pathEventId = segments.length === 2
+    && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
+    ? segments.join(EVENT_PATH_ID_SEPARATOR)
+    : segments.length === 1 ? segments[0] : '';
   return pathEventId
     && !RESERVED_EVENT_PATHS.has(pathEventId)
     && EVENT_ID_PATTERN.test(pathEventId)
@@ -529,10 +536,37 @@ const eventIdFromUrl = (url: URL) => {
 const currentEventId = () => eventIdFromUrl(new URL(window.location.href));
 const usesCleanEventUrls = () =>
   typeof window !== 'undefined' && !window.location.pathname.startsWith('/gathering');
+const normalizeEventPathSegment = (value: string, fallback = '') =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || fallback;
+const defaultEventPathCategory = (eventType: EventType) => ({
+  meal: 'meal',
+  movie: 'movie-night',
+  game: 'game-night',
+  birthday: 'birthday',
+  custom: 'event',
+})[eventType];
+const dateEventPathSegment = (value: string) => {
+  const [year, month, day] = value.split('T')[0]?.split('-').map(Number) || [];
+  if (!year || !month || !day) return '';
+  const monthName = new Intl.DateTimeFormat('en', { month: 'short', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, month - 1, day)));
+  return `${monthName}${day}`.toLowerCase();
+};
+const publicEventPath = (eventId: string) => {
+  const parts = eventId.split(EVENT_PATH_ID_SEPARATOR);
+  return parts.length === 2 && parts.every((part) => EVENT_PATH_SEGMENT_PATTERN.test(part))
+    ? parts.map(encodeURIComponent).join('/')
+    : encodeURIComponent(eventId);
+};
 const eventRoute = (eventId: string, view: 'guest' | 'host' = 'guest') => {
   const encodedEventId = encodeURIComponent(eventId);
   if (usesCleanEventUrls())
-    return `/${encodedEventId}${view === 'host' ? '?view=host' : ''}`;
+    return `/${publicEventPath(eventId)}${view === 'host' ? '?view=host' : ''}`;
   return view === 'host'
     ? `?view=host&event=${encodedEventId}`
     : `?event=${encodedEventId}`;
@@ -907,6 +941,8 @@ export default function Home() {
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
+    publicPathCategory: 'meal',
+    publicPathEvent: '',
     address: '',
     maxAdditionalGuests: 0,
     requireGuestApproval: false,
@@ -966,7 +1002,7 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = new URL('sw.js?v=18', document.baseURI);
+      const serviceWorkerUrl = new URL('sw.js?v=19', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1456,7 +1492,7 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = new URL('sw.js?v=18', document.baseURI);
+      const workerUrl = new URL('sw.js?v=19', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1605,25 +1641,21 @@ export default function Home() {
   }
 
   async function createEvent() {
-    if (!newEvent.title.trim() || !newEvent.date.trim()) {
-      notify('Add an event name and date before creating the menu');
+    const pathCategory = normalizeEventPathSegment(newEvent.publicPathCategory);
+    const pathEvent = normalizeEventPathSegment(newEvent.publicPathEvent);
+    if (!newEvent.title.trim() || !newEvent.date.trim() || !pathCategory || !pathEvent) {
+      notify('Add an event name, date, and both parts of its web address');
       return;
     }
-    const baseSlug =
-      newEvent.title
-        .toLowerCase()
-        .trim()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '')
-        .slice(0, 36) || 'event';
-    let eventId = baseSlug;
-    let eventSuffix = 2;
-    while (events.some((existingEvent) => existingEvent.id === eventId)) {
-      eventId = `${baseSlug}-${eventSuffix}`;
-      eventSuffix += 1;
+    const eventId = `${pathCategory}${EVENT_PATH_ID_SEPARATOR}${pathEvent}`;
+    if (events.some((existingEvent) => existingEvent.id === eventId)) {
+      notify('That event web address is already in use. Change either part of the link');
+      return;
     }
     const event = withoutUndefined<EventMenu>({
       id: eventId,
+      publicPathCategory: pathCategory,
+      publicPathEvent: pathEvent,
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
       startsAt: newEvent.date,
@@ -1692,6 +1724,8 @@ export default function Home() {
     setNewEvent({
       title: '',
       date: '',
+      publicPathCategory: 'meal',
+      publicPathEvent: '',
       address: '',
       maxAdditionalGuests: 0,
       requireGuestApproval: false,
@@ -2939,7 +2973,7 @@ export default function Home() {
                 onKeyDown={(event) => {
                   if (event.key === 'Enter') openGuestInvitation();
                 }}
-                placeholder="https://gaemaj.tech/movie-night"
+                placeholder="https://gaemaj.tech/movie-night/oct4"
               />
             </label>
             <button
@@ -2984,6 +3018,40 @@ export default function Home() {
                 placeholder="Sunday birthday brunch"
               />
             </label>
+            <fieldset className="event-link-builder">
+              <legend className="field-label">Guest link</legend>
+              <div className="event-link-inputs">
+                <span>gaemaj.tech/</span>
+                <input
+                  value={newEvent.publicPathCategory}
+                  onChange={(event) => setNewEvent({
+                    ...newEvent,
+                    publicPathCategory: normalizeEventPathSegment(event.target.value),
+                  })}
+                  className="field-input"
+                  placeholder="movie-night"
+                  aria-label="Event link first part"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+                <span>/</span>
+                <input
+                  value={newEvent.publicPathEvent}
+                  onChange={(event) => setNewEvent({
+                    ...newEvent,
+                    publicPathEvent: normalizeEventPathSegment(event.target.value),
+                  })}
+                  className="field-input"
+                  placeholder="oct4"
+                  aria-label="Event link second part"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </div>
+              <small>Use the first part for the kind of gathering and the second for this specific event.</small>
+            </fieldset>
             <fieldset className="new-event-type-picker">
               <legend className="field-label">What kind of gathering is this?</legend>
               <div>
@@ -2994,14 +3062,21 @@ export default function Home() {
                       name="event-type"
                       value={type.value}
                       checked={newEvent.eventType === type.value}
-                      onChange={() => setNewEvent({
-                        ...newEvent,
-                        eventType: type.value,
-                        backgroundImageUrl: '',
-                        backgroundFocus: centerBackgroundFocus(),
-                        backgroundZoom: 1,
-                        colorPalette: '',
-                      })}
+                      onChange={() => {
+                        const previousDefault = defaultEventPathCategory(newEvent.eventType);
+                        setNewEvent({
+                          ...newEvent,
+                          eventType: type.value,
+                          publicPathCategory:
+                            !newEvent.publicPathCategory || newEvent.publicPathCategory === previousDefault
+                              ? defaultEventPathCategory(type.value)
+                              : newEvent.publicPathCategory,
+                          backgroundImageUrl: '',
+                          backgroundFocus: centerBackgroundFocus(),
+                          backgroundZoom: 1,
+                          colorPalette: '',
+                        });
+                      }}
                     />
                     <strong>{type.label}</strong>
                     <small>{type.description}</small>
@@ -3068,9 +3143,17 @@ export default function Home() {
                 <input
                   type="datetime-local"
                   value={newEvent.date}
-                  onChange={(e) =>
-                    setNewEvent({ ...newEvent, date: e.target.value })
-                  }
+                  onChange={(e) => {
+                    const previousDatePath = dateEventPathSegment(newEvent.date);
+                    setNewEvent({
+                      ...newEvent,
+                      date: e.target.value,
+                      publicPathEvent:
+                        !newEvent.publicPathEvent || newEvent.publicPathEvent === previousDatePath
+                          ? dateEventPathSegment(e.target.value)
+                          : newEvent.publicPathEvent,
+                    });
+                  }}
                   className="field-input date-time-input"
                 />
               </label>
@@ -3126,7 +3209,7 @@ export default function Home() {
               />
             </label>
             <button
-              disabled={!newEvent.title.trim() || !newEvent.date.trim() || (newEvent.eventType === 'custom' && !newEvent.customEventType.trim())}
+              disabled={!newEvent.title.trim() || !newEvent.date.trim() || !newEvent.publicPathCategory || !newEvent.publicPathEvent || (newEvent.eventType === 'custom' && !newEvent.customEventType.trim())}
               onClick={() => void createEvent()}
               className="primary-button mt-7 w-full justify-center py-3.5 disabled:opacity-40"
             >
@@ -4558,7 +4641,7 @@ function HostWorkspace({
                   <span>
                     {activeOrders} active order{activeOrders === 1 ? '' : 's'}
                   </span>
-                  <span>Code · {menu.id}</span>
+                    <span>Link · /{publicEventPath(menu.id)}</span>
                 </div>
               </div>
               <div className="event-gates">

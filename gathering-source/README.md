@@ -17,11 +17,12 @@ The private dashboard is `/?view=host`. On first use, sign in as host and choose
 
 ## Custom domain
 
-Production supports clean event links on `gaemaj.tech`. A new event named
-“Movie Night” receives the slug `movie-night`, so its guest link is
-`https://gaemaj.tech/movie-night`. If that slug already exists, the next event
-uses `movie-night-2`. Existing GitHub Pages links that use `?event=` continue to
-work.
+Production supports clean, two-part event links on `gaemaj.tech`. When creating
+an event, the host controls both the gathering segment and the event-specific
+segment, for example `https://gaemaj.tech/movie-night/oct4` or
+`https://gaemaj.tech/brunch/nov10`. The app prevents duplicate paths. Existing
+one-part links such as `https://gaemaj.tech/movie-night` and GitHub Pages links
+that use `?event=` continue to work.
 
 The static application remains deployed in `gathering/`. The small Cloudflare
 Worker in `domain-worker/` proxies the custom domain to that directory while
