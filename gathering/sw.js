@@ -1,7 +1,7 @@
 // Keep the cache name deliberately versioned. A new release clears the old
 // HTML shell, so GitHub Pages never leaves a host looking at an older UI.
-const CACHE_NAME = 'gather-host-v28';
-const APP_SHELL = ['./', './manifest.webmanifest', './icons/gather-favicon-48.png', './icons/gather-host-180.png', './icons/gather-host-192.png', './icons/gather-host-512.png'];
+const CACHE_NAME = 'nights-v30';
+const APP_SHELL = ['./', './manifest.webmanifest', './icons/gather-favicon-48.png', './icons/gather-app-icon-180.png', './icons/gather-app-icon-192.png', './icons/gather-app-icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
@@ -34,11 +34,11 @@ self.addEventListener('push', event => {
   } catch {
     message = { body: event.data?.text() || 'A new message was posted.' };
   }
-  const title = message.title || 'New Gather message';
+  const title = message.title || 'New Nights message';
   event.waitUntil(self.registration.showNotification(title, {
-    body: message.body || 'Open Gather to read it.',
-    icon: './icons/gather-host-192.png',
-    badge: './icons/gather-host-180.png',
+    body: message.body || 'Open Nights to read it.',
+    icon: './icons/gather-app-icon-192.png',
+    badge: './icons/gather-app-icon-180.png',
     tag: message.tag || 'gather-chat',
     renotify: true,
     data: { url: message.url || './' },

@@ -25,6 +25,7 @@ import {
   Leaf,
   ListChecks,
   LockKeyhole,
+  MapPin,
   MessageCircle,
   Minus,
   Move,
@@ -346,6 +347,12 @@ type GuestProfile = {
   createdAt: number;
   updatedAt?: number;
 };
+type GuestSession = Required<Pick<GuestProfile, 'guestUid' | 'guestName' | 'guestPhone' | 'pinHash'>>;
+type GuestEventAccess = {
+  event: EventMenu;
+  profile: GuestProfile;
+  rsvp: Rsvp | null;
+};
 type Receipt = {
   eventId: string;
   orderId: string;
@@ -439,7 +446,7 @@ const demoMenu: EventMenu = {
 const EMPTY_EVENT_ID = 'no-event-selected';
 const emptyEventMenu: EventMenu = {
   id: EMPTY_EVENT_ID,
-  title: 'Gather',
+  title: 'Nights',
   date: '',
   welcome: 'Open an event link to see its invitation.',
   accepting: false,
@@ -517,6 +524,7 @@ const callPushApi = async (
 };
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
+const GUEST_SESSION_KEY = 'nights-guest-session-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
 const EVENT_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,59}$/;
@@ -558,7 +566,8 @@ const eventPublicPathFromUrl = (url: URL) => {
 const currentEventId = () => eventIdFromUrl(new URL(window.location.href));
 const currentEventPublicPath = () => eventPublicPathFromUrl(new URL(window.location.href));
 const usesCleanEventUrls = () =>
-  typeof window !== 'undefined' && !window.location.pathname.startsWith('/gathering');
+  typeof window !== 'undefined'
+  && (window.location.hostname === 'gaemaj.tech' || window.location.hostname.endsWith('.gaemaj.tech'));
 const normalizeEventPathSegment = (value: string, fallback = '') =>
   value
     .toLowerCase()
@@ -616,6 +625,18 @@ const DEMO_CHANNEL = 'gather-demo-sync';
 const RECEIPTS_KEY = 'gather-order-receipts';
 const RECEIPT_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const DESCRIPTION_EXAMPLE = 'Add a short, tempting description';
+const readGuestSession = (): GuestSession | null => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(GUEST_SESSION_KEY) || 'null') as GuestSession | null;
+    return saved?.guestUid && saved.guestName && saved.guestPhone && saved.pinHash ? saved : null;
+  } catch {
+    return null;
+  }
+};
+const writeGuestSession = (session: GuestSession | null) => {
+  if (session) localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(session));
+  else localStorage.removeItem(GUEST_SESSION_KEY);
+};
 const menuCategories = (menu: EventMenu) => [
   ...new Set(
     [
@@ -972,6 +993,10 @@ export default function Home() {
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [guestPin, setGuestPin] = useState('');
+  const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
+  const [guestEvents, setGuestEvents] = useState<GuestEventAccess[]>([]);
+  const [guestEventsBusy, setGuestEventsBusy] = useState(false);
+  const [guestEventPickerOpen, setGuestEventPickerOpen] = useState(false);
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -989,6 +1014,91 @@ export default function Home() {
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
+  const loadGuestEvents = useCallback(async (session: GuestSession) => {
+    setGuestEventsBusy(true);
+    try {
+      let matches: GuestEventAccess[] = [];
+      if (firebaseConfigured) {
+        const [appModule, store] = await Promise.all([
+          import('firebase/app'),
+          import('firebase/firestore'),
+        ]);
+        const app = appModule.getApps().some((candidate) => candidate.name === '[DEFAULT]')
+          ? appModule.getApp()
+          : appModule.initializeApp({
+              apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+              authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+              projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+              storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+              appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+            });
+        const db = store.getFirestore(app);
+        const eventSnapshot = await store.getDocs(store.collection(db, 'events'));
+        const candidates = await Promise.all(eventSnapshot.docs.map(async (eventDocument) => {
+          const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
+          const [profileDocument, rsvpDocument] = await Promise.all([
+            store.getDoc(store.doc(db, 'events', event.id, 'guests', session.guestUid)),
+            store.getDoc(store.doc(db, 'events', event.id, 'rsvps', session.guestUid)),
+          ]);
+          const profileData = profileDocument.data();
+          if (!profileData || profileData.pinHash !== session.pinHash) return null;
+          const rsvpData = rsvpDocument.data();
+          return {
+            event,
+            profile: {
+              ...profileData,
+              guestUid: session.guestUid,
+              createdAt: profileData.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: profileData.updatedAt?.toMillis?.(),
+            } as GuestProfile,
+            rsvp: rsvpData ? {
+              ...rsvpData,
+              guestUid: session.guestUid,
+              activeOrderCount: rsvpData.activeOrderCount || 0,
+              createdAt: rsvpData.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: rsvpData.updatedAt?.toMillis?.(),
+            } as Rsvp : null,
+          } satisfies GuestEventAccess;
+        }));
+        matches = candidates.filter((entry): entry is GuestEventAccess => Boolean(entry));
+      } else {
+        const previewEvents = JSON.parse(localStorage.getItem(DEMO_EVENTS_KEY) || '[]') as EventMenu[];
+        matches = previewEvents.flatMap((event) => {
+          const profile = JSON.parse(
+            localStorage.getItem(`gather-demo-profile:${event.id}`) || 'null',
+          ) as GuestProfile | null;
+          if (!profile || profile.guestUid !== session.guestUid || profile.pinHash !== session.pinHash)
+            return [];
+          const eventRsvps = JSON.parse(
+            localStorage.getItem(`gather-demo-rsvps:${event.id}`) || '[]',
+          ) as Rsvp[];
+          return [{
+            event,
+            profile,
+            rsvp: eventRsvps.find((entry) => entry.guestUid === session.guestUid) || null,
+          }];
+        });
+      }
+      matches.sort((left, right) => {
+        const leftTime = Date.parse(left.event.startsAt || '') || Number.MAX_SAFE_INTEGER;
+        const rightTime = Date.parse(right.event.startsAt || '') || Number.MAX_SAFE_INTEGER;
+        const now = Date.now();
+        const leftUpcoming = leftTime >= now;
+        const rightUpcoming = rightTime >= now;
+        if (leftUpcoming !== rightUpcoming) return leftUpcoming ? -1 : 1;
+        return (leftUpcoming ? leftTime - rightTime : rightTime - leftTime)
+          || left.event.title.localeCompare(right.event.title);
+      });
+      setGuestEvents(matches);
+      return matches;
+    } catch {
+      setToast('Could not load your invitations. Check your connection and try again.');
+      return [];
+    } finally {
+      setGuestEventsBusy(false);
+    }
+  }, []);
+
   useEffect(() => {
     const prime = () => primeChatAudio();
     window.addEventListener('pointerdown', prime, { once: true });
@@ -1002,6 +1112,13 @@ export default function Home() {
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     const hostView = parameters.get('view') === 'host';
+    const savedSession = readGuestSession();
+    if (savedSession) {
+      queueMicrotask(() => {
+        setGuestSession(savedSession);
+        void loadGuestEvents(savedSession);
+      });
+    }
     if (hostView)
       queueMicrotask(() => setMode('host'));
     const linkedEventId = currentEventId();
@@ -1023,7 +1140,34 @@ export default function Home() {
       const savedGuestUid = localStorage.getItem(guestIdentityKey(eventId));
       if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
     }
-  }, []);
+  }, [loadGuestEvents]);
+
+  useEffect(() => {
+    if (
+      mode !== 'guest'
+      || !guestSession
+      || menu.id === EMPTY_EVENT_ID
+      || !guestEvents.some((entry) => entry.event.id === menu.id)
+    ) return;
+    localStorage.setItem(guestIdentityKey(menu.id), guestSession.guestUid);
+    if (guestUid !== guestSession.guestUid)
+      queueMicrotask(() => setGuestUid(guestSession.guestUid));
+  }, [guestEvents, guestSession, guestUid, menu.id, mode]);
+
+  useEffect(() => {
+    if (mode !== 'guest' || guestSession || !guestProfile?.pinHash) return;
+    const session: GuestSession = {
+      guestUid: guestProfile.guestUid,
+      guestName: guestProfile.guestName,
+      guestPhone: guestProfile.guestPhone,
+      pinHash: guestProfile.pinHash,
+    };
+    writeGuestSession(session);
+    queueMicrotask(() => {
+      setGuestSession(session);
+      void loadGuestEvents(session);
+    });
+  }, [guestProfile, guestSession, loadGuestEvents, mode]);
 
   useEffect(() => {
     const savedGuestUid = localStorage.getItem(guestIdentityKey(menu.id));
@@ -1050,8 +1194,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=28', window.location.origin)
-        : new URL('sw.js?v=28', document.baseURI);
+        ? new URL('/sw.js?v=30', window.location.origin)
+        : new URL('sw.js?v=30', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1107,9 +1251,11 @@ export default function Home() {
       applyOrders(nextOrders);
       const savedRsvps = JSON.parse(localStorage.getItem(`gather-demo-rsvps:${eventId}`) || '[]') as Rsvp[];
       setRsvps(savedRsvps);
-      setMyRsvp(savedRsvps.find((entry) => entry.guestUid === 'preview-device') || null);
       const savedProfile = JSON.parse(localStorage.getItem(`gather-demo-profile:${eventId}`) || 'null') as GuestProfile | null;
       setGuestProfile(savedProfile);
+      setMyRsvp(savedProfile
+        ? savedRsvps.find((entry) => entry.guestUid === savedProfile.guestUid) || null
+        : null);
       if (savedProfile) {
         setGuestName(savedProfile.guestName);
         setPhoneNumber(formatPhone(savedProfile.guestPhone));
@@ -1561,7 +1707,7 @@ export default function Home() {
     }
     const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isAppleMobile && !isStandalone) {
-      notify('On iPhone, add Gather to the Home Screen before enabling notifications.');
+      notify('On iPhone, add Nights to the Home Screen before enabling notifications.');
       return;
     }
     setPushNotificationBusy(true);
@@ -1570,13 +1716,13 @@ export default function Home() {
       if (permission !== 'granted') {
         setPushNotificationState(permission === 'denied' ? 'blocked' : 'disabled');
         notify(permission === 'denied'
-          ? 'Notifications are blocked. Enable them for Gather in iPhone Settings.'
+          ? 'Notifications are blocked. Enable them for Nights in iPhone Settings.'
           : 'Notification permission was not enabled.');
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=28', window.location.origin)
-        : new URL('sw.js?v=28', document.baseURI);
+        ? new URL('/sw.js?v=30', window.location.origin)
+        : new URL('sw.js?v=30', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1725,6 +1871,87 @@ export default function Home() {
     setPhoneNumber('');
     setGuestPin('');
     setEditingGuestProfile(true);
+  };
+  const selectGuestEvent = (access: GuestEventAccess) => {
+    if (!guestSession) return;
+    localStorage.setItem(guestIdentityKey(access.event.id), guestSession.guestUid);
+    localStorage.setItem(LAST_EVENT_KEY, access.event.id);
+    setGuestEventPickerOpen(false);
+    if (access.event.id === menu.id) {
+      setGuestUid(guestSession.guestUid);
+      setGuestProfile(access.profile);
+      setMyRsvp(access.rsvp);
+      if (access.rsvp) setRsvpChoice(access.rsvp.status);
+      return;
+    }
+    window.location.assign(
+      eventRoute(access.event.id, 'guest', automaticPublicEventPath(access.event)),
+    );
+  };
+  const openGuestEventPicker = async () => {
+    if (!guestSession) {
+      openRsvpPanel();
+      return;
+    }
+    setGuestEventPickerOpen(true);
+    await loadGuestEvents(guestSession);
+  };
+  const clearGuestAccess = () => {
+    writeGuestSession(null);
+    guestEvents.forEach((entry) => localStorage.removeItem(guestIdentityKey(entry.event.id)));
+    localStorage.removeItem(guestIdentityKey(menu.id));
+    setGuestSession(null);
+    setGuestEvents([]);
+    setGuestUid(null);
+    setGuestProfile(null);
+    setMyRsvp(null);
+    setRememberedOrder(null);
+    setRememberedOrders([]);
+    setCart({});
+    setChatOpen(false);
+    setGuestName('');
+    setPhoneNumber('');
+    setGuestPin('');
+    setGuestEventPickerOpen(false);
+  };
+  const unlockGuestEvents = async () => {
+    const name = guestName.trim().replace(/\s+/g, ' ');
+    const enteredPhone = normalizeOptionalPhone(phoneNumber);
+    if (name.length < 2 || name.length > 80) {
+      notify('Enter the name used on your invitation');
+      return;
+    }
+    if (!enteredPhone) {
+      notify('Enter a 10-digit phone number, like 555-555-5555');
+      return;
+    }
+    if (!/^\d{4}$/.test(guestPin)) {
+      notify('Enter your 4-digit PIN');
+      return;
+    }
+    setProfileBusy(true);
+    try {
+      const guestPhone = `+1${phoneDigits(enteredPhone)}`;
+      const guestUid = await guestNameIndexId(guestPhone);
+      const pinHash = await guestPinHash(guestUid, guestPin);
+      const session = { guestUid, guestName: name, guestPhone, pinHash };
+      const matches = await loadGuestEvents(session);
+      if (!matches.length) {
+        notify('No invitations match that phone number and PIN. Open an event link to join it first.');
+        return;
+      }
+      if (!matches.some((entry) => guestNameKey(entry.profile.guestName) === guestNameKey(name))) {
+        notify('That name does not match the guest profile for this phone number.');
+        return;
+      }
+      writeGuestSession(session);
+      setGuestSession(session);
+      setGuestPin('');
+      setGuestEventPickerOpen(menu.id !== EMPTY_EVENT_ID);
+      notify(`${matches.length} invitation${matches.length === 1 ? '' : 's'} found`);
+    } finally {
+      setProfileBusy(false);
+    }
   };
 
   function selectHostEvent(event: EventMenu) {
@@ -1964,6 +2191,7 @@ export default function Home() {
     }
   }
   async function saveGuestProfile() {
+    const establishingAccess = !effectiveGuestProfile || changingGuestPhone;
     const name = guestName.trim().replace(/\s+/g, ' ');
     const enteredPhone = normalizeOptionalPhone(phoneNumber);
     const normalizedPhone = enteredPhone ? `+1${phoneDigits(enteredPhone)}` : '';
@@ -1983,6 +2211,12 @@ export default function Home() {
     try {
       const uid = await guestNameIndexId(normalizedPhone);
       const pinHash = await guestPinHash(uid, guestPin);
+      const session: GuestSession = {
+        guestUid: uid,
+        guestName: name,
+        guestPhone: normalizedPhone,
+        pinHash,
+      };
       const savedProfile: GuestProfile = {
         guestUid: uid,
         guestName: name,
@@ -2040,11 +2274,13 @@ export default function Home() {
         setGuestUid(uid);
         setGuestProfile(savedProfile);
       } else {
-        const others = rsvps.filter((entry) => entry.guestUid !== 'preview-device');
+        const others = rsvps.filter((entry) => entry.guestUid !== uid);
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
         if (others.some((entry) => entry.guestPhone === normalizedPhone)) throw new Error('phone-taken');
         if (guestProfile?.pinHash && guestProfile.pinHash !== pinHash) throw new Error('invalid-pin');
-        const saved: GuestProfile = { guestUid: 'preview-device', guestName: name, guestPhone: normalizedPhone, pinHash, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
+        const saved: GuestProfile = { guestUid: uid, guestName: name, guestPhone: normalizedPhone, pinHash, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
+        localStorage.setItem(guestIdentityKey(menu.id), uid);
+        setGuestUid(uid);
         setGuestProfile(saved);
         shareDemoUpdate({ type: 'profile', eventId: menu.id, value: saved });
       }
@@ -2054,10 +2290,17 @@ export default function Home() {
         setRememberedOrder(null);
         setCart({});
       }
+      writeGuestSession(session);
+      setGuestSession(session);
+      const accessibleEvents = await loadGuestEvents(session);
       setChangingGuestPhone(false);
       setEditingGuestProfile(false);
       setGuestPin('');
-      notify(guestProfile && !changingGuestPhone ? 'Guest profile updated' : 'Guest profile created — now RSVP');
+      if (establishingAccess && accessibleEvents.length) {
+        setRsvpPanelOpen(false);
+        setGuestEventPickerOpen(true);
+        notify(`${accessibleEvents.length} invitation${accessibleEvents.length === 1 ? '' : 's'} found — choose an event`);
+      } else notify('Guest profile updated');
     } catch (error) {
       notify((error as Error).message === 'name-taken'
         ? 'That name is already used for this event. Please choose a different name.'
@@ -2886,13 +3129,13 @@ export default function Home() {
           <button
             onClick={() => !isStandalone && switchMode('guest')}
             className="flex items-center gap-3"
-            aria-label={isStandalone ? 'Gather Host home' : 'Open guest menu'}
+            aria-label={isStandalone ? 'Nights Host home' : 'Open guest events'}
           >
-            <span className="grid size-9 place-items-center rounded-full bg-[var(--tomato)] text-white">
-              <UtensilsCrossed size={17} />
+            <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
+              <Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={36} height={36} />
             </span>
             <span className="font-display text-xl font-semibold tracking-tight">
-              Gather
+              {mode === 'host' ? 'Nights Host' : 'Nights'}
             </span>
           </button>
           <div className="flex items-center gap-2">
@@ -2904,11 +3147,23 @@ export default function Home() {
               />
               {firebaseConfigured ? 'Live' : 'Preview data'}
             </span>
+            {mode === 'guest' && guestSession && (
+              <button
+                type="button"
+                className="guest-event-switch-button"
+                onClick={() => void openGuestEventPicker()}
+                aria-label="Switch event"
+              >
+                <CalendarPlus size={15} />
+                <span>Events</span>
+                {guestEvents.length > 0 && <b>{guestEvents.length}</b>}
+              </button>
+            )}
             {mode === 'host' && !isStandalone && (
               <button
                 onClick={() => setShowInstallGuide(true)}
                 className="install-app-button"
-                aria-label="Install Gather Host on iPhone"
+                aria-label="Install Nights Host on iPhone"
               >
                 <Smartphone size={15} />
                 <span>Install app</span>
@@ -2916,10 +3171,10 @@ export default function Home() {
             )}
             {mode === 'host' && isStandalone && (
               <span className="host-app-badge">
-                <Smartphone size={14} /> Host app
+                <Smartphone size={14} /> Nights Host
               </span>
             )}
-            <button
+            {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
               onClick={() => void (pushNotificationState === 'enabled'
                 ? disableChatNotifications()
@@ -2931,8 +3186,8 @@ export default function Home() {
             >
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : 'Notify me'}</span>
-            </button>
-            <button
+            </button>}
+            {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
               onClick={() => {
                 primeChatAudio();
@@ -2945,7 +3200,7 @@ export default function Home() {
             >
               <MessageCircle size={16} />
               <span>{menu.chatOpen === false ? 'Chat locked' : 'Chat'}</span>
-            </button>
+            </button>}
             {!isStandalone && (
               <button
                 onClick={() => switchMode(mode === 'guest' ? 'host' : 'guest')}
@@ -2953,7 +3208,7 @@ export default function Home() {
               >
                 {mode === 'guest' ? (
                   <span className="flex items-center gap-2">
-                    <LayoutDashboard size={15} /> Host view
+                    <LayoutDashboard size={15} /> Nights Host
                   </span>
                 ) : (
                   <span className="flex items-center gap-2">
@@ -2967,7 +3222,22 @@ export default function Home() {
       </header>
 
       {mode === 'guest' ? (
-        <>
+        menu.id === EMPTY_EVENT_ID ? (
+          <GuestAccessPortal
+            name={guestName}
+            phone={phoneNumber}
+            pin={guestPin}
+            session={guestSession}
+            events={guestEvents}
+            busy={profileBusy || guestEventsBusy}
+            setName={setGuestName}
+            setPhone={(value) => setPhoneNumber(formatPhoneInput(value))}
+            setPin={(value) => setGuestPin(value.replace(/\D/g, '').slice(0, 4))}
+            unlock={() => void unlockGuestEvents()}
+            selectEvent={selectGuestEvent}
+            clearAccess={clearGuestAccess}
+          />
+        ) : (
           <GuestMenu
             menu={menu}
             categories={categories}
@@ -2981,7 +3251,7 @@ export default function Home() {
             rsvpButtonLabel={rsvpButtonLabel}
             onOpenRsvp={openRsvpPanel}
           />
-        </>
+        )
       ) : (
         <HostWorkspace
           events={events}
@@ -3020,6 +3290,18 @@ export default function Home() {
         />
       )}
 
+      {mode === 'guest' && guestEventPickerOpen && guestSession && (
+        <GuestEventPicker
+          events={guestEvents}
+          currentEventId={menu.id}
+          guestName={guestSession.guestName}
+          busy={guestEventsBusy}
+          onSelect={selectGuestEvent}
+          onClose={() => setGuestEventPickerOpen(false)}
+          onUseAnotherGuest={clearGuestAccess}
+        />
+      )}
+
       {backgroundEditor && (
         <BackgroundCropModal
           editor={backgroundEditor}
@@ -3030,6 +3312,7 @@ export default function Home() {
 
       {chatStarted && chatActor && (
         <EventChat
+          key={menu.id}
           menu={menu}
           actor={chatActor}
           visible={chatOpen}
@@ -3400,7 +3683,7 @@ export default function Home() {
             </div>
             <p className="eyebrow mt-6">iPhone app</p>
             <h2 className="font-display mt-2 text-3xl font-semibold">
-              Add this Gather event to your Home Screen
+              Add this Nights event to your Home Screen
             </h2>
             <p className="mt-3 text-sm leading-6 text-black/55">
               Open this host page in Safari, then follow these two steps.
@@ -3504,7 +3787,7 @@ export default function Home() {
                       if (effectiveGuestProfile) setEditingGuestProfile(false);
                       else closeRsvpPanel();
                     }}>Cancel</button>
-                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim() || !/^\d{4}$/.test(guestPin)} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue to RSVP'}</button>
+                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim() || !/^\d{4}$/.test(guestPin)} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue'}</button>
                   </div>
                 </div>
               </div>
@@ -3746,6 +4029,133 @@ export default function Home() {
         </output>
       )}
     </main>
+  );
+}
+
+function GuestAccessPortal({
+  name,
+  phone,
+  pin,
+  session,
+  events,
+  busy,
+  setName,
+  setPhone,
+  setPin,
+  unlock,
+  selectEvent,
+  clearAccess,
+}: {
+  name: string;
+  phone: string;
+  pin: string;
+  session: GuestSession | null;
+  events: GuestEventAccess[];
+  busy: boolean;
+  setName: (value: string) => void;
+  setPhone: (value: string) => void;
+  setPin: (value: string) => void;
+  unlock: () => void;
+  selectEvent: (event: GuestEventAccess) => void;
+  clearAccess: () => void;
+}) {
+  return (
+    <section className="guest-access-portal">
+      <div className="guest-access-intro">
+        <span className="guest-access-mark"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={62} height={62} /></span>
+        <p className="eyebrow">Your nights, in one place</p>
+        <h1 className="font-display">Find your invitations</h1>
+        <p>Enter the temporary guest details you already use. Nights will show every event connected to that phone number and PIN.</p>
+      </div>
+      {!session ? (
+        <div className="guest-access-form">
+          <label className="field-label">Your name<input value={name} onChange={(event) => setName(event.target.value)} className="field-input" autoComplete="name" placeholder="Your name" /></label>
+          <label className="field-label">Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} /></label>
+          <label className="field-label">Temporary PIN<input value={pin} onChange={(event) => setPin(event.target.value)} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" onKeyDown={(event) => { if (event.key === 'Enter') unlock(); }} /></label>
+          <button type="button" className="primary-button" disabled={busy || !name.trim() || !phone.trim() || !/^\d{4}$/.test(pin)} onClick={unlock}>
+            <Sparkles size={17} /> {busy ? 'Finding invitations…' : 'Show my events'}
+          </button>
+          <small>New to an event? Open the invitation link from its host first.</small>
+        </div>
+      ) : (
+        <div className="guest-access-events">
+          <div className="guest-access-signed-in">
+            <span>Welcome, <strong>{session.guestName}</strong></span>
+            <button type="button" onClick={clearAccess}>Use another guest</button>
+          </div>
+          {busy ? <p className="guest-access-loading">Loading your invitations…</p> : events.length ? (
+            <div className="guest-event-card-grid">
+              {events.map((access) => (
+                <GuestEventCard key={access.event.id} access={access} onSelect={() => selectEvent(access)} />
+              ))}
+            </div>
+          ) : <p className="guest-access-loading">No invitations were found for this guest profile.</p>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function GuestEventCard({
+  access,
+  current = false,
+  onSelect,
+}: {
+  access: GuestEventAccess;
+  current?: boolean;
+  onSelect: () => void;
+}) {
+  const response = access.rsvp
+    ? access.rsvp.status === 'yes' ? 'Going' : access.rsvp.status === 'maybe' ? 'Maybe' : 'Not going'
+    : 'RSVP not sent';
+  return (
+    <button type="button" className={`guest-event-card ${current ? 'current' : ''}`} onClick={onSelect}>
+      <span className="guest-event-card-art" style={{ backgroundImage: `linear-gradient(145deg, rgb(32 157 139 / 0.82), rgb(31 88 163 / 0.82)), url(${eventBackground(access.event)})` }} />
+      <span className="guest-event-card-copy">
+        <small>{eventTypeLabel(access.event)}{current ? ' · Current event' : ''}</small>
+        <strong className="font-display">{access.event.title}</strong>
+        <span><Clock3 size={13} /> {access.event.date}</span>
+        {access.event.address && <span><MapPin size={13} /> {access.event.address}</span>}
+      </span>
+      <span className="guest-event-card-status">{response}<ChevronRight size={16} /></span>
+    </button>
+  );
+}
+
+function GuestEventPicker({
+  events,
+  currentEventId,
+  guestName,
+  busy,
+  onSelect,
+  onClose,
+  onUseAnotherGuest,
+}: {
+  events: GuestEventAccess[];
+  currentEventId: string;
+  guestName: string;
+  busy: boolean;
+  onSelect: (event: GuestEventAccess) => void;
+  onClose: () => void;
+  onUseAnotherGuest: () => void;
+}) {
+  return (
+    <div className="guest-event-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <dialog open className="guest-event-picker" aria-label="Choose an event">
+        <header>
+          <div><p className="eyebrow">{guestName}&apos;s invitations</p><h2 className="font-display">Choose your event</h2></div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close event picker"><XCircle size={20} /></button>
+        </header>
+        {busy ? <p className="guest-access-loading">Refreshing your invitations…</p> : events.length ? (
+          <div className="guest-event-picker-list">
+            {events.map((access) => (
+              <GuestEventCard key={access.event.id} access={access} current={access.event.id === currentEventId} onSelect={() => onSelect(access)} />
+            ))}
+          </div>
+        ) : <p className="guest-access-loading">No invitations were found.</p>}
+        <footer><button type="button" onClick={onUseAnotherGuest}>Use another guest profile</button></footer>
+      </dialog>
+    </div>
   );
 }
 
@@ -4756,7 +5166,7 @@ function HostWorkspace({
       <div className="host-inner">
         <header className="host-page-heading">
           <div>
-            <p className="eyebrow">Gather service</p>
+            <p className="eyebrow">Nights Host</p>
             <h1 className="font-display">The pass</h1>
             <p>Your live command center for every table.</p>
           </div>
