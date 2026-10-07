@@ -1338,6 +1338,7 @@ export default function Home() {
         setPendingGuestEvent(pending);
         setMenu(emptyEventMenu);
         setEventReady(true);
+        if (parameters.get('install') === '1') setShowInstallGuide(true);
       });
       return;
     }
@@ -1451,8 +1452,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=31', window.location.origin)
-        : new URL('sw.js?v=31', document.baseURI);
+        ? new URL('/sw.js?v=32', window.location.origin)
+        : new URL('sw.js?v=32', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1982,8 +1983,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=31', window.location.origin)
-        : new URL('sw.js?v=31', document.baseURI);
+        ? new URL('/sw.js?v=32', window.location.origin)
+        : new URL('sw.js?v=32', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -2103,6 +2104,14 @@ export default function Home() {
         ? selectedEventId ? eventRoute(selectedEventId, 'host', automaticPublicEventPath(menu)) : hostHomeRoute()
         : guestHomeRoute(),
     );
+  };
+  const openInstallGuide = () => {
+    if (mode === 'guest' && menu.id !== EMPTY_EVENT_ID) {
+      const guestHome = guestHomeRoute();
+      window.location.assign(`${guestHome}${guestHome.includes('?') ? '&' : '?'}install=1`);
+      return;
+    }
+    setShowInstallGuide(true);
   };
   const openGuestInvitation = () => {
     const entered = guestInvitation.trim();
@@ -3428,11 +3437,11 @@ export default function Home() {
                 {guestEvents.length > 0 && <b>{guestEvents.length}</b>}
               </button>
             )}
-            {mode === 'host' && !isStandalone && (
+            {!isStandalone && (
               <button
-                onClick={() => setShowInstallGuide(true)}
+                onClick={openInstallGuide}
                 className="install-app-button"
-                aria-label="Install Nights Host on iPhone"
+                aria-label={mode === 'host' ? 'Install Nights Host on iPhone' : 'Install Nights on iPhone'}
               >
                 <Smartphone size={15} />
                 <span>Install app</span>
@@ -3941,7 +3950,7 @@ export default function Home() {
           <section className="install-guide">
             <div className="flex items-start justify-between gap-4">
               <span className="install-guide-icon">
-                <Smartphone size={25} />
+                <Image src="/gathering/icons/nights-app-icon-180.png" alt="Nights app icon" width={54} height={54} />
               </span>
               <button
                 onClick={() => setShowInstallGuide(false)}
@@ -3953,10 +3962,12 @@ export default function Home() {
             </div>
             <p className="eyebrow mt-6">iPhone app</p>
             <h2 className="font-display mt-2 text-3xl font-semibold">
-              Add this Nights event to your Home Screen
+              {mode === 'host' ? 'Add Nights Host to your Home Screen' : 'Add Nights to your Home Screen'}
             </h2>
             <p className="mt-3 text-sm leading-6 text-black/55">
-              Open this host page in Safari, then follow these two steps.
+              {mode === 'host'
+                ? 'Open this host page in Safari, then follow these two steps.'
+                : 'In Safari, follow these steps to install your guest home, where you can open and switch between all your events.'}
             </p>
             <ol className="install-steps">
               <li>
@@ -3979,8 +3990,10 @@ export default function Home() {
               </li>
             </ol>
             <p className="install-note">
-              The icon will reopen this event and this host view. Install from a
-              guest link instead when you want an icon that opens the guest view.
+              {mode === 'host'
+                ? 'The Nights icon will reopen this event in the host view. '
+                : 'The blue and green Nights icon will reopen your guest dashboard at gaemaj.tech/nights-guests/. '}
+              If an older Nights shortcut is already installed, remove it first—iOS does not refresh an existing Home Screen icon.
             </p>
             <button
               onClick={() => setShowInstallGuide(false)}

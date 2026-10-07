@@ -696,11 +696,13 @@ button:disabled {
   place-items: center;
   width: 54px;
   height: 54px;
+  overflow: hidden;
   border-radius: 1.05rem;
-  background: var(--tomato);
+  background: #083747;
   color: white;
-  box-shadow: 0 8px 20px rgb(217 84 61/0.22);
+  box-shadow: 0 8px 20px rgb(18 132 129/0.25);
 }
+.install-guide-icon img { width: 100%; height: 100%; object-fit: cover; }
 .install-steps {
   display: grid;
   gap: 0.8rem;
