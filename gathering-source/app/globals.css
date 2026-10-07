@@ -1606,6 +1606,19 @@ button:disabled {
   backdrop-filter: blur(18px);
 }
 .guest-access-form { display: grid; gap: 1rem; }
+.guest-invitation-cached {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid rgb(40 154 135 / 0.22);
+  border-radius: 1rem;
+  background: rgb(67 199 168 / 0.1);
+  padding: 0.8rem 0.9rem;
+  color: #176e68;
+}
+.guest-invitation-cached > span { display: grid; gap: 0.12rem; }
+.guest-invitation-cached strong { color: #123f42; font-size: 0.8rem; }
+.guest-invitation-cached small { color: rgb(19 64 66 / 0.65); font-size: 0.7rem; line-height: 1.4; }
 .guest-access-form .primary-button { justify-content: center; margin-top: 0.35rem; padding-block: 0.9rem; }
 .guest-access-form > small { color: rgb(19 40 44 / 0.55); text-align: center; line-height: 1.5; }
 .guest-access-signed-in {
@@ -1668,6 +1681,7 @@ button:disabled {
   white-space: nowrap;
 }
 .guest-access-loading { padding: 2.5rem 1rem; color: rgb(19 40 44 / 0.55); text-align: center; }
+.guest-access-refreshing { margin: 0.8rem 0 0; color: rgb(19 40 44 / 0.48); font-size: 0.72rem; text-align: center; }
 .guest-event-picker-backdrop {
   position: fixed;
   z-index: 90;

@@ -525,18 +525,36 @@ const callPushApi = async (
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const GUEST_SESSION_KEY = 'nights-guest-session-v1';
+const GUEST_EVENTS_CACHE_KEY = 'nights-guest-events-v1';
+const PENDING_GUEST_EVENT_KEY = 'nights-pending-guest-event-v1';
+const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
 const EVENT_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,59}$/;
 const RESERVED_EVENT_PATHS = new Set([
   '_next',
   'gathering',
+  'nights-guests',
   'icons',
   'favicon.svg',
   'manifest.webmanifest',
   'og.png',
   'sw.js',
 ]);
+type PendingGuestEvent = {
+  route: string;
+  eventId?: string;
+  publicPath?: string;
+  savedAt: number;
+};
+const isGuestPortalUrl = (url: URL) => {
+  const segments = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment).toLowerCase());
+  if (segments[0] === 'gathering') segments.shift();
+  return segments[0] === 'nights-guests' || url.searchParams.get('guest') === '1';
+};
 const eventIdFromUrl = (url: URL) => {
   const queryEventId = url.searchParams.get('event')?.trim();
   if (queryEventId && EVENT_ID_PATTERN.test(queryEventId)) return queryEventId;
@@ -558,6 +576,7 @@ const eventPublicPathFromUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment).toLowerCase());
   if (segments[0] === 'gathering') segments.shift();
+  if (segments[0] === 'nights-guests') return null;
   return segments.length === 2
     && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
     ? segments.join('/')
@@ -615,8 +634,11 @@ const eventRoute = (
     : `?event=${encodedEventId}`;
 };
 const hostHomeRoute = () => usesCleanEventUrls() ? '/?view=host' : '?view=host';
+const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guests/' : '?guest=1';
 const guestEventUrl = (eventId: string, publicPath?: string) =>
-  new URL(eventRoute(eventId, 'guest', publicPath), window.location.origin).toString();
+  new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
+    normalizedPublicEventPath(publicPath) || eventId,
+  )}`, window.location.origin).toString();
 const pushSubscriptionKey = (eventId: string, actorUid: string) =>
   `gather-chat-push-v2:${eventId}:${actorUid}`;
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
@@ -637,6 +659,44 @@ const writeGuestSession = (session: GuestSession | null) => {
   if (session) localStorage.setItem(GUEST_SESSION_KEY, JSON.stringify(session));
   else localStorage.removeItem(GUEST_SESSION_KEY);
 };
+const readPendingGuestEvent = (): PendingGuestEvent | null => {
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_GUEST_EVENT_KEY) || 'null') as PendingGuestEvent | null;
+    return pending?.route && Date.now() - pending.savedAt < 7 * 24 * 60 * 60 * 1000 ? pending : null;
+  } catch {
+    return null;
+  }
+};
+const writePendingGuestEvent = (pending: PendingGuestEvent | null) => {
+  if (pending) localStorage.setItem(PENDING_GUEST_EVENT_KEY, JSON.stringify(pending));
+  else localStorage.removeItem(PENDING_GUEST_EVENT_KEY);
+};
+const readGuestEventCache = (session: GuestSession): GuestEventAccess[] => {
+  try {
+    const cached = JSON.parse(localStorage.getItem(GUEST_EVENTS_CACHE_KEY) || 'null') as {
+      guestUid?: string;
+      pinHash?: string;
+      events?: GuestEventAccess[];
+    } | null;
+    return cached?.guestUid === session.guestUid && cached.pinHash === session.pinHash
+      ? cached.events || []
+      : [];
+  } catch {
+    return [];
+  }
+};
+const writeGuestEventCache = (session: GuestSession, events: GuestEventAccess[]) => {
+  localStorage.setItem(GUEST_EVENTS_CACHE_KEY, JSON.stringify({
+    guestUid: session.guestUid,
+    pinHash: session.pinHash,
+    events,
+  }));
+};
+const guestEventMatchesPending = (access: GuestEventAccess, pending: PendingGuestEvent) =>
+  Boolean(
+    (pending.eventId && access.event.id === pending.eventId)
+    || (pending.publicPath && automaticPublicEventPath(access.event) === pending.publicPath),
+  );
 const menuCategories = (menu: EventMenu) => [
   ...new Set(
     [
@@ -997,6 +1057,8 @@ export default function Home() {
   const [guestEvents, setGuestEvents] = useState<GuestEventAccess[]>([]);
   const [guestEventsBusy, setGuestEventsBusy] = useState(false);
   const [guestEventPickerOpen, setGuestEventPickerOpen] = useState(false);
+  const [pendingGuestEvent, setPendingGuestEvent] = useState<PendingGuestEvent | null>(null);
+  const pendingEnrollmentRef = useRef('');
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -1090,12 +1152,141 @@ export default function Home() {
           || left.event.title.localeCompare(right.event.title);
       });
       setGuestEvents(matches);
+      writeGuestEventCache(session, matches);
       return matches;
     } catch {
-      setToast('Could not load your invitations. Check your connection and try again.');
+      setToast('Could not load your events. Check your connection and try again.');
       return [];
     } finally {
       setGuestEventsBusy(false);
+    }
+  }, []);
+
+  const enrollPendingGuestEvent = useCallback(async (
+    session: GuestSession,
+    pending: PendingGuestEvent,
+    knownEvents: GuestEventAccess[],
+  ) => {
+    const existing = knownEvents.find((access) => guestEventMatchesPending(access, pending));
+    if (existing) return existing;
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
+        ]);
+        const db = store.getFirestore(getApp());
+        let eventDocument = pending.eventId
+          ? await store.getDoc(store.doc(db, 'events', pending.eventId))
+          : null;
+        if ((!eventDocument || !eventDocument.exists()) && pending.publicPath) {
+          const exact = await store.getDocs(store.query(
+            store.collection(db, 'events'),
+            store.where('publicPath', '==', pending.publicPath),
+            store.limit(1),
+          ));
+          eventDocument = exact.docs[0] || null;
+          if (!eventDocument) {
+            const allEvents = await store.getDocs(store.collection(db, 'events'));
+            eventDocument = allEvents.docs.find((candidate) => {
+              const event = { id: candidate.id, ...candidate.data() } as EventMenu;
+              return automaticPublicEventPath(event) === pending.publicPath;
+            }) || null;
+          }
+        }
+        if (!eventDocument?.exists()) throw new Error('event-not-found');
+        const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
+        const profileRef = store.doc(db, 'events', event.id, 'guests', session.guestUid);
+        const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', session.guestUid);
+        const nameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(session.guestName));
+        const phoneRef = store.doc(db, 'events', event.id, 'guest-phones', session.guestUid);
+        await store.runTransaction(db, async (transaction) => {
+          const [profileDocument, nameClaim, phoneClaim] = await Promise.all([
+            transaction.get(profileRef),
+            transaction.get(nameRef),
+            transaction.get(phoneRef),
+          ]);
+          if (profileDocument.exists()) {
+            if (profileDocument.data().pinHash !== session.pinHash) throw new Error('invalid-pin');
+            if (guestNameKey(profileDocument.data().guestName) !== guestNameKey(session.guestName))
+              throw new Error('name-mismatch');
+            return;
+          }
+          if (nameClaim.exists() && nameClaim.data().guestUid !== session.guestUid)
+            throw new Error('name-taken');
+          if (phoneClaim.exists() && phoneClaim.data().guestUid !== session.guestUid)
+            throw new Error('phone-taken');
+          if (!nameClaim.exists()) transaction.set(nameRef, {
+            guestUid: session.guestUid,
+            guestName: session.guestName,
+            createdAt: store.serverTimestamp(),
+          });
+          if (!phoneClaim.exists()) transaction.set(phoneRef, {
+            guestUid: session.guestUid,
+            guestPhone: session.guestPhone,
+            createdAt: store.serverTimestamp(),
+          });
+          transaction.set(profileRef, {
+            guestUid: session.guestUid,
+            guestName: session.guestName,
+            guestPhone: session.guestPhone,
+            pinHash: session.pinHash,
+            createdAt: store.serverTimestamp(),
+            updatedAt: store.serverTimestamp(),
+          });
+        });
+        const [profileDocument, rsvpDocument] = await Promise.all([
+          store.getDoc(profileRef), store.getDoc(rsvpRef),
+        ]);
+        const profileData = profileDocument.data();
+        if (!profileData) throw new Error('profile-not-found');
+        const rsvpData = rsvpDocument.data();
+        const access: GuestEventAccess = {
+          event,
+          profile: {
+            ...profileData,
+            guestUid: session.guestUid,
+            createdAt: profileData.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: profileData.updatedAt?.toMillis?.(),
+          } as GuestProfile,
+          rsvp: rsvpData ? {
+            ...rsvpData,
+            guestUid: session.guestUid,
+            activeOrderCount: rsvpData.activeOrderCount || 0,
+            createdAt: rsvpData.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: rsvpData.updatedAt?.toMillis?.(),
+          } as Rsvp : null,
+        };
+        const nextEvents = [...knownEvents.filter((entry) => entry.event.id !== event.id), access];
+        setGuestEvents(nextEvents);
+        writeGuestEventCache(session, nextEvents);
+        return access;
+      }
+      const previewEvents = JSON.parse(localStorage.getItem(DEMO_EVENTS_KEY) || '[]') as EventMenu[];
+      const event = previewEvents.find((candidate) =>
+        (pending.eventId && candidate.id === pending.eventId)
+        || (pending.publicPath && automaticPublicEventPath(candidate) === pending.publicPath));
+      if (!event) throw new Error('event-not-found');
+      const profile: GuestProfile = {
+        ...session,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      localStorage.setItem(`gather-demo-profile:${event.id}`, JSON.stringify(profile));
+      const access: GuestEventAccess = { event, profile, rsvp: null };
+      const nextEvents = [...knownEvents.filter((entry) => entry.event.id !== event.id), access];
+      setGuestEvents(nextEvents);
+      writeGuestEventCache(session, nextEvents);
+      return access;
+    } catch (error) {
+      const reason = (error as Error).message;
+      setToast(reason === 'name-taken'
+        ? 'That Display Name is already used for this event. Choose another Display Name.'
+        : reason === 'name-mismatch'
+          ? 'That Display Name does not match this guest profile.'
+          : reason === 'invalid-pin'
+            ? 'That PIN does not match the guest profile for this invitation.'
+            : 'This invitation could not be added. Ask the host for a current link.');
+      return null;
     }
   }, []);
 
@@ -1112,17 +1303,67 @@ export default function Home() {
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
     const hostView = parameters.get('view') === 'host';
+    const currentUrl = new URL(window.location.href);
+    const guestPortal = isGuestPortalUrl(currentUrl);
     const savedSession = readGuestSession();
     if (savedSession) {
+      const cachedEvents = readGuestEventCache(savedSession);
       queueMicrotask(() => {
         setGuestSession(savedSession);
-        void loadGuestEvents(savedSession);
+        setGuestName(savedSession.guestName);
+        setPhoneNumber(formatPhone(savedSession.guestPhone));
+        setGuestEvents(cachedEvents);
       });
     }
     if (hostView)
       queueMicrotask(() => setMode('host'));
     const linkedEventId = currentEventId();
     const linkedPublicPath = currentEventPublicPath();
+    if (guestPortal) {
+      const invitation = parameters.get('invite')?.trim() || '';
+      const invitationPublicPath = normalizedPublicEventPath(invitation);
+      const invitationEventId = !invitationPublicPath && EVENT_ID_PATTERN.test(invitation)
+        ? invitation
+        : undefined;
+      const pending = invitationPublicPath || invitationEventId
+        ? {
+            route: invitationPublicPath ? `/${invitationPublicPath}` : eventRoute(invitationEventId || ''),
+            eventId: invitationEventId,
+            publicPath: invitationPublicPath || undefined,
+            savedAt: Date.now(),
+          }
+        : readPendingGuestEvent();
+      if (pending) writePendingGuestEvent(pending);
+      queueMicrotask(() => {
+        setPendingGuestEvent(pending);
+        setMenu(emptyEventMenu);
+        setEventReady(true);
+      });
+      return;
+    }
+    if (!hostView && (linkedEventId || linkedPublicPath)) {
+      const trustedGuestUid = linkedEventId
+        ? localStorage.getItem(guestIdentityKey(linkedEventId))
+        : null;
+      const trustedPublicRoute = linkedPublicPath
+        ? localStorage.getItem(TRUSTED_GUEST_ROUTE_KEY) === currentUrl.pathname
+        : false;
+      if (
+        !savedSession
+        || (linkedEventId && trustedGuestUid !== savedSession.guestUid)
+        || (linkedPublicPath && !trustedPublicRoute)
+      ) {
+        const pending = {
+          route: `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+          eventId: linkedEventId || undefined,
+          publicPath: linkedPublicPath || undefined,
+          savedAt: Date.now(),
+        };
+        writePendingGuestEvent(pending);
+        window.location.replace(guestHomeRoute());
+        return;
+      }
+    }
     const rememberedEventId = localStorage.getItem(LAST_EVENT_KEY);
     const eventId = linkedEventId
       || rememberedEventId
@@ -1141,6 +1382,22 @@ export default function Home() {
       if (savedGuestUid) queueMicrotask(() => setGuestUid(savedGuestUid));
     }
   }, [loadGuestEvents]);
+
+  useEffect(() => {
+    if (
+      mode !== 'guest'
+      || !guestSession
+      || !isGuestPortalUrl(new URL(window.location.href))
+    ) return;
+    const enrollmentKey = `${guestSession.guestUid}:${pendingGuestEvent?.route || 'events'}`;
+    if (pendingEnrollmentRef.current === enrollmentKey) return;
+    pendingEnrollmentRef.current = enrollmentKey;
+    void (async () => {
+      const matches = await loadGuestEvents(guestSession);
+      if (pendingGuestEvent && !matches.some((access) => guestEventMatchesPending(access, pendingGuestEvent)))
+        await enrollPendingGuestEvent(guestSession, pendingGuestEvent, matches);
+    })();
+  }, [enrollPendingGuestEvent, guestSession, loadGuestEvents, mode, pendingGuestEvent]);
 
   useEffect(() => {
     if (
@@ -1194,8 +1451,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=30', window.location.origin)
-        : new URL('sw.js?v=30', document.baseURI);
+        ? new URL('/sw.js?v=31', window.location.origin)
+        : new URL('sw.js?v=31', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1296,6 +1553,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!firebaseConfigured) return;
+    if (mode === 'guest' && isGuestPortalUrl(new URL(window.location.href))) {
+      queueMicrotask(() => setEventReady(true));
+      return;
+    }
     let stop = () => {};
     (async () => {
       const [appModule, store] = await Promise.all([
@@ -1721,8 +1982,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=30', window.location.origin)
-        : new URL('sw.js?v=30', document.baseURI);
+        ? new URL('/sw.js?v=31', window.location.origin)
+        : new URL('sw.js?v=31', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -1828,6 +2089,10 @@ export default function Home() {
       setMyRsvp({ ...myRsvp, activeOrderCount: Math.max(0, (myRsvp.activeOrderCount || 0) + delta) });
   };
   const switchMode = (next: 'guest' | 'host') => {
+    if (next === 'guest') {
+      window.location.assign(guestHomeRoute());
+      return;
+    }
     setMode(next);
     const selectedEventId = menu.id === EMPTY_EVENT_ID ? '' : menu.id;
     if (selectedEventId) localStorage.setItem(LAST_EVENT_KEY, selectedEventId);
@@ -1836,7 +2101,7 @@ export default function Home() {
       '',
       next === 'host'
         ? selectedEventId ? eventRoute(selectedEventId, 'host', automaticPublicEventPath(menu)) : hostHomeRoute()
-        : selectedEventId ? eventRoute(selectedEventId, 'guest', automaticPublicEventPath(menu)) : '/',
+        : guestHomeRoute(),
     );
   };
   const openGuestInvitation = () => {
@@ -1850,7 +2115,7 @@ export default function Home() {
       const invitationUrl = new URL(entered, window.location.href);
       const invitationPublicPath = eventPublicPathFromUrl(invitationUrl);
       if (invitationPublicPath) {
-        window.location.assign(`/${invitationPublicPath}`);
+        window.location.assign(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(invitationPublicPath)}`);
         return;
       }
       eventId = eventIdFromUrl(invitationUrl) || entered;
@@ -1862,20 +2127,16 @@ export default function Home() {
       notify('That invitation link or event code is not valid.');
       return;
     }
-    localStorage.setItem(LAST_EVENT_KEY, eventId);
-    window.location.assign(eventRoute(eventId));
-  };
-  const useAnotherGuestProfile = () => {
-    setChangingGuestPhone(true);
-    setGuestName('');
-    setPhoneNumber('');
-    setGuestPin('');
-    setEditingGuestProfile(true);
+    window.location.assign(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(eventId)}`);
   };
   const selectGuestEvent = (access: GuestEventAccess) => {
     if (!guestSession) return;
     localStorage.setItem(guestIdentityKey(access.event.id), guestSession.guestUid);
     localStorage.setItem(LAST_EVENT_KEY, access.event.id);
+    const nextRoute = eventRoute(access.event.id, 'guest', automaticPublicEventPath(access.event));
+    localStorage.setItem(TRUSTED_GUEST_ROUTE_KEY, new URL(nextRoute, window.location.origin).pathname);
+    writePendingGuestEvent(null);
+    setPendingGuestEvent(null);
     setGuestEventPickerOpen(false);
     if (access.event.id === menu.id) {
       setGuestUid(guestSession.guestUid);
@@ -1884,13 +2145,11 @@ export default function Home() {
       if (access.rsvp) setRsvpChoice(access.rsvp.status);
       return;
     }
-    window.location.assign(
-      eventRoute(access.event.id, 'guest', automaticPublicEventPath(access.event)),
-    );
+    window.location.assign(nextRoute);
   };
   const openGuestEventPicker = async () => {
     if (!guestSession) {
-      openRsvpPanel();
+      window.location.assign(guestHomeRoute());
       return;
     }
     setGuestEventPickerOpen(true);
@@ -1898,6 +2157,8 @@ export default function Home() {
   };
   const clearGuestAccess = () => {
     writeGuestSession(null);
+    localStorage.removeItem(GUEST_EVENTS_CACHE_KEY);
+    localStorage.removeItem(TRUSTED_GUEST_ROUTE_KEY);
     guestEvents.forEach((entry) => localStorage.removeItem(guestIdentityKey(entry.event.id)));
     localStorage.removeItem(guestIdentityKey(menu.id));
     setGuestSession(null);
@@ -1913,12 +2174,15 @@ export default function Home() {
     setPhoneNumber('');
     setGuestPin('');
     setGuestEventPickerOpen(false);
+    setPendingGuestEvent(readPendingGuestEvent());
+    pendingEnrollmentRef.current = '';
+    if (!isGuestPortalUrl(new URL(window.location.href))) window.location.assign(guestHomeRoute());
   };
   const unlockGuestEvents = async () => {
     const name = guestName.trim().replace(/\s+/g, ' ');
     const enteredPhone = normalizeOptionalPhone(phoneNumber);
     if (name.length < 2 || name.length > 80) {
-      notify('Enter the name used on your invitation');
+      notify('Enter the Display Name used for your guest profile');
       return;
     }
     if (!enteredPhone) {
@@ -1935,20 +2199,25 @@ export default function Home() {
       const guestUid = await guestNameIndexId(guestPhone);
       const pinHash = await guestPinHash(guestUid, guestPin);
       const session = { guestUid, guestName: name, guestPhone, pinHash };
-      const matches = await loadGuestEvents(session);
-      if (!matches.length) {
-        notify('No invitations match that phone number and PIN. Open an event link to join it first.');
+      let matches = await loadGuestEvents(session);
+      if (matches.length && !matches.some((entry) => guestNameKey(entry.profile.guestName) === guestNameKey(name))) {
+        notify('That Display Name does not match the guest profile for this phone number.');
         return;
       }
-      if (!matches.some((entry) => guestNameKey(entry.profile.guestName) === guestNameKey(name))) {
-        notify('That name does not match the guest profile for this phone number.');
+      if (pendingGuestEvent && !matches.some((access) => guestEventMatchesPending(access, pendingGuestEvent))) {
+        const invitedEvent = await enrollPendingGuestEvent(session, pendingGuestEvent, matches);
+        if (invitedEvent) matches = [...matches, invitedEvent];
+      }
+      if (!matches.length) {
+        notify('No invitations or RSVPs match that phone number and PIN.');
         return;
       }
       writeGuestSession(session);
       setGuestSession(session);
       setGuestPin('');
-      setGuestEventPickerOpen(menu.id !== EMPTY_EVENT_ID);
-      notify(`${matches.length} invitation${matches.length === 1 ? '' : 's'} found`);
+      pendingEnrollmentRef.current = `${session.guestUid}:${pendingGuestEvent?.route || 'events'}`;
+      setGuestEventPickerOpen(false);
+      notify(`${matches.length} event${matches.length === 1 ? '' : 's'} found`);
     } finally {
       setProfileBusy(false);
     }
@@ -2299,7 +2568,7 @@ export default function Home() {
       if (establishingAccess && accessibleEvents.length) {
         setRsvpPanelOpen(false);
         setGuestEventPickerOpen(true);
-        notify(`${accessibleEvents.length} invitation${accessibleEvents.length === 1 ? '' : 's'} found — choose an event`);
+        notify(`${accessibleEvents.length} event${accessibleEvents.length === 1 ? '' : 's'} found — choose an event`);
       } else notify('Guest profile updated');
     } catch (error) {
       notify((error as Error).message === 'name-taken'
@@ -3229,6 +3498,7 @@ export default function Home() {
             pin={guestPin}
             session={guestSession}
             events={guestEvents}
+            pendingEvent={pendingGuestEvent}
             busy={profileBusy || guestEventsBusy}
             setName={setGuestName}
             setPhone={(value) => setPhoneNumber(formatPhoneInput(value))}
@@ -3775,7 +4045,7 @@ export default function Home() {
                 </div>
                 <p className="guest-rsvp-explainer">Your phone number and temporary 4-digit PIN let you reopen this RSVP on another device. No verification code or permanent account is created.</p>
                 <div className="guest-rsvp-form">
-                  <label className="field-label">Your name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="Your name" autoComplete="name" /></label>
+                  <label className="field-label">Display Name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="How guests will see you" autoComplete="name" /></label>
                   <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(formatPhoneInput(event.target.value))} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
                   <label className="field-label guest-pin-field">Temporary PIN<input value={guestPin} onChange={(event) => setGuestPin(event.target.value.replace(/\D/g, '').slice(0, 4))} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" /></label>
                   <div className="guest-profile-actions">
@@ -3799,7 +4069,7 @@ export default function Home() {
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
-                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit name</button><button type="button" onClick={useAnotherGuestProfile}>Use another phone</button></div>
+                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit Display Name</button><button type="button" onClick={clearGuestAccess}>Switch guest</button></div>
                 </div>
                 <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Going responses need host approval. Maybe and Not going are saved immediately; only approved Going guests can chat or order.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
@@ -4038,6 +4308,7 @@ function GuestAccessPortal({
   pin,
   session,
   events,
+  pendingEvent,
   busy,
   setName,
   setPhone,
@@ -4051,6 +4322,7 @@ function GuestAccessPortal({
   pin: string;
   session: GuestSession | null;
   events: GuestEventAccess[];
+  pendingEvent: PendingGuestEvent | null;
   busy: boolean;
   setName: (value: string) => void;
   setPhone: (value: string) => void;
@@ -4064,18 +4336,19 @@ function GuestAccessPortal({
       <div className="guest-access-intro">
         <span className="guest-access-mark"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={62} height={62} /></span>
         <p className="eyebrow">Your nights, in one place</p>
-        <h1 className="font-display">Find your invitations</h1>
-        <p>Enter the temporary guest details you already use. Nights will show every event connected to that phone number and PIN.</p>
+        <h1 className="font-display">Your events</h1>
+        <p>Sign in once to see every event you have RSVP&apos;d to or been invited to.</p>
       </div>
       {!session ? (
         <div className="guest-access-form">
-          <label className="field-label">Your name<input value={name} onChange={(event) => setName(event.target.value)} className="field-input" autoComplete="name" placeholder="Your name" /></label>
+          {pendingEvent && <div className="guest-invitation-cached"><Check size={17} /><span><strong>Invitation saved</strong><small>Sign in and this event will be added to your event list.</small></span></div>}
+          <label className="field-label">Display Name<input value={name} onChange={(event) => setName(event.target.value)} className="field-input" autoComplete="name" placeholder="How guests will see you" /></label>
           <label className="field-label">Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} /></label>
           <label className="field-label">Temporary PIN<input value={pin} onChange={(event) => setPin(event.target.value)} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" onKeyDown={(event) => { if (event.key === 'Enter') unlock(); }} /></label>
           <button type="button" className="primary-button" disabled={busy || !name.trim() || !phone.trim() || !/^\d{4}$/.test(pin)} onClick={unlock}>
-            <Sparkles size={17} /> {busy ? 'Finding invitations…' : 'Show my events'}
+            <Sparkles size={17} /> {busy ? 'Opening your events…' : 'Continue'}
           </button>
-          <small>New to an event? Open the invitation link from its host first.</small>
+          <small>Your PIN stays temporary. No SMS verification or permanent account is created.</small>
         </div>
       ) : (
         <div className="guest-access-events">
@@ -4083,13 +4356,14 @@ function GuestAccessPortal({
             <span>Welcome, <strong>{session.guestName}</strong></span>
             <button type="button" onClick={clearAccess}>Use another guest</button>
           </div>
-          {busy ? <p className="guest-access-loading">Loading your invitations…</p> : events.length ? (
+          {events.length ? (
             <div className="guest-event-card-grid">
               {events.map((access) => (
-                <GuestEventCard key={access.event.id} access={access} onSelect={() => selectEvent(access)} />
+                <GuestEventCard key={access.event.id} access={access} invited={Boolean(pendingEvent && guestEventMatchesPending(access, pendingEvent))} onSelect={() => selectEvent(access)} />
               ))}
             </div>
-          ) : <p className="guest-access-loading">No invitations were found for this guest profile.</p>}
+          ) : <p className="guest-access-loading">{busy ? 'Loading your events…' : 'No invitations or RSVPs were found for this guest profile.'}</p>}
+          {busy && events.length > 0 && <p className="guest-access-refreshing">Refreshing your events…</p>}
         </div>
       )}
     </section>
@@ -4099,15 +4373,17 @@ function GuestAccessPortal({
 function GuestEventCard({
   access,
   current = false,
+  invited = false,
   onSelect,
 }: {
   access: GuestEventAccess;
   current?: boolean;
+  invited?: boolean;
   onSelect: () => void;
 }) {
   const response = access.rsvp
     ? access.rsvp.status === 'yes' ? 'Going' : access.rsvp.status === 'maybe' ? 'Maybe' : 'Not going'
-    : 'RSVP not sent';
+    : invited ? 'New invitation' : 'Invited · RSVP not sent';
   return (
     <button type="button" className={`guest-event-card ${current ? 'current' : ''}`} onClick={onSelect}>
       <span className="guest-event-card-art" style={{ backgroundImage: `linear-gradient(145deg, rgb(32 157 139 / 0.82), rgb(31 88 163 / 0.82)), url(${eventBackground(access.event)})` }} />
@@ -4143,7 +4419,7 @@ function GuestEventPicker({
     <div className="guest-event-picker-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <dialog open className="guest-event-picker" aria-label="Choose an event">
         <header>
-          <div><p className="eyebrow">{guestName}&apos;s invitations</p><h2 className="font-display">Choose your event</h2></div>
+          <div><p className="eyebrow">{guestName}&apos;s events</p><h2 className="font-display">Switch event</h2></div>
           <button type="button" className="icon-button" onClick={onClose} aria-label="Close event picker"><XCircle size={20} /></button>
         </header>
         {busy ? <p className="guest-access-loading">Refreshing your invitations…</p> : events.length ? (
@@ -4152,7 +4428,7 @@ function GuestEventPicker({
               <GuestEventCard key={access.event.id} access={access} current={access.event.id === currentEventId} onSelect={() => onSelect(access)} />
             ))}
           </div>
-        ) : <p className="guest-access-loading">No invitations were found.</p>}
+        ) : <p className="guest-access-loading">No invitations or RSVPs were found.</p>}
         <footer><button type="button" onClick={onUseAnotherGuest}>Use another guest profile</button></footer>
       </dialog>
     </div>
@@ -5268,7 +5544,7 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={eventRoute(menu.id, 'guest', automaticPublicEventPath(menu))} target="_blank" rel="noreferrer">
+                <a href={guestEventUrl(menu.id, automaticPublicEventPath(menu))} target="_blank" rel="noreferrer">
                   <ExternalLink size={16} />
                   <span>Preview</span>
                 </a>

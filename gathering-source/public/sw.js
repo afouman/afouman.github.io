@@ -1,6 +1,6 @@
 // Keep the cache name deliberately versioned. A new release clears the old
 // HTML shell, so GitHub Pages never leaves a host looking at an older UI.
-const CACHE_NAME = 'nights-v30';
+const CACHE_NAME = 'nights-v31';
 const APP_SHELL = ['./', './manifest.webmanifest', './icons/gather-favicon-48.png', './icons/gather-app-icon-180.png', './icons/gather-app-icon-192.png', './icons/gather-app-icon-512.png'];
 
 self.addEventListener('install', event => {
