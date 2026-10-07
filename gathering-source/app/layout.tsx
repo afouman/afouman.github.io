@@ -8,7 +8,7 @@ export const metadata: Metadata = {
   description: 'Browse the menu, choose your dishes, and send your order straight to your host.',
   // Relative URLs deliberately keep the PWA inside /gathering/ on GitHub Pages.
   manifest: './manifest.webmanifest',
-  icons: { icon: './favicon.svg', apple: './icons/gather-host-180.png' },
+  icons: { icon: './icons/gather-favicon-48.png', apple: './icons/gather-host-180.png' },
   appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Gather' },
   openGraph: { title: 'Gather', description: 'Event menus made personal', images: ['./og.png'] },
   twitter: { card: 'summary_large_image', title: 'Gather', description: 'Event menus made personal', images: ['./og.png'] },

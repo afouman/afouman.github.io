@@ -1050,8 +1050,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=27', window.location.origin)
-        : new URL('sw.js?v=27', document.baseURI);
+        ? new URL('/sw.js?v=28', window.location.origin)
+        : new URL('sw.js?v=28', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1575,8 +1575,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=27', window.location.origin)
-        : new URL('sw.js?v=27', document.baseURI);
+        ? new URL('/sw.js?v=28', window.location.origin)
+        : new URL('sw.js?v=28', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
