@@ -190,14 +190,21 @@ export default {
     upstreamRequest.headers.set('host', 'afouman.github.io');
     const releaseFile = incomingUrl.pathname === '/sw.js'
       || incomingUrl.pathname === `${APP_BASE_PATH}/sw.js`;
+    const staticAsset = incomingUrl.pathname.startsWith('/_next/')
+      || incomingUrl.pathname.startsWith('/icons/')
+      || incomingUrl.pathname.startsWith(`${APP_BASE_PATH}/_next/`)
+      || incomingUrl.pathname.startsWith(`${APP_BASE_PATH}/icons/`)
+      || APP_ASSETS.has(incomingUrl.pathname)
+      || APP_ASSETS.has(incomingUrl.pathname.replace(APP_BASE_PATH, ''));
+    const freshPage = !staticAsset;
     const response = await fetch(upstreamRequest, {
-      cf: releaseFile
+      cf: releaseFile || freshPage
         ? { cacheEverything: false, cacheTtl: 0 }
         : { cacheEverything: request.method === 'GET', cacheTtlByStatus: { '200-299': 300, '404': 30, '500-599': 0 } },
     });
     const headers = new Headers(response.headers);
     headers.set('x-gather-route', incomingUrl.pathname);
-    if (releaseFile) headers.set('cache-control', 'no-cache, no-store, must-revalidate');
+    if (releaseFile || freshPage) headers.set('cache-control', 'no-cache, no-store, must-revalidate');
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
   },
 };
