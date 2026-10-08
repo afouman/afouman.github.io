@@ -21,7 +21,6 @@ import {
   Flame,
   GripVertical,
   ImagePlus,
-  LayoutDashboard,
   Leaf,
   ListChecks,
   LockKeyhole,
@@ -529,12 +528,56 @@ const GUEST_EVENTS_CACHE_KEY = 'nights-guest-events-v1';
 const PENDING_GUEST_EVENT_KEY = 'nights-pending-guest-event-v1';
 const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
+const APP_BADGE_CACHE = 'nights-chat-badge-v1';
+const APP_BADGE_STATE_PATH = '/__nights_chat_badge_state__';
+type AppBadgeState = { events: Record<string, number> };
+type BadgeNavigator = Navigator & {
+  setAppBadge?: (count?: number) => Promise<void>;
+  clearAppBadge?: () => Promise<void>;
+};
+const readAppBadgeState = async (): Promise<AppBadgeState> => {
+  if (typeof window === 'undefined' || !('caches' in window)) return { events: {} };
+  try {
+    const cache = await caches.open(APP_BADGE_CACHE);
+    const response = await cache.match(new URL(APP_BADGE_STATE_PATH, window.location.origin));
+    return response ? await response.json() as AppBadgeState : { events: {} };
+  } catch {
+    return { events: {} };
+  }
+};
+const applyAppBadge = async (state: AppBadgeState) => {
+  const badgeNavigator = navigator as BadgeNavigator;
+  const count = Object.values(state.events).reduce((sum, value) => sum + Math.max(0, value || 0), 0);
+  try {
+    if (count > 0) await badgeNavigator.setAppBadge?.(count);
+    else await badgeNavigator.clearAppBadge?.();
+  } catch {
+    // Badging is optional and can be disabled in the device's notification settings.
+  }
+};
+const setEventAppBadge = async (eventId: string, count: number) => {
+  if (typeof window === 'undefined' || !('caches' in window)) return;
+  const state = await readAppBadgeState();
+  if (count > 0) state.events[eventId] = count;
+  else delete state.events[eventId];
+  try {
+    const cache = await caches.open(APP_BADGE_CACHE);
+    await cache.put(
+      new URL(APP_BADGE_STATE_PATH, window.location.origin),
+      new Response(JSON.stringify(state), { headers: { 'content-type': 'application/json' } }),
+    );
+  } catch {
+    // Keep the chat functional when Cache Storage is unavailable.
+  }
+  await applyAppBadge(state);
+};
 const EVENT_ID_PATTERN = /^[a-zA-Z0-9_-]{2,120}$/;
 const EVENT_PATH_SEGMENT_PATTERN = /^[a-z0-9][a-z0-9-]{0,59}$/;
 const RESERVED_EVENT_PATHS = new Set([
   '_next',
   'gathering',
   'nights-guests',
+  'nights-host',
   'icons',
   'favicon.svg',
   'manifest.webmanifest',
@@ -554,6 +597,14 @@ const isGuestPortalUrl = (url: URL) => {
     .map((segment) => decodeURIComponent(segment).toLowerCase());
   if (segments[0] === 'gathering') segments.shift();
   return segments[0] === 'nights-guests' || url.searchParams.get('guest') === '1';
+};
+const isHostPortalUrl = (url: URL) => {
+  const segments = url.pathname
+    .split('/')
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment).toLowerCase());
+  if (segments[0] === 'gathering') segments.shift();
+  return segments[0] === 'nights-host' || url.searchParams.get('view') === 'host';
 };
 const eventIdFromUrl = (url: URL) => {
   const queryEventId = url.searchParams.get('event')?.trim();
@@ -576,7 +627,7 @@ const eventPublicPathFromUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment).toLowerCase());
   if (segments[0] === 'gathering') segments.shift();
-  if (segments[0] === 'nights-guests') return null;
+  if (segments[0] === 'nights-guests' || segments[0] === 'nights-host') return null;
   return segments.length === 2
     && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
     ? segments.join('/')
@@ -627,13 +678,15 @@ const eventRoute = (
 ) => {
   const encodedEventId = encodeURIComponent(eventId);
   const cleanPath = normalizedPublicEventPath(publicPath);
-  if (usesCleanEventUrls())
-    return `/${cleanPath || encodedEventId}${view === 'host' ? '?view=host' : ''}`;
+  if (usesCleanEventUrls()) {
+    if (view === 'host') return `/nights-host/?event=${encodedEventId}`;
+    return `/${cleanPath || encodedEventId}`;
+  }
   return view === 'host'
     ? `?view=host&event=${encodedEventId}`
     : `?event=${encodedEventId}`;
 };
-const hostHomeRoute = () => usesCleanEventUrls() ? '/?view=host' : '?view=host';
+const hostHomeRoute = () => usesCleanEventUrls() ? '/nights-host/' : '?view=host';
 const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guests/' : '?guest=1';
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
@@ -1048,8 +1101,6 @@ export default function Home() {
   const [deletingEvent, setDeletingEvent] = useState<EventMenu | null>(null);
   const [backgroundEditor, setBackgroundEditor] = useState<BackgroundEditorState | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
-  const [guestInvitationOpen, setGuestInvitationOpen] = useState(false);
-  const [guestInvitation, setGuestInvitation] = useState('');
   const [isStandalone, setIsStandalone] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [guestPin, setGuestPin] = useState('');
@@ -1302,9 +1353,27 @@ export default function Home() {
 
   useEffect(() => {
     const parameters = new URLSearchParams(window.location.search);
-    const hostView = parameters.get('view') === 'host';
     const currentUrl = new URL(window.location.href);
+    const legacyHostView = parameters.get('view') === 'host';
+    const hostView = isHostPortalUrl(currentUrl);
     const guestPortal = isGuestPortalUrl(currentUrl);
+    if (usesCleanEventUrls()) {
+      const role = hostView ? 'host' : 'guest';
+      document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
+        ?.setAttribute('href', `/gathering/manifest-${role}.webmanifest`);
+      document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-title"]')
+        ?.setAttribute('content', hostView ? 'Nights Host' : 'Nights');
+    }
+    if (
+      legacyHostView
+      && usesCleanEventUrls()
+      && !currentUrl.pathname.startsWith('/nights-host')
+    ) {
+      parameters.delete('view');
+      const query = parameters.toString();
+      window.location.replace(`${hostHomeRoute()}${query ? `?${query}` : ''}`);
+      return;
+    }
     const savedSession = readGuestSession();
     if (savedSession) {
       const cachedEvents = readGuestEventCache(savedSession);
@@ -1452,8 +1521,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=32', window.location.origin)
-        : new URL('sw.js?v=32', document.baseURI);
+        ? new URL('/sw.js?v=33', window.location.origin)
+        : new URL('sw.js?v=33', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -1983,8 +2052,8 @@ export default function Home() {
         return;
       }
       const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=32', window.location.origin)
-        : new URL('sw.js?v=32', document.baseURI);
+        ? new URL('/sw.js?v=33', window.location.origin)
+        : new URL('sw.js?v=33', document.baseURI);
       const registration = await navigator.serviceWorker.register(workerUrl.href, {
         scope: './',
         updateViaCache: 'none',
@@ -2089,22 +2158,6 @@ export default function Home() {
     if (myRsvp?.guestUid === uid)
       setMyRsvp({ ...myRsvp, activeOrderCount: Math.max(0, (myRsvp.activeOrderCount || 0) + delta) });
   };
-  const switchMode = (next: 'guest' | 'host') => {
-    if (next === 'guest') {
-      window.location.assign(guestHomeRoute());
-      return;
-    }
-    setMode(next);
-    const selectedEventId = menu.id === EMPTY_EVENT_ID ? '' : menu.id;
-    if (selectedEventId) localStorage.setItem(LAST_EVENT_KEY, selectedEventId);
-    history.replaceState(
-      {},
-      '',
-      next === 'host'
-        ? selectedEventId ? eventRoute(selectedEventId, 'host', automaticPublicEventPath(menu)) : hostHomeRoute()
-        : guestHomeRoute(),
-    );
-  };
   const openInstallGuide = () => {
     if (mode === 'guest' && menu.id !== EMPTY_EVENT_ID) {
       const guestHome = guestHomeRoute();
@@ -2112,31 +2165,6 @@ export default function Home() {
       return;
     }
     setShowInstallGuide(true);
-  };
-  const openGuestInvitation = () => {
-    const entered = guestInvitation.trim();
-    if (!entered) {
-      notify('Paste the invitation link or enter its event code.');
-      return;
-    }
-    let eventId = entered;
-    try {
-      const invitationUrl = new URL(entered, window.location.href);
-      const invitationPublicPath = eventPublicPathFromUrl(invitationUrl);
-      if (invitationPublicPath) {
-        window.location.assign(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(invitationPublicPath)}`);
-        return;
-      }
-      eventId = eventIdFromUrl(invitationUrl) || entered;
-    } catch {
-      eventId = entered;
-    }
-    eventId = eventId.trim();
-    if (!EVENT_ID_PATTERN.test(eventId)) {
-      notify('That invitation link or event code is not valid.');
-      return;
-    }
-    window.location.assign(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(eventId)}`);
   };
   const selectGuestEvent = (access: GuestEventAccess) => {
     if (!guestSession) return;
@@ -3405,9 +3433,12 @@ export default function Home() {
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
           <button
-            onClick={() => !isStandalone && switchMode('guest')}
+            onClick={() => {
+              if (!isStandalone)
+                window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute());
+            }}
             className="flex items-center gap-3"
-            aria-label={isStandalone ? 'Nights Host home' : 'Open guest events'}
+            aria-label={mode === 'host' ? 'Nights Host home' : 'Open guest events'}
           >
             <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
               <Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={36} height={36} />
@@ -3479,22 +3510,6 @@ export default function Home() {
               <MessageCircle size={16} />
               <span>{menu.chatOpen === false ? 'Chat locked' : 'Chat'}</span>
             </button>}
-            {!isStandalone && (
-              <button
-                onClick={() => switchMode(mode === 'guest' ? 'host' : 'guest')}
-                className="view-switch-button rounded-full px-4 py-2 text-sm font-semibold shadow-sm hover:-translate-y-px hover:shadow-md"
-              >
-                {mode === 'guest' ? (
-                  <span className="flex items-center gap-2">
-                    <LayoutDashboard size={15} /> Nights Host
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-2">
-                    <ExternalLink size={15} /> Guest view
-                  </span>
-                )}
-              </button>
-            )}
           </div>
         </div>
       </header>
@@ -3628,59 +3643,7 @@ export default function Home() {
             >
               Continue with Google
             </button>
-            <button
-              onClick={() => menu.id === EMPTY_EVENT_ID
-                ? setGuestInvitationOpen(true)
-                : switchMode('guest')}
-              className="mt-4 block w-full text-sm font-semibold text-black/45"
-            >
-              {menu.id === EMPTY_EVENT_ID ? 'Open a guest invitation' : 'Continue as guest'}
-            </button>
           </div>
-        </div>
-      )}
-      {guestInvitationOpen && (
-        <div className="fixed inset-0 z-[75] grid place-items-center bg-black/45 p-5 backdrop-blur-sm">
-          <section className="new-event-dialog w-full max-w-md rounded-3xl bg-[var(--cream)] p-7 shadow-2xl sm:p-9">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="eyebrow">Guest access</p>
-                <h2 className="font-display mt-2 text-3xl font-semibold">Open your invitation</h2>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setGuestInvitationOpen(false)}
-                aria-label="Close guest invitation"
-              >
-                <XCircle size={18} />
-              </button>
-            </div>
-            <p className="mt-3 text-sm leading-6 text-black/55">
-              Paste the link the host sent you. You can also enter the event code from the end of that link.
-            </p>
-            <label className="field-label mt-6">
-              Invitation link or event code
-              <input
-                inputMode="url"
-                autoCapitalize="none"
-                autoCorrect="off"
-                value={guestInvitation}
-                onChange={(event) => setGuestInvitation(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') openGuestInvitation();
-                }}
-                placeholder="https://gaemaj.tech/movie-night/oct4"
-              />
-            </label>
-            <button
-              type="button"
-              className="primary-button mt-6 w-full justify-center py-3.5"
-              onClick={openGuestInvitation}
-            >
-              Continue as guest
-            </button>
-          </section>
         </div>
       )}
       {creatingEvent && (
@@ -4751,6 +4714,27 @@ function EventChat({
   const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
   const locked = menu.chatOpen === false;
 
+  useEffect(() => {
+    let active = true;
+    void readAppBadgeState().then((state) => {
+      if (!active) return;
+      if (visible) void setEventAppBadge(menu.id, 0);
+      else setUnread(state.events[menu.id] || 0);
+    });
+    return () => { active = false; };
+  }, [menu.id, visible]);
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const receivePush = (event: MessageEvent<{ type?: string; eventId?: string }>) => {
+      if (event.data?.type !== 'nights-chat-push' || event.data.eventId !== menu.id) return;
+      if (visible) void setEventAppBadge(menu.id, 0);
+      else void readAppBadgeState().then((state) => setUnread(state.events[menu.id] || 0));
+    };
+    navigator.serviceWorker.addEventListener('message', receivePush);
+    return () => navigator.serviceWorker.removeEventListener('message', receivePush);
+  }, [menu.id, visible]);
+
   const rememberReadPosition = useCallback(() => {
     const stream = streamRef.current;
     if (!stream) return;
@@ -4855,9 +4839,10 @@ function EventChat({
   useEffect(() => {
     if (visible) queueMicrotask(() => {
       setUnread(0);
+      void setEventAppBadge(menu.id, 0);
       composerRef.current?.focus();
     });
-  }, [visible]);
+  }, [menu.id, visible]);
 
   useEffect(() => () => {
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);

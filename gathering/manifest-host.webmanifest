@@ -1,0 +1,16 @@
+{
+  "name": "Nights Host",
+  "short_name": "Nights Host",
+  "description": "Create events and manage guests, chat, menus, and orders.",
+  "id": "/nights-host/",
+  "start_url": "/nights-host/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f2e8",
+  "theme_color": "#f7f2e8",
+  "icons": [
+    { "src": "/gathering/icons/nights-app-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/gathering/icons/nights-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

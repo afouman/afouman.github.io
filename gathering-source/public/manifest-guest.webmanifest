@@ -1,0 +1,16 @@
+{
+  "name": "Nights",
+  "short_name": "Nights",
+  "description": "See your invitations, RSVP, chat, and manage event orders.",
+  "id": "/nights-guests/",
+  "start_url": "/nights-guests/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#061b2a",
+  "theme_color": "#083747",
+  "icons": [
+    { "src": "/gathering/icons/nights-app-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/gathering/icons/nights-app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
