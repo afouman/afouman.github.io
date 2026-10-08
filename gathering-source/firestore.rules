@@ -13,6 +13,24 @@ service cloud.firestore {
     function canManageEvent(eventId) {
       return isApprovedHost() || isHost(eventId);
     }
+    function accountProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+    function hasCompleteAccount() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && accountProfile().data.uid == request.auth.uid
+        && accountProfile().data.email == request.auth.token.email
+        && accountProfile().data.firstName is string
+        && accountProfile().data.lastName is string
+        && accountProfile().data.phone is string
+        && accountProfile().data.guestUid is string
+        && exists(/databases/$(database)/documents/guest-identities/$(accountProfile().data.guestUid))
+        && get(/databases/$(database)/documents/guest-identities/$(accountProfile().data.guestUid)).data.accountUid == request.auth.uid;
+    }
+    function ownsGuestIdentity(guestUid) {
+      return hasCompleteAccount() && accountProfile().data.guestUid == guestUid;
+    }
     function activeOrders(data) {
       return data.keys().hasAny(['activeOrderCount']) ? data.activeOrderCount : 0;
     }
@@ -70,6 +88,7 @@ service cloud.firestore {
         && data.authorName == 'Host'
       ) || (
         data.authorRole == 'guest'
+        && ownsGuestIdentity(data.authorUid)
         && guestCanChat(eventId, data.authorUid)
         && data.authorName == guestRsvp(eventId, data.authorUid).data.guestName
       );
@@ -81,6 +100,7 @@ service cloud.firestore {
         && data.lastActorUid == request.auth.uid
       ) || (
         data.lastActorRole == 'guest'
+        && ownsGuestIdentity(data.lastActorUid)
         && guestCanChat(eventId, data.lastActorUid)
       );
     }
@@ -111,16 +131,131 @@ service cloud.firestore {
       );
     }
 
+    match /guest-identities/{guestUid} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['accountUid', 'phone', 'createdAt'])
+        && request.resource.data.accountUid == request.auth.uid
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 11
+        && request.resource.data.phone.size() <= 16
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow get: if signedIn() && (request.auth.uid == userId || isApprovedHost());
+      allow list: if isApprovedHost();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'firstName', 'lastName', 'phone', 'guestUid',
+          'membershipTier', 'membershipStatus', 'mutedEventIds',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.firstName is string
+        && request.resource.data.firstName.size() >= 1
+        && request.resource.data.firstName.size() <= 50
+        && request.resource.data.lastName is string
+        && request.resource.data.lastName.size() >= 1
+        && request.resource.data.lastName.size() <= 60
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 11
+        && request.resource.data.phone.size() <= 16
+        && request.resource.data.guestUid is string
+        && request.resource.data.guestUid.size() == 64
+        && existsAfter(/databases/$(database)/documents/guest-identities/$(request.resource.data.guestUid))
+        && getAfter(/databases/$(database)/documents/guest-identities/$(request.resource.data.guestUid)).data.accountUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/guest-identities/$(request.resource.data.guestUid)).data.phone == request.resource.data.phone
+        && request.resource.data.membershipTier == 'free'
+        && request.resource.data.membershipStatus == 'active'
+        && request.resource.data.mutedEventIds is list
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.phone == resource.data.phone
+        && request.resource.data.guestUid == resource.data.guestUid
+        && request.resource.data.membershipTier == resource.data.membershipTier
+        && request.resource.data.membershipStatus == resource.data.membershipStatus
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.firstName is string
+        && request.resource.data.firstName.size() >= 1
+        && request.resource.data.firstName.size() <= 50
+        && request.resource.data.lastName is string
+        && request.resource.data.lastName.size() >= 1
+        && request.resource.data.lastName.size() <= 60
+        && request.resource.data.mutedEventIds is list
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'firstName', 'lastName', 'mutedEventIds', 'updatedAt'
+        ]);
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /public-paths/{pathHash} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if hasCompleteAccount()
+        && request.resource.data.keys().hasOnly([
+          'eventId', 'ownerUid', 'publicPath', 'createdAt'
+        ])
+        && (request.resource.data.ownerUid == request.auth.uid || isApprovedHost())
+        && request.resource.data.eventId is string
+        && request.resource.data.publicPath is string
+        && request.resource.data.createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId))
+        && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.ownerUid == request.resource.data.ownerUid
+        && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.publicPath == request.resource.data.publicPath
+        && getAfter(/databases/$(database)/documents/events/$(request.resource.data.eventId)).data.publicPathClaimId == pathHash;
+      allow update: if false;
+      allow delete: if canManageEvent(resource.data.eventId);
+    }
+
     match /events/{eventId} {
       allow read: if true;
-      allow create: if isApprovedHost() && request.resource.data.ownerUid == request.auth.uid;
+      allow create: if hasCompleteAccount()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.publicPath is string
+        && request.resource.data.publicPathClaimId is string
+        && existsAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId))
+        && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.eventId == eventId
+        && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.ownerUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.publicPath == request.resource.data.publicPath;
       allow update: if canManageEvent(eventId)
-        && request.resource.data.ownerUid == resource.data.ownerUid;
+        && (
+          (resource.data.keys().hasAny(['ownerUid'])
+            && request.resource.data.ownerUid == resource.data.ownerUid)
+          ||
+          (!resource.data.keys().hasAny(['ownerUid'])
+            && isApprovedHost()
+            && request.resource.data.ownerUid == request.auth.uid)
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+            'publicPath', 'publicPathClaimId'
+          ])
+          || (
+            request.resource.data.publicPath is string
+            && request.resource.data.publicPathClaimId is string
+            && existsAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId))
+            && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.eventId == eventId
+            && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.ownerUid == request.resource.data.ownerUid
+            && getAfter(/databases/$(database)/documents/public-paths/$(request.resource.data.publicPathClaimId)).data.publicPath == request.resource.data.publicPath
+          )
+        );
       allow delete: if canManageEvent(eventId);
 
       match /orders/{orderId} {
         allow get, list: if true;
         allow create: if
+          ownsGuestIdentity(request.resource.data.guestUid)
+          &&
           get(/databases/$(database)/documents/events/$(eventId)).data.accepting == true
           && request.resource.data.keys().hasOnly([
             'id', 'guestName', 'selections', 'note', 'status', 'createdAt',
@@ -146,6 +281,8 @@ service cloud.firestore {
           && request.resource.data.note.size() <= 500
           && request.resource.data.selections is map;
         allow update: if canManageEvent(eventId) || (
+          ownsGuestIdentity(resource.data.guestUid)
+          &&
           resource.data.status == 'new'
           && request.resource.data.guestUid == resource.data.guestUid
           && request.resource.data.createdAt == resource.data.createdAt
@@ -187,65 +324,77 @@ service cloud.firestore {
       match /guest-names/{nameHash} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if request.resource.data.keys().hasOnly(['guestUid', 'guestName', 'createdAt'])
+        allow create: if ownsGuestIdentity(request.resource.data.guestUid)
+          && request.resource.data.keys().hasOnly(['guestUid', 'guestName', 'createdAt'])
           && request.resource.data.guestUid is string
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
           && request.resource.data.createdAt == request.time;
-        allow delete: if true;
+        allow delete: if canManageEvent(eventId) || ownsGuestIdentity(resource.data.guestUid);
       }
 
       match /guest-phones/{phoneHash} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if request.resource.data.keys().hasOnly(['guestUid', 'guestPhone', 'createdAt'])
+        allow create: if ownsGuestIdentity(request.resource.data.guestUid)
+          && request.resource.data.keys().hasOnly(['guestUid', 'guestPhone', 'createdAt'])
           && request.resource.data.guestUid is string
           && request.resource.data.guestPhone is string
           && request.resource.data.guestPhone.size() >= 11
           && request.resource.data.guestPhone.size() <= 16
           && request.resource.data.createdAt == request.time;
-        allow delete: if true;
+        allow delete: if canManageEvent(eventId) || ownsGuestIdentity(resource.data.guestUid);
       }
 
       match /guests/{guestUid} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if request.resource.data.keys().hasOnly([
-            'guestUid', 'guestName', 'guestPhone', 'pinHash', 'createdAt', 'updatedAt'
+        allow create: if ownsGuestIdentity(guestUid)
+          && request.resource.data.keys().hasOnly([
+            'guestUid', 'accountUid', 'guestName', 'guestPhone', 'pinHash', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.guestUid == guestUid
+          && request.resource.data.accountUid == request.auth.uid
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
           && request.resource.data.guestPhone is string
           && request.resource.data.guestPhone.size() >= 11
           && request.resource.data.guestPhone.size() <= 16
-          && request.resource.data.pinHash is string
-          && request.resource.data.pinHash.size() == 64
+          && (!request.resource.data.keys().hasAny(['pinHash']) || (
+            request.resource.data.pinHash is string
+            && request.resource.data.pinHash.size() == 64
+          ))
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
-        allow update: if request.resource.data.guestUid == resource.data.guestUid
+        allow update: if ownsGuestIdentity(guestUid)
+          && request.resource.data.guestUid == resource.data.guestUid
+          && request.resource.data.accountUid == request.auth.uid
           && request.resource.data.guestPhone == resource.data.guestPhone
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
-          && request.resource.data.pinHash is string
-          && request.resource.data.pinHash.size() == 64
           && (
             !resource.data.keys().hasAny(['pinHash'])
-            || request.resource.data.pinHash == resource.data.pinHash
+            || (
+              request.resource.data.keys().hasAny(['pinHash'])
+              && request.resource.data.pinHash == resource.data.pinHash
+            )
           )
           && request.resource.data.updatedAt == request.time
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['guestName', 'pinHash', 'updatedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'accountUid', 'guestName', 'pinHash', 'updatedAt'
+          ]);
         allow delete: if canManageEvent(eventId);
       }
 
       match /rsvps/{guestUid} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if rsvpIsOpen(eventId)
+        allow create: if ownsGuestIdentity(guestUid)
+          && rsvpIsOpen(eventId)
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
             'approvalStatus', 'companions', 'createdAt', 'updatedAt'
@@ -253,8 +402,11 @@ service cloud.firestore {
           && request.resource.data.guestUid == guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
-          && request.resource.data.approvalStatus
-            == (eventRequiresApproval(eventId) ? 'pending' : 'approved')
+          && request.resource.data.approvalStatus == (
+            eventRequiresApproval(eventId) && request.resource.data.status == 'yes'
+              ? 'pending'
+              : 'approved'
+          )
           && companionsAreValid(eventId, request.resource.data)
           && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid))
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
@@ -262,18 +414,21 @@ service cloud.firestore {
           && request.resource.data.createdAt == request.time
           && request.resource.data.updatedAt == request.time;
         allow update: if canManageEvent(eventId) || (
+          ownsGuestIdentity(guestUid)
+          &&
           request.resource.data.guestUid == resource.data.guestUid
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount is int
           && request.resource.data.activeOrderCount >= 0
           && request.resource.data.approvalStatus in ['pending', 'approved', 'declined']
-          && (
-            (resource.data.keys().hasAny(['approvalStatus'])
-              && request.resource.data.approvalStatus == resource.data.approvalStatus)
-            ||
-            (!resource.data.keys().hasAny(['approvalStatus'])
-              && request.resource.data.approvalStatus
-                == (eventRequiresApproval(eventId) ? 'pending' : 'approved'))
+          && request.resource.data.approvalStatus == (
+            !eventRequiresApproval(eventId) || request.resource.data.status != 'yes'
+              ? 'approved'
+              : resource.data.status == 'yes'
+                ? (resource.data.keys().hasAny(['approvalStatus'])
+                  ? resource.data.approvalStatus
+                  : 'pending')
+                : 'pending'
           )
           && companionsAreValid(eventId, request.resource.data)
           && request.resource.data.guestName == getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.guestName
@@ -335,6 +490,7 @@ service cloud.firestore {
               && request.resource.data.actorName == 'Host')
             ||
             (request.resource.data.actorRole == 'guest'
+              && ownsGuestIdentity(request.resource.data.actorUid)
               && guestCanChat(eventId, request.resource.data.actorUid)
               && request.resource.data.actorName
                 == guestRsvp(eventId, request.resource.data.actorUid).data.guestName)
@@ -345,6 +501,7 @@ service cloud.firestore {
           ));
         allow delete: if canManageEvent(eventId) || (
           resource.data.actorRole == 'guest'
+          && ownsGuestIdentity(resource.data.actorUid)
           && guestCanChat(eventId, resource.data.actorUid)
         );
       }

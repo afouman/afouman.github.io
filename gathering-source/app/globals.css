@@ -1607,6 +1607,93 @@ button:disabled {
   box-shadow: 0 34px 90px rgb(0 8 18 / 0.35);
   backdrop-filter: blur(18px);
 }
+.guest-access-auth-shell {
+  display: grid;
+  width: 100%;
+  gap: 0.85rem;
+}
+.account-auth-card {
+  width: min(500px, 100%);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  border: 1px solid rgb(201 255 239 / 0.22);
+  border-radius: 2rem;
+  background: rgb(246 252 248 / 0.98);
+  padding: clamp(1.35rem, 3vw, 2.2rem);
+  color: #13282c;
+  box-shadow: 0 34px 90px rgb(0 8 18 / 0.35);
+}
+.guest-access-auth-shell .account-auth-card { width: 100%; }
+.account-auth-heading { text-align: center; }
+.account-auth-logo {
+  display: grid;
+  width: 58px;
+  height: 58px;
+  overflow: hidden;
+  margin: 0 auto 1rem;
+  place-items: center;
+  border-radius: 1.15rem;
+  background: linear-gradient(145deg, #7bf0c1, #269edc);
+  box-shadow: 0 14px 34px rgb(30 147 157 / 0.18);
+}
+.account-auth-heading .eyebrow { color: #258a7d; }
+.account-auth-heading h2 { margin-top: 0.35rem; font-size: clamp(2rem, 5vw, 3rem); line-height: 1; }
+.account-auth-heading > p:last-child { max-width: 390px; margin: 0.75rem auto 0; color: rgb(19 40 44 / 0.58); font-size: 0.8rem; line-height: 1.55; }
+.account-provider-buttons { display: grid; gap: 0.65rem; margin-top: 1.35rem; }
+.account-provider-button {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  border: 1px solid rgb(13 52 59 / 0.16);
+  border-radius: 0.9rem;
+  background: #fff;
+  color: #13282c;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+.account-provider-button:hover { border-color: #35a993; background: #f8fffc; }
+.account-provider-button b { display: grid; width: 1.35rem; height: 1.35rem; place-items: center; border-radius: 50%; color: #2377d8; font-size: 1rem; }
+.account-provider-apple { background: #101817; color: #fff; }
+.account-provider-apple:hover { border-color: #101817; background: #1d2927; }
+.account-provider-apple b { color: #fff; font-size: 0.75rem; }
+.account-auth-divider { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: rgb(19 40 44 / 0.38); font-size: 0.67rem; font-weight: 800; text-transform: uppercase; }
+.account-auth-divider::before, .account-auth-divider::after { height: 1px; flex: 1; background: rgb(13 52 59 / 0.11); content: ''; }
+.account-auth-fields { display: grid; gap: 0.85rem; }
+.account-name-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.account-auth-submit { width: 100%; justify-content: center; margin-top: 1rem; padding-block: 0.9rem; }
+.account-auth-links { display: flex; align-items: center; justify-content: center; gap: 0.55rem; margin-top: 0.9rem; color: rgb(19 40 44 / 0.52); font-size: 0.72rem; }
+.account-auth-links button { color: #16766e; font-weight: 850; }
+.account-auth-terms { display: block; max-width: 390px; margin: 1rem auto 0; color: rgb(19 40 44 / 0.38); font-size: 0.62rem; line-height: 1.45; text-align: center; }
+.account-auth-loading { display: grid; min-height: 260px; place-items: center; align-content: center; gap: 0.6rem; text-align: center; }
+.account-header-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  background: rgb(8 35 49 / 0.08);
+  padding: 0.55rem 0.75rem;
+  color: #193a3f;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+.notification-onboarding-card {
+  width: min(430px, 100%);
+  border: 1px solid rgb(255 255 255 / 0.18);
+  border-radius: 2rem;
+  background: #f5fbf7;
+  padding: 2rem;
+  color: #13282c;
+  box-shadow: 0 35px 100px rgb(0 8 18 / 0.42);
+  text-align: center;
+}
+.notification-onboarding-icon { display: grid; width: 58px; height: 58px; margin: 0 auto 1.15rem; place-items: center; border-radius: 1.15rem; background: linear-gradient(145deg, #75e5bb, #3b9ed8); color: #062434; }
+.notification-onboarding-card h2 { margin-top: 0.4rem; font-size: 2.4rem; line-height: 1; }
+.notification-onboarding-card > p:not(.eyebrow) { margin-top: 0.9rem; color: rgb(19 40 44 / 0.6); font-size: 0.82rem; line-height: 1.6; }
+.notification-onboarding-card .primary-button { width: 100%; justify-content: center; margin-top: 1.4rem; }
+.notification-onboarding-later { margin-top: 0.9rem; color: #257d74; font-size: 0.75rem; font-weight: 850; }
+.notification-onboarding-card > small { display: block; margin-top: 0.85rem; color: rgb(19 40 44 / 0.42); font-size: 0.65rem; line-height: 1.45; }
 .guest-access-form { display: grid; gap: 1rem; }
 .guest-invitation-cached {
   display: flex;
@@ -3907,6 +3994,11 @@ button:disabled {
   .guest-access-intro > p:last-child { font-size: 0.92rem; }
   .guest-access-form,
   .guest-access-events { border-radius: 1.5rem; padding: 1.15rem; }
+  .account-auth-card { max-height: none; border-radius: 1.5rem; padding: 1.15rem; }
+  .account-name-row { grid-template-columns: minmax(0, 1fr); }
+  .account-header-button span { display: none; }
+  .account-header-button { width: 38px; height: 38px; justify-content: center; padding: 0; }
+  .notification-onboarding-card { border-radius: 1.5rem; padding: 1.5rem; }
   .guest-event-card { grid-template-columns: 76px minmax(0, 1fr); }
   .guest-event-card-status { grid-column: 2; justify-content: flex-start; padding: 0 0.9rem 0.85rem; }
   .guest-event-picker-backdrop { align-items: end; padding: 0; }

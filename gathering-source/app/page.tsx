@@ -77,6 +77,7 @@ type MenuItem = {
 type EventMenu = {
   id: string;
   publicPath?: string;
+  publicPathClaimId?: string;
   title: string;
   date: string;
   startsAt?: string;
@@ -143,6 +144,26 @@ type ChatActor = {
   role: 'host' | 'guest';
 };
 type PushNotificationState = 'unsupported' | 'disabled' | 'blocked' | 'enabled';
+type AccountProfile = {
+  uid: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  guestUid: string;
+  membershipTier: 'free' | 'plus' | 'pro';
+  membershipStatus: 'active' | 'trialing' | 'past_due' | 'cancelled';
+  mutedEventIds: string[];
+  createdAt: number;
+  updatedAt?: number;
+};
+type AccountUser = {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  providerIds: string[];
+};
+type AccountAuthMode = 'signin' | 'signup' | 'profile';
 type ChatReply = { id: string; authorName: string; text: string };
 type ChatPollOption = {
   id: string;
@@ -340,13 +361,18 @@ const normalizeOptionalPhone = (value: string) => {
 };
 type GuestProfile = {
   guestUid: string;
+  accountUid?: string;
   guestName: string;
   guestPhone: string;
   pinHash?: string;
   createdAt: number;
   updatedAt?: number;
 };
-type GuestSession = Required<Pick<GuestProfile, 'guestUid' | 'guestName' | 'guestPhone' | 'pinHash'>>;
+type GuestSession = Pick<GuestProfile, 'guestUid' | 'guestName' | 'guestPhone'> & {
+  authUid?: string;
+  email?: string;
+  pinHash?: string;
+};
 type GuestEventAccess = {
   event: EventMenu;
   profile: GuestProfile;
@@ -525,6 +551,8 @@ const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const GUEST_SESSION_KEY = 'nights-guest-session-v1';
 const GUEST_EVENTS_CACHE_KEY = 'nights-guest-events-v1';
+const GLOBAL_PUSH_KEY = 'nights-global-push-v1';
+const NOTIFICATION_PROMPT_KEY = 'nights-notification-prompt-v1';
 const PENDING_GUEST_EVENT_KEY = 'nights-pending-guest-event-v1';
 const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
@@ -694,6 +722,10 @@ const guestEventUrl = (eventId: string, publicPath?: string) =>
   )}`, window.location.origin).toString();
 const pushSubscriptionKey = (eventId: string, actorUid: string) =>
   `gather-chat-push-v2:${eventId}:${actorUid}`;
+const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
+const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
+const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
+  `${profile.firstName} ${profile.lastName}`.trim();
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
 const demoOrdersKey = (eventId: string) => `gather-demo-orders-v2:${eventId}`;
 const DEMO_CHANNEL = 'gather-demo-sync';
@@ -703,7 +735,9 @@ const DESCRIPTION_EXAMPLE = 'Add a short, tempting description';
 const readGuestSession = (): GuestSession | null => {
   try {
     const saved = JSON.parse(localStorage.getItem(GUEST_SESSION_KEY) || 'null') as GuestSession | null;
-    return saved?.guestUid && saved.guestName && saved.guestPhone && saved.pinHash ? saved : null;
+    return saved?.guestUid && saved.guestName && saved.guestPhone && (saved.authUid || saved.pinHash)
+      ? saved
+      : null;
   } catch {
     return null;
   }
@@ -728,10 +762,15 @@ const readGuestEventCache = (session: GuestSession): GuestEventAccess[] => {
   try {
     const cached = JSON.parse(localStorage.getItem(GUEST_EVENTS_CACHE_KEY) || 'null') as {
       guestUid?: string;
+      authUid?: string;
       pinHash?: string;
       events?: GuestEventAccess[];
     } | null;
-    return cached?.guestUid === session.guestUid && cached.pinHash === session.pinHash
+    const sameIdentity = cached?.guestUid === session.guestUid
+      && (session.authUid
+        ? cached.authUid === session.authUid
+        : cached.pinHash === session.pinHash);
+    return sameIdentity
       ? cached.events || []
       : [];
   } catch {
@@ -741,6 +780,7 @@ const readGuestEventCache = (session: GuestSession): GuestEventAccess[] => {
 const writeGuestEventCache = (session: GuestSession, events: GuestEventAccess[]) => {
   localStorage.setItem(GUEST_EVENTS_CACHE_KEY, JSON.stringify({
     guestUid: session.guestUid,
+    authUid: session.authUid,
     pinHash: session.pinHash,
     events,
   }));
@@ -1073,6 +1113,17 @@ export default function Home() {
   const [toast, setToast] = useState('');
   const [editing, setEditing] = useState(false);
   const [hostUser, setHostUser] = useState<string | null>(null);
+  const [accountUser, setAccountUser] = useState<AccountUser | null>(null);
+  const [accountProfile, setAccountProfile] = useState<AccountProfile | null>(null);
+  const [accountAuthReady, setAccountAuthReady] = useState(!firebaseConfigured);
+  const [accountAuthBusy, setAccountAuthBusy] = useState(false);
+  const [accountAuthMode, setAccountAuthMode] = useState<AccountAuthMode>('signin');
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountPassword, setAccountPassword] = useState('');
+  const [accountFirstName, setAccountFirstName] = useState('');
+  const [accountLastName, setAccountLastName] = useState('');
+  const [accountPhone, setAccountPhone] = useState('');
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [, setReceipts] = useState<Receipt[]>([]);
   const [rememberedOrder, setRememberedOrder] = useState<Order | null>(null);
   const [rememberedOrders, setRememberedOrders] = useState<Order[]>([]);
@@ -1127,6 +1178,87 @@ export default function Home() {
     welcome: 'Choose what you’d like and send your order to the host.',
   });
 
+  useEffect(() => {
+    if (!firebaseConfigured) return;
+    let stopProfile = () => {};
+    let stopAuth = () => {};
+    void (async () => {
+      const [appModule, authModule, store] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/auth'),
+        import('firebase/firestore'),
+      ]);
+      const app = appModule.getApps().some((candidate) => candidate.name === '[DEFAULT]')
+        ? appModule.getApp()
+        : appModule.initializeApp({
+            apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+            authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+            projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+            storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+            appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+          });
+      const auth = authModule.getAuth(app);
+      await authModule.setPersistence(auth, authModule.browserLocalPersistence);
+      void authModule.getRedirectResult(auth).catch((error: { code?: string }) => {
+        setToast(error.code === 'auth/operation-not-allowed'
+          ? 'That sign-in provider still needs to be enabled in Firebase Authentication.'
+          : 'Sign-in could not be completed. Please try again.');
+      });
+      const db = store.getFirestore(app);
+      stopAuth = authModule.onAuthStateChanged(auth, (user) => {
+        stopProfile();
+        stopProfile = () => {};
+        if (!user) {
+          setAccountUser(null);
+          setAccountProfile(null);
+          setHostUser(null);
+          writeGuestSession(null);
+          setGuestSession(null);
+          setGuestEvents([]);
+          setAccountAuthReady(true);
+          return;
+        }
+        setAccountUser({
+          uid: user.uid,
+          email: user.email || '',
+          emailVerified: user.emailVerified,
+          providerIds: user.providerData.map((provider) => provider.providerId),
+        });
+        stopProfile = store.onSnapshot(store.doc(db, 'users', user.uid), (snapshot) => {
+          const data = snapshot.data();
+          const profile = data ? {
+            ...data,
+            uid: user.uid,
+            email: data.email || user.email || '',
+            mutedEventIds: Array.isArray(data.mutedEventIds) ? data.mutedEventIds : [],
+            membershipTier: data.membershipTier || 'free',
+            membershipStatus: data.membershipStatus || 'active',
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: data.updatedAt?.toMillis?.(),
+          } as AccountProfile : null;
+          setAccountProfile(profile);
+          setHostUser(profile ? user.uid : null);
+          if (!profile) {
+            const displayParts = (user.displayName || '').trim().split(/\s+/);
+            setAccountFirstName(displayParts[0] || '');
+            setAccountLastName(displayParts.slice(1).join(' '));
+            setAccountEmail(user.email || '');
+            setAccountAuthMode('profile');
+          }
+          setAccountAuthReady(true);
+        }, () => {
+          setAccountProfile(null);
+          setHostUser(null);
+          setAccountAuthReady(true);
+        });
+      });
+    })().catch(() => setAccountAuthReady(true));
+    return () => {
+      stopAuth();
+      stopProfile();
+    };
+  }, []);
+
   const loadGuestEvents = useCallback(async (session: GuestSession) => {
     setGuestEventsBusy(true);
     try {
@@ -1154,7 +1286,11 @@ export default function Home() {
             store.getDoc(store.doc(db, 'events', event.id, 'rsvps', session.guestUid)),
           ]);
           const profileData = profileDocument.data();
-          if (!profileData || profileData.pinHash !== session.pinHash) return null;
+          if (
+            !profileData
+            || (!session.authUid && profileData.pinHash !== session.pinHash)
+            || (profileData.accountUid && session.authUid && profileData.accountUid !== session.authUid)
+          ) return null;
           const rsvpData = rsvpDocument.data();
           return {
             event,
@@ -1180,7 +1316,11 @@ export default function Home() {
           const profile = JSON.parse(
             localStorage.getItem(`gather-demo-profile:${event.id}`) || 'null',
           ) as GuestProfile | null;
-          if (!profile || profile.guestUid !== session.guestUid || profile.pinHash !== session.pinHash)
+          if (
+            !profile
+            || profile.guestUid !== session.guestUid
+            || (!session.authUid && profile.pinHash !== session.pinHash)
+          )
             return [];
           const eventRsvps = JSON.parse(
             localStorage.getItem(`gather-demo-rsvps:${event.id}`) || '[]',
@@ -1257,9 +1397,20 @@ export default function Home() {
             transaction.get(phoneRef),
           ]);
           if (profileDocument.exists()) {
-            if (profileDocument.data().pinHash !== session.pinHash) throw new Error('invalid-pin');
-            if (guestNameKey(profileDocument.data().guestName) !== guestNameKey(session.guestName))
+            if (!session.authUid && profileDocument.data().pinHash !== session.pinHash)
+              throw new Error('invalid-pin');
+            if (
+              session.authUid
+              && profileDocument.data().accountUid
+              && profileDocument.data().accountUid !== session.authUid
+            ) throw new Error('account-mismatch');
+            if (!session.authUid && guestNameKey(profileDocument.data().guestName) !== guestNameKey(session.guestName))
               throw new Error('name-mismatch');
+            if (session.authUid && profileDocument.data().accountUid !== session.authUid)
+              transaction.update(profileRef, {
+                accountUid: session.authUid,
+                updatedAt: store.serverTimestamp(),
+              });
             return;
           }
           if (nameClaim.exists() && nameClaim.data().guestUid !== session.guestUid)
@@ -1278,9 +1429,10 @@ export default function Home() {
           });
           transaction.set(profileRef, {
             guestUid: session.guestUid,
+            ...(session.authUid ? { accountUid: session.authUid } : {}),
             guestName: session.guestName,
             guestPhone: session.guestPhone,
-            pinHash: session.pinHash,
+            ...(session.pinHash ? { pinHash: session.pinHash } : {}),
             createdAt: store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -1342,6 +1494,24 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (!accountUser || !accountProfile) return;
+    const session: GuestSession = {
+      authUid: accountUser.uid,
+      email: accountProfile.email,
+      guestUid: accountProfile.guestUid,
+      guestName: accountDisplayName(accountProfile),
+      guestPhone: accountProfile.phone,
+    };
+    writeGuestSession(session);
+    queueMicrotask(() => {
+      setGuestSession(session);
+      setGuestName(session.guestName);
+      setPhoneNumber(formatPhone(session.guestPhone));
+      void loadGuestEvents(session);
+    });
+  }, [accountProfile, accountUser, loadGuestEvents]);
+
+  useEffect(() => {
     const prime = () => primeChatAudio();
     window.addEventListener('pointerdown', prime, { once: true });
     window.addEventListener('keydown', prime, { once: true });
@@ -1374,7 +1544,9 @@ export default function Home() {
       window.location.replace(`${hostHomeRoute()}${query ? `?${query}` : ''}`);
       return;
     }
-    const savedSession = readGuestSession();
+    const storedSession = readGuestSession();
+    const savedSession = firebaseConfigured && !storedSession?.authUid ? null : storedSession;
+    if (firebaseConfigured && storedSession && !storedSession.authUid) writeGuestSession(null);
     if (savedSession) {
       const cachedEvents = readGuestEventCache(savedSession);
       queueMicrotask(() => {
@@ -1482,7 +1654,7 @@ export default function Home() {
   }, [guestEvents, guestSession, guestUid, menu.id, mode]);
 
   useEffect(() => {
-    if (mode !== 'guest' || guestSession || !guestProfile?.pinHash) return;
+    if (firebaseConfigured || mode !== 'guest' || accountUser || guestSession || !guestProfile?.pinHash) return;
     const session: GuestSession = {
       guestUid: guestProfile.guestUid,
       guestName: guestProfile.guestName,
@@ -1494,7 +1666,7 @@ export default function Home() {
       setGuestSession(session);
       void loadGuestEvents(session);
     });
-  }, [guestProfile, guestSession, loadGuestEvents, mode]);
+  }, [accountUser, guestProfile, guestSession, loadGuestEvents, mode]);
 
   useEffect(() => {
     const savedGuestUid = localStorage.getItem(guestIdentityKey(menu.id));
@@ -1528,6 +1700,19 @@ export default function Home() {
         .catch(() => undefined);
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (
+      !isStandalone
+      || !accountUser
+      || !accountProfile
+      || typeof Notification === 'undefined'
+      || Notification.permission === 'denied'
+      || localStorage.getItem(globalPushKey(accountUser.uid))
+      || localStorage.getItem(notificationPromptKey(accountUser.uid))
+    ) return;
+    queueMicrotask(() => setShowNotificationPrompt(true));
+  }, [accountProfile, accountUser, isStandalone]);
 
   useEffect(() => {
     const dialog = document.getElementById(
@@ -1649,10 +1834,6 @@ export default function Home() {
         await authModule.setPersistence(auth, authModule.browserLocalPersistence);
         await auth.authStateReady();
         hostAuthUser = auth.currentUser;
-        if (
-          hostAuthUser &&
-          (!HOST_EMAIL || hostAuthUser.email?.toLowerCase() === HOST_EMAIL)
-        ) setHostUser(hostAuthUser.email || hostAuthUser.uid);
       }
       const db = store.getFirestore(app);
       const linkedPublicPath = currentEventPublicPath();
@@ -1697,13 +1878,13 @@ export default function Home() {
       let unsubEvents = () => {};
       let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
-      if (
-        mode === 'host' &&
-        hostAuthUser &&
-        hostAuthUser.email?.toLowerCase() === HOST_EMAIL
-      ) {
+      if (mode === 'host' && hostAuthUser && hostUser) {
+        const eventCollection = store.collection(db, 'events');
+        const ownedEventSource = HOST_EMAIL && hostAuthUser.email?.toLowerCase() === HOST_EMAIL
+          ? eventCollection
+          : store.query(eventCollection, store.where('ownerUid', '==', hostAuthUser.uid));
         unsubEvents = store.onSnapshot(
-          store.collection(db, 'events'),
+          ownedEventSource,
           (snap) => {
             const ownedEvents = snap.docs.map(
               (d) => ({ id: d.id, ...d.data() }) as EventMenu,
@@ -1920,13 +2101,13 @@ export default function Home() {
 
   const count = Object.values(cart).reduce((a, b) => a + b, 0);
   const hasMenu = menuHasPublishedItems(menu);
-  const effectiveGuestProfile = guestProfile || (myRsvp ? {
+  const effectiveGuestProfile = useMemo(() => guestProfile || (myRsvp ? {
     guestUid: myRsvp.guestUid,
     guestName: myRsvp.guestName,
     guestPhone: myRsvp.guestPhone,
     createdAt: myRsvp.createdAt,
     updatedAt: myRsvp.updatedAt,
-  } : null);
+  } : null), [guestProfile, myRsvp]);
   const guestHasEventAccess = guestIsApproved(menu, myRsvp);
   const rsvpButtonLabel = myRsvp
     ? menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) === 'pending'
@@ -1935,13 +2116,14 @@ export default function Home() {
         ? 'RSVP: Not approved'
         : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
-  const chatActor: ChatActor | null = mode === 'host'
+  const chatActor: ChatActor | null = useMemo(() => mode === 'host'
     ? (hostUser || !firebaseConfigured)
       ? { uid: menu.ownerUid || 'host', name: 'Host', role: 'host' }
       : null
     : myRsvp?.status === 'yes' && guestHasEventAccess && effectiveGuestProfile
       ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
-      : null;
+      : null,
+  [effectiveGuestProfile, guestHasEventAccess, hostUser, menu.ownerUid, mode, myRsvp?.status]);
   const chatActorUid = chatActor?.uid;
   useEffect(() => {
     if (!chatActorUid) return;
@@ -1998,6 +2180,39 @@ export default function Home() {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
   };
+  const notificationTargets = useMemo(() => {
+    if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
+    const targets = new Map<string, { event: EventMenu; actor: ChatActor }>();
+    guestEvents.forEach((access) => {
+      if (
+        access.rsvp?.status === 'yes'
+        && guestIsApproved(access.event, access.rsvp)
+      ) targets.set(access.event.id, {
+        event: access.event,
+        actor: {
+          uid: access.profile.guestUid,
+          name: access.profile.guestName,
+          role: 'guest',
+        },
+      });
+    });
+    events.forEach((event) => {
+      if (event.ownerUid === accountUser.uid)
+        targets.set(event.id, {
+          event,
+          actor: { uid: accountUser.uid, name: 'Host', role: 'host' },
+        });
+    });
+    if (
+      chatActor
+      && menu.id !== EMPTY_EVENT_ID
+      && !targets.has(menu.id)
+      && (chatActor.role === 'guest' || chatActor.uid === accountUser.uid)
+    )
+      targets.set(menu.id, { event: menu, actor: chatActor });
+    return [...targets.values()];
+  }, [accountProfile, accountUser, chatActor, events, guestEvents, menu]);
+  const currentEventMuted = Boolean(accountProfile?.mutedEventIds.includes(menu.id));
   const pushActorUid = chatActorUid;
   useEffect(() => {
     let nextState: PushNotificationState = 'disabled';
@@ -2014,15 +2229,99 @@ export default function Home() {
     } else if (Notification.permission === 'denied') {
       nextState = 'blocked';
     } else {
-      const enabled = Notification.permission === 'granted'
+      const enabled = !currentEventMuted
+        && Notification.permission === 'granted'
+        && Boolean(accountUser && localStorage.getItem(globalPushKey(accountUser.uid)))
         && Boolean(localStorage.getItem(pushSubscriptionKey(menu.id, pushActorUid)));
       nextState = enabled ? 'enabled' : 'disabled';
     }
     queueMicrotask(() => setPushNotificationState(nextState));
-  }, [menu.id, pushActorUid]);
+  }, [accountUser, currentEventMuted, menu.id, pushActorUid]);
+
+  const saveMutedEvents = useCallback(async (mutedEventIds: string[]) => {
+    if (!accountUser) return;
+    const [{ getApp }, store] = await Promise.all([
+      import('firebase/app'), import('firebase/firestore'),
+    ]);
+    await store.updateDoc(store.doc(store.getFirestore(getApp()), 'users', accountUser.uid), {
+      mutedEventIds,
+      updatedAt: store.serverTimestamp(),
+    });
+  }, [accountUser]);
+
+  const ensureBrowserPushSubscription = useCallback(async () => {
+    const workerUrl = usesCleanEventUrls()
+      ? new URL('/sw.js?v=33', window.location.origin)
+      : new URL('sw.js?v=33', document.baseURI);
+    const registration = await navigator.serviceWorker.register(workerUrl.href, {
+      scope: './',
+      updateViaCache: 'none',
+    });
+    await navigator.serviceWorker.ready;
+    const existing = await registration.pushManager.getSubscription();
+    return existing || registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
+    });
+  }, []);
+
+  const registerPushTarget = useCallback(async (
+    target: { event: EventMenu; actor: ChatActor },
+    serialized: PushSubscriptionJSON,
+    subscriptionId: string,
+  ) => {
+    if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
+      throw new Error('The browser returned an incomplete push subscription.');
+    const [{ getApp }, store] = await Promise.all([
+      import('firebase/app'), import('firebase/firestore'),
+    ]);
+    await store.setDoc(
+      store.doc(store.getFirestore(getApp()), 'events', target.event.id, 'pushSubscriptions', subscriptionId),
+      {
+        endpoint: serialized.endpoint,
+        expirationTime: serialized.expirationTime ?? null,
+        keys: { p256dh: serialized.keys.p256dh, auth: serialized.keys.auth },
+        actorUid: target.actor.uid,
+        actorRole: target.actor.role,
+        actorName: target.actor.name,
+        createdAt: store.serverTimestamp(),
+        updatedAt: store.serverTimestamp(),
+      },
+    );
+    await callPushApi('subscribe', 'POST', {
+      eventId: target.event.id,
+      subscriptionId,
+      subscription: serialized,
+      actorUid: target.actor.uid,
+      actorRole: target.actor.role,
+      actorName: target.actor.name,
+    });
+    localStorage.setItem(pushSubscriptionKey(target.event.id, target.actor.uid), subscriptionId);
+  }, []);
+
+  const syncGlobalPushTargets = useCallback(async () => {
+    if (
+      !accountUser
+      || Notification.permission !== 'granted'
+      || !localStorage.getItem(globalPushKey(accountUser.uid))
+    ) return;
+    const subscription = await ensureBrowserPushSubscription();
+    const serialized = subscription.toJSON();
+    if (!serialized.endpoint) return;
+    const subscriptionId = await sha256Text(serialized.endpoint);
+    const muted = new Set(accountProfile?.mutedEventIds || []);
+    await Promise.allSettled(notificationTargets
+      .filter((target) => !muted.has(target.event.id))
+      .map((target) => registerPushTarget(target, serialized, subscriptionId)));
+  }, [accountProfile?.mutedEventIds, accountUser, ensureBrowserPushSubscription, notificationTargets, registerPushTarget]);
+
+  useEffect(() => {
+    if (!accountUser || !accountProfile || !notificationTargets.length) return;
+    void syncGlobalPushTargets().catch(() => undefined);
+  }, [accountProfile, accountUser, notificationTargets, syncGlobalPushTargets]);
 
   const enableChatNotifications = async () => {
-    if (!chatActor || pushNotificationBusy) return;
+    if (!accountUser || pushNotificationBusy) return;
     if (!firebaseConfigured || !VAPID_PUBLIC_KEY || !PUSH_NOTIFICATIONS_ENABLED) {
       notify('Push notifications are not configured for this release yet.');
       return;
@@ -2051,61 +2350,24 @@ export default function Home() {
           : 'Notification permission was not enabled.');
         return;
       }
-      const workerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=33', window.location.origin)
-        : new URL('sw.js?v=33', document.baseURI);
-      const registration = await navigator.serviceWorker.register(workerUrl.href, {
-        scope: './',
-        updateViaCache: 'none',
-      });
-      await navigator.serviceWorker.ready;
-      const priorSubscription = await registration.pushManager.getSubscription();
-      if (priorSubscription) await priorSubscription.unsubscribe();
-      const subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: vapidKeyBytes(VAPID_PUBLIC_KEY),
-      });
+      const subscription = await ensureBrowserPushSubscription();
       const serialized = subscription.toJSON();
       if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
         throw new Error('The browser returned an incomplete push subscription.');
       const subscriptionId = await sha256Text(serialized.endpoint);
-      const [{ getApp }, store] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/firestore'),
-      ]);
-      await store.setDoc(
-        store.doc(
-          store.getFirestore(getApp()),
-          'events',
-          menu.id,
-          'pushSubscriptions',
-          subscriptionId,
-        ),
-        {
-          endpoint: serialized.endpoint,
-          expirationTime: serialized.expirationTime ?? null,
-          keys: { p256dh: serialized.keys.p256dh, auth: serialized.keys.auth },
-          actorUid: chatActor.uid,
-          actorRole: chatActor.role,
-          actorName: chatActor.name,
-          createdAt: store.serverTimestamp(),
-          updatedAt: store.serverTimestamp(),
-        },
-      );
-      await callPushApi('subscribe', 'POST', {
-        eventId: menu.id,
-        subscriptionId,
-        subscription: serialized,
-        actorUid: chatActor.uid,
-        actorRole: chatActor.role,
-        actorName: chatActor.name,
-      });
-      localStorage.setItem(
-        pushSubscriptionKey(menu.id, chatActor.uid),
-        subscriptionId,
-      );
+      localStorage.setItem(globalPushKey(accountUser.uid), subscriptionId);
+      if (currentEventMuted)
+        await saveMutedEvents((accountProfile?.mutedEventIds || []).filter((eventId) => eventId !== menu.id));
+      await Promise.allSettled(notificationTargets
+        .filter((target) => target.event.id !== menu.id || !currentEventMuted || Boolean(chatActor))
+        .filter((target) => !(accountProfile?.mutedEventIds || []).includes(target.event.id) || target.event.id === menu.id)
+        .map((target) => registerPushTarget(target, serialized, subscriptionId)));
       setPushNotificationState('enabled');
-      notify('Chat notifications are on for this event.');
+      setShowNotificationPrompt(false);
+      localStorage.setItem(notificationPromptKey(accountUser.uid), 'enabled');
+      notify(currentEventMuted
+        ? 'Notifications are back on for this event.'
+        : 'Notifications are on for all your events.');
     } catch (error) {
       setPushNotificationState('disabled');
       notify(error instanceof Error ? error.message : 'Could not enable notifications.');
@@ -2115,7 +2377,7 @@ export default function Home() {
   };
 
   const disableChatNotifications = async () => {
-    if (!chatActor || pushNotificationBusy) return;
+    if (!chatActor || !accountProfile || pushNotificationBusy) return;
     const storageKey = pushSubscriptionKey(menu.id, chatActor.uid);
     const subscriptionId = localStorage.getItem(storageKey);
     setPushNotificationBusy(true);
@@ -2134,14 +2396,10 @@ export default function Home() {
         ));
         await callPushApi('subscribe', 'DELETE', { eventId: menu.id, subscriptionId });
       }
-      const registration = 'serviceWorker' in navigator
-        ? await navigator.serviceWorker.ready
-        : null;
-      const browserSubscription = await registration?.pushManager.getSubscription();
-      await browserSubscription?.unsubscribe();
       localStorage.removeItem(storageKey);
+      await saveMutedEvents([...new Set([...accountProfile.mutedEventIds, menu.id])]);
       setPushNotificationState('disabled');
-      notify('Chat notifications are off for this event.');
+      notify('Notifications are muted for this event. Your other events stay on.');
     } catch {
       notify('Could not turn off notifications. Try again.');
     } finally {
@@ -2165,6 +2423,219 @@ export default function Home() {
       return;
     }
     setShowInstallGuide(true);
+  };
+
+  const normalizedAccountFields = () => {
+    const firstName = accountFirstName.trim().replace(/\s+/g, ' ');
+    const lastName = accountLastName.trim().replace(/\s+/g, ' ');
+    const enteredPhone = normalizeOptionalPhone(accountPhone);
+    if (firstName.length < 1 || firstName.length > 50) throw new Error('Enter your first name.');
+    if (lastName.length < 1 || lastName.length > 60) throw new Error('Enter your last name.');
+    if (!enteredPhone) throw new Error('Enter a 10-digit phone number, like 555-555-5555.');
+    return { firstName, lastName, phone: `+1${phoneDigits(enteredPhone)}` };
+  };
+
+  const saveAccountProfile = async (accountOverride?: AccountUser) => {
+    const currentAccount = accountOverride || accountUser;
+    if (!currentAccount) throw new Error('Sign in before completing your profile.');
+    const fields = normalizedAccountFields();
+    const guestUid = await guestNameIndexId(fields.phone);
+    const [{ getApp }, authModule, store] = await Promise.all([
+      import('firebase/app'),
+      import('firebase/auth'),
+      import('firebase/firestore'),
+    ]);
+    const auth = authModule.getAuth(getApp());
+    if (!auth.currentUser || auth.currentUser.uid !== currentAccount.uid)
+      throw new Error('Your sign-in session expired. Sign in again.');
+    const db = store.getFirestore(getApp());
+    const profileRef = store.doc(db, 'users', currentAccount.uid);
+    const identityRef = store.doc(db, 'guest-identities', guestUid);
+    await store.runTransaction(db, async (transaction) => {
+      const [existing, identity] = await Promise.all([
+        transaction.get(profileRef),
+        transaction.get(identityRef),
+      ]);
+      if (identity.exists() && identity.data().accountUid !== currentAccount.uid)
+        throw new Error('That phone number is already connected to another Nights account.');
+      if (!identity.exists()) transaction.set(identityRef, {
+        accountUid: currentAccount.uid,
+        phone: fields.phone,
+        createdAt: store.serverTimestamp(),
+      });
+      transaction.set(profileRef, {
+        uid: currentAccount.uid,
+        email: (auth.currentUser?.email || accountEmail).trim().toLowerCase(),
+        ...fields,
+        guestUid,
+        membershipTier: 'free' as const,
+        membershipStatus: 'active' as const,
+        mutedEventIds: existing.exists() && Array.isArray(existing.data().mutedEventIds)
+          ? existing.data().mutedEventIds
+          : [],
+        createdAt: existing.exists() ? existing.data().createdAt : store.serverTimestamp(),
+        updatedAt: store.serverTimestamp(),
+      });
+    });
+    await authModule.updateProfile(auth.currentUser, {
+      displayName: `${fields.firstName} ${fields.lastName}`,
+    });
+    setAccountAuthMode('signin');
+    notify('Your Nights account is ready.');
+  };
+
+  const signUpWithEmail = async () => {
+    const email = accountEmail.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      notify('Enter a valid email address.');
+      return;
+    }
+    if (accountPassword.length < 8) {
+      notify('Use a password with at least 8 characters.');
+      return;
+    }
+    try {
+      normalizedAccountFields();
+      setAccountAuthBusy(true);
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      const auth = authModule.getAuth(getApp());
+      const credential = await authModule.createUserWithEmailAndPassword(auth, email, accountPassword);
+      setAccountUser({
+        uid: credential.user.uid,
+        email,
+        emailVerified: credential.user.emailVerified,
+        providerIds: credential.user.providerData.map((provider) => provider.providerId),
+      });
+      await authModule.updateProfile(credential.user, {
+        displayName: `${accountFirstName.trim()} ${accountLastName.trim()}`,
+      });
+      await authModule.sendEmailVerification(credential.user).catch(() => undefined);
+      await saveAccountProfile({
+        uid: credential.user.uid,
+        email,
+        emailVerified: credential.user.emailVerified,
+        providerIds: credential.user.providerData.map((provider) => provider.providerId),
+      });
+      setAccountPassword('');
+      notify('Account created. Check your email for the verification link.');
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(code === 'auth/email-already-in-use'
+        ? 'That email already has an account. Sign in instead.'
+        : code === 'auth/operation-not-allowed'
+          ? 'Email sign-up still needs to be enabled in Firebase Authentication.'
+          : error instanceof Error ? error.message : 'Could not create your account.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const signInWithEmail = async () => {
+    const email = accountEmail.trim().toLowerCase();
+    if (!email || !accountPassword) {
+      notify('Enter your email and password.');
+      return;
+    }
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      await authModule.signInWithEmailAndPassword(
+        authModule.getAuth(getApp()), email, accountPassword,
+      );
+      setAccountPassword('');
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(code === 'auth/operation-not-allowed'
+        ? 'Email sign-in still needs to be enabled in Firebase Authentication.'
+        : 'That email and password did not match.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const signInWithProvider = async (providerName: 'google' | 'apple') => {
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      const provider = providerName === 'google'
+        ? new authModule.GoogleAuthProvider()
+        : new authModule.OAuthProvider('apple.com');
+      provider.setCustomParameters(providerName === 'google'
+        ? { prompt: 'select_account' }
+        : { locale: 'en' });
+      if (providerName === 'apple' && provider instanceof authModule.OAuthProvider)
+        provider.addScope('email');
+      const auth = authModule.getAuth(getApp());
+      const redirectSignIn = isStandalone || /iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (redirectSignIn) {
+        await authModule.signInWithRedirect(auth, provider);
+        return;
+      }
+      const result = await authModule.signInWithPopup(auth, provider);
+      if (!result.user.email) notify('Add an email to your Apple account before continuing.');
+    } catch (error) {
+      const code = (error as { code?: string }).code;
+      notify(code === 'auth/popup-closed-by-user'
+        ? 'Sign-in was closed before it finished.'
+        : code === 'auth/operation-not-allowed'
+          ? `${providerName === 'apple' ? 'Apple' : 'Google'} sign-in still needs to be enabled in Firebase Authentication.`
+          : code === 'auth/account-exists-with-different-credential'
+            ? 'An account already exists for that email. Sign in with its original method first.'
+            : `${providerName === 'apple' ? 'Apple' : 'Google'} sign-in could not be completed.`);
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const resetAccountPassword = async () => {
+    const email = accountEmail.trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      notify('Enter your email first, then choose Forgot password.');
+      return;
+    }
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      await authModule.sendPasswordResetEmail(authModule.getAuth(getApp()), email);
+      notify('Password reset email sent.');
+    } catch {
+      notify('Could not send the reset email. Check the address and try again.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const completeProviderProfile = async () => {
+    setAccountAuthBusy(true);
+    try {
+      await saveAccountProfile();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not save your profile.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const signOutAccount = async () => {
+    if (firebaseConfigured) {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      await authModule.signOut(authModule.getAuth(getApp()));
+    }
+    writeGuestSession(null);
+    setGuestSession(null);
+    setAccountProfile(null);
+    setAccountUser(null);
+    setHostUser(null);
   };
   const selectGuestEvent = (access: GuestEventAccess) => {
     if (!guestSession) return;
@@ -2193,6 +2664,7 @@ export default function Home() {
     await loadGuestEvents(guestSession);
   };
   const clearGuestAccess = () => {
+    void signOutAccount();
     writeGuestSession(null);
     localStorage.removeItem(GUEST_EVENTS_CACHE_KEY);
     localStorage.removeItem(TRUSTED_GUEST_ROUTE_KEY);
@@ -2215,51 +2687,6 @@ export default function Home() {
     pendingEnrollmentRef.current = '';
     if (!isGuestPortalUrl(new URL(window.location.href))) window.location.assign(guestHomeRoute());
   };
-  const unlockGuestEvents = async () => {
-    const name = guestName.trim().replace(/\s+/g, ' ');
-    const enteredPhone = normalizeOptionalPhone(phoneNumber);
-    if (name.length < 2 || name.length > 80) {
-      notify('Enter the Display Name used for your guest profile');
-      return;
-    }
-    if (!enteredPhone) {
-      notify('Enter a 10-digit phone number, like 555-555-5555');
-      return;
-    }
-    if (!/^\d{4}$/.test(guestPin)) {
-      notify('Enter your 4-digit PIN');
-      return;
-    }
-    setProfileBusy(true);
-    try {
-      const guestPhone = `+1${phoneDigits(enteredPhone)}`;
-      const guestUid = await guestNameIndexId(guestPhone);
-      const pinHash = await guestPinHash(guestUid, guestPin);
-      const session = { guestUid, guestName: name, guestPhone, pinHash };
-      let matches = await loadGuestEvents(session);
-      if (matches.length && !matches.some((entry) => guestNameKey(entry.profile.guestName) === guestNameKey(name))) {
-        notify('That Display Name does not match the guest profile for this phone number.');
-        return;
-      }
-      if (pendingGuestEvent && !matches.some((access) => guestEventMatchesPending(access, pendingGuestEvent))) {
-        const invitedEvent = await enrollPendingGuestEvent(session, pendingGuestEvent, matches);
-        if (invitedEvent) matches = [...matches, invitedEvent];
-      }
-      if (!matches.length) {
-        notify('No invitations or RSVPs match that phone number and PIN.');
-        return;
-      }
-      writeGuestSession(session);
-      setGuestSession(session);
-      setGuestPin('');
-      pendingEnrollmentRef.current = `${session.guestUid}:${pendingGuestEvent?.route || 'events'}`;
-      setGuestEventPickerOpen(false);
-      notify(`${matches.length} event${matches.length === 1 ? '' : 's'} found`);
-    } finally {
-      setProfileBusy(false);
-    }
-  };
-
   function selectHostEvent(event: EventMenu) {
     setMenu(event);
     setEditing(false);
@@ -2290,15 +2717,12 @@ export default function Home() {
       return;
     }
     const baseSlug = normalizeEventPathSegment(newEvent.title, 'event').slice(0, 36);
-    let eventId = baseSlug;
-    let eventSuffix = 2;
-    while (events.some((existingEvent) => existingEvent.id === eventId)) {
-      eventId = `${baseSlug}-${eventSuffix}`;
-      eventSuffix += 1;
-    }
+    const eventId = `${baseSlug}-${crypto.randomUUID().slice(0, 6)}`;
+    const publicPathClaimId = await guestNameIndexId(publicPath);
     const event = withoutUndefined<EventMenu>({
       id: eventId,
       publicPath,
+      publicPathClaimId,
       title: newEvent.title.trim(),
       date: formatDateTime(newEvent.date),
       startsAt: newEvent.date,
@@ -2341,10 +2765,26 @@ export default function Home() {
           return;
         }
         event.ownerUid = user.uid;
-        await store.setDoc(
-          store.doc(store.getFirestore(getApp()), 'events', event.id),
-          event,
-        );
+        const db = store.getFirestore(getApp());
+        const duplicate = await store.getDocs(store.query(
+          store.collection(db, 'events'),
+          store.where('publicPath', '==', publicPath),
+          store.limit(1),
+        ));
+        if (!duplicate.empty) throw new Error('path-taken');
+        const eventRef = store.doc(db, 'events', event.id);
+        const pathRef = store.doc(db, 'public-paths', publicPathClaimId);
+        await store.runTransaction(db, async (transaction) => {
+          const pathClaim = await transaction.get(pathRef);
+          if (pathClaim.exists()) throw new Error('path-taken');
+          transaction.set(pathRef, {
+            eventId: event.id,
+            ownerUid: user.uid,
+            publicPath,
+            createdAt: store.serverTimestamp(),
+          });
+          transaction.set(eventRef, event);
+        });
       } else {
         const nextEvents = [...events, event];
         setEvents(nextEvents);
@@ -2354,7 +2794,9 @@ export default function Home() {
     } catch (error) {
       const code = (error as { code?: string }).code;
       notify(
-        code === 'permission-denied'
+        (error as Error).message === 'path-taken'
+          ? 'That event web address is already in use. Choose another link.'
+          : code === 'permission-denied'
           ? 'Firebase rules have not yet allowed this host account to create events.'
           : 'The event could not be created. Please try again.',
       );
@@ -2499,8 +2941,11 @@ export default function Home() {
   async function saveGuestProfile() {
     const establishingAccess = !effectiveGuestProfile || changingGuestPhone;
     const name = guestName.trim().replace(/\s+/g, ' ');
-    const enteredPhone = normalizeOptionalPhone(phoneNumber);
-    const normalizedPhone = enteredPhone ? `+1${phoneDigits(enteredPhone)}` : '';
+    const enteredPhone = accountProfile
+      ? formatPhone(accountProfile.phone)
+      : normalizeOptionalPhone(phoneNumber);
+    const normalizedPhone = accountProfile?.phone
+      || (enteredPhone ? `+1${phoneDigits(enteredPhone)}` : '');
     if (name.length < 2 || name.length > 80) {
       notify('Enter a name between 2 and 80 characters');
       return;
@@ -2509,25 +2954,27 @@ export default function Home() {
       notify('Enter a 10-digit phone number, like 555-555-5555');
       return;
     }
-    if (!/^\d{4}$/.test(guestPin)) {
+    if (!accountProfile && !/^\d{4}$/.test(guestPin)) {
       notify('Enter a 4-digit PIN');
       return;
     }
     setProfileBusy(true);
     try {
-      const uid = await guestNameIndexId(normalizedPhone);
-      const pinHash = await guestPinHash(uid, guestPin);
+      const uid = accountProfile?.guestUid || await guestNameIndexId(normalizedPhone);
+      const pinHash = accountProfile ? undefined : await guestPinHash(uid, guestPin);
       const session: GuestSession = {
+        ...(accountUser ? { authUid: accountUser.uid, email: accountUser.email } : {}),
         guestUid: uid,
         guestName: name,
         guestPhone: normalizedPhone,
-        pinHash,
+        ...(pinHash ? { pinHash } : {}),
       };
       const savedProfile: GuestProfile = {
         guestUid: uid,
+        ...(accountUser ? { accountUid: accountUser.uid } : {}),
         guestName: name,
         guestPhone: normalizedPhone,
-        pinHash,
+        ...(pinHash ? { pinHash } : {}),
         createdAt: changingGuestPhone ? Date.now() : guestProfile?.createdAt || Date.now(),
         updatedAt: Date.now(),
       };
@@ -2543,11 +2990,12 @@ export default function Home() {
         const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(normalizedPhone));
         await store.runTransaction(db, async (transaction) => {
           const prior = await transaction.get(profileRef);
+          const priorProfile = prior.data();
           const priorRsvp = await transaction.get(rsvpRef);
           const nameClaim = await transaction.get(nameRef);
           const phoneClaim = await transaction.get(phoneRef);
-          const previous = prior.exists() ? prior.data() : priorRsvp.data();
-          if (prior.exists() && prior.data().pinHash && prior.data().pinHash !== pinHash)
+          const previous = prior.exists() ? priorProfile : priorRsvp.data();
+          if (!accountUser && priorProfile?.pinHash && priorProfile.pinHash !== pinHash)
             throw new Error('invalid-pin');
           const oldNameRef = previous && guestNameKey(previous.guestName) !== guestNameKey(name)
             ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(previous.guestName)) : null;
@@ -2566,8 +3014,14 @@ export default function Home() {
           if (oldNameRef && oldClaim?.data()?.guestUid === uid) transaction.delete(oldNameRef);
           if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === uid) transaction.delete(oldPhoneRef);
           transaction.set(profileRef, {
-            guestUid: uid, guestName: name, guestPhone: normalizedPhone, pinHash,
-            createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
+            guestUid: uid,
+            ...(accountUser ? { accountUid: accountUser.uid } : {}),
+            guestName: name,
+            guestPhone: normalizedPhone,
+            ...(priorProfile?.pinHash
+              ? { pinHash: priorProfile.pinHash }
+              : pinHash ? { pinHash } : {}),
+            createdAt: priorProfile?.createdAt || store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
           if (priorRsvp.exists()) transaction.update(rsvpRef, {
@@ -2583,8 +3037,8 @@ export default function Home() {
         const others = rsvps.filter((entry) => entry.guestUid !== uid);
         if (others.some((entry) => guestNameKey(entry.guestName) === guestNameKey(name))) throw new Error('name-taken');
         if (others.some((entry) => entry.guestPhone === normalizedPhone)) throw new Error('phone-taken');
-        if (guestProfile?.pinHash && guestProfile.pinHash !== pinHash) throw new Error('invalid-pin');
-        const saved: GuestProfile = { guestUid: uid, guestName: name, guestPhone: normalizedPhone, pinHash, createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
+        if (!accountUser && guestProfile?.pinHash && guestProfile.pinHash !== pinHash) throw new Error('invalid-pin');
+        const saved: GuestProfile = { guestUid: uid, ...(accountUser ? { accountUid: accountUser.uid } : {}), guestName: name, guestPhone: normalizedPhone, ...(pinHash ? { pinHash } : {}), createdAt: guestProfile?.createdAt || Date.now(), updatedAt: Date.now() };
         localStorage.setItem(guestIdentityKey(menu.id), uid);
         setGuestUid(uid);
         setGuestProfile(saved);
@@ -2658,8 +3112,11 @@ export default function Home() {
       notify('Cancel new orders and wait until accepted food is served before changing your RSVP');
       return;
     }
-    const nextApprovalStatus = myRsvp?.approvalStatus
-      || (menu.requireGuestApproval ? 'pending' : 'approved');
+    const nextApprovalStatus: NonNullable<Rsvp['approvalStatus']> = !menu.requireGuestApproval || rsvpChoice !== 'yes'
+      ? 'approved'
+      : myRsvp?.status === 'yes'
+        ? (myRsvp.approvalStatus || 'pending')
+        : 'pending';
     setRsvpBusy(true);
     try {
       if (firebaseConfigured) {
@@ -2682,9 +3139,11 @@ export default function Home() {
           transaction.set(rsvpRef, {
             guestUid: uid, guestName: profile.guestName, guestPhone: profile.guestPhone,
             status: rsvpChoice, companions, activeOrderCount,
-            approvalStatus: prior.exists()
-              ? (prior.data().approvalStatus || 'approved')
-              : (menu.requireGuestApproval ? 'pending' : 'approved'),
+            approvalStatus: !menu.requireGuestApproval || rsvpChoice !== 'yes'
+              ? 'approved'
+              : prior.exists() && prior.data().status === 'yes'
+                ? (prior.data().approvalStatus || 'pending')
+                : 'pending',
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
@@ -3039,46 +3498,14 @@ export default function Home() {
     setConfirmingCancel(false);
     notify('Your order was cancelled');
   }
-  async function signInHost() {
-    try {
-      const [{ getApp }, authModule] = await Promise.all([
-        import('firebase/app'),
-        import('firebase/auth'),
-      ]);
-      const provider = new authModule.GoogleAuthProvider();
-      // Do not silently reuse the Firebase-console account in a shared browser.
-      provider.setCustomParameters({ prompt: 'select_account' });
-      const result = await authModule.signInWithPopup(
-        authModule.getAuth(getApp()),
-        provider,
-      );
-      if (
-        HOST_EMAIL &&
-        result.user.email?.toLowerCase() !== HOST_EMAIL
-      ) {
-        await authModule.signOut(authModule.getAuth(getApp()));
-        notify(`Use the approved host account: ${HOST_EMAIL}`);
-        return;
-      }
-      setHostUser(result.user.email || result.user.uid);
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      notify(
-        code === 'auth/unauthorized-domain'
-          ? 'Firebase must authorize afouman.github.io before Google sign-in can work.'
-          : code === 'auth/popup-closed-by-user'
-            ? 'Google sign-in was closed before it completed.'
-            : 'Google sign-in could not be completed. Please try again.',
-      );
-    }
-  }
   async function saveMenu() {
     if (menu.items.some(unfinishedMenuItem)) {
       notify('Name or delete the unfinished menu item before saving');
       return;
     }
-    const cleanPublicPath = normalizedPublicEventPath(menu.publicPath);
-    if (menu.publicPath && !cleanPublicPath) {
+    const cleanPublicPath = normalizedPublicEventPath(menu.publicPath)
+      || automaticPublicEventPath({ ...menu, publicPath: undefined });
+    if (!cleanPublicPath) {
       notify('The guest link needs two parts, such as movie-night/oct4');
       return;
     }
@@ -3126,18 +3553,61 @@ export default function Home() {
         notify('Sign in with the approved host account before saving');
         return;
       }
-      await store.setDoc(
-        store.doc(store.getFirestore(getApp()), 'events', cleanedMenu.id),
-        withoutUndefined({ ...cleanedMenu, ownerUid: user.uid }),
-        { merge: true },
-      );
+      const db = store.getFirestore(getApp());
+      const eventRef = store.doc(db, 'events', cleanedMenu.id);
+      const savedEvent = await store.getDoc(eventRef);
+      if (!savedEvent.exists()) throw new Error('event-missing');
+      if (cleanPublicPath) {
+        const duplicate = await store.getDocs(store.query(
+          store.collection(db, 'events'),
+          store.where('publicPath', '==', cleanPublicPath),
+          store.limit(2),
+        ));
+        if (duplicate.docs.some((document) => document.id !== cleanedMenu.id))
+          throw new Error('path-taken');
+      }
+      const savedData = savedEvent.data() as EventMenu;
+      const ownerUid = savedData.ownerUid || cleanedMenu.ownerUid || user.uid;
+      const previousPublicPath = normalizedPublicEventPath(savedData.publicPath);
+      const previousClaimId = savedData.publicPathClaimId
+        || (previousPublicPath ? await guestNameIndexId(previousPublicPath) : '');
+      const nextClaimId = cleanPublicPath ? await guestNameIndexId(cleanPublicPath) : '';
+      const previousClaimRef = previousClaimId
+        ? store.doc(db, 'public-paths', previousClaimId)
+        : null;
+      const nextClaimRef = nextClaimId
+        ? store.doc(db, 'public-paths', nextClaimId)
+        : null;
+      await store.runTransaction(db, async (transaction) => {
+        const previousClaim = previousClaimRef ? await transaction.get(previousClaimRef) : null;
+        const nextClaim = nextClaimRef && nextClaimId !== previousClaimId
+          ? await transaction.get(nextClaimRef)
+          : previousClaim;
+        if (nextClaim?.exists() && nextClaim.data().eventId !== cleanedMenu.id)
+          throw new Error('path-taken');
+        if (previousClaimRef && previousClaim?.exists() && previousClaim.data().eventId === cleanedMenu.id && previousClaimId !== nextClaimId)
+          transaction.delete(previousClaimRef);
+        if (nextClaimRef && !nextClaim?.exists()) transaction.set(nextClaimRef, {
+          eventId: cleanedMenu.id,
+          ownerUid,
+          publicPath: cleanPublicPath,
+          createdAt: store.serverTimestamp(),
+        });
+        transaction.set(eventRef, withoutUndefined({
+          ...cleanedMenu,
+          ownerUid,
+          publicPathClaimId: nextClaimId || undefined,
+        }), { merge: true });
+      });
       await persistScheduledOrders(orders);
       setEditing(false);
       notify('Menu saved');
     } catch (error) {
       const code = (error as { code?: string }).code;
       notify(
-        code === 'permission-denied'
+        (error as Error).message === 'path-taken'
+          ? 'That guest link belongs to another event. Choose a different web address.'
+          : code === 'permission-denied'
           ? 'This host account does not have permission to save the event.'
           : code === 'resource-exhausted'
             ? 'The event is too large to save. Remove an image and try again.'
@@ -3399,7 +3869,13 @@ export default function Home() {
           .forEach((document) => batch.delete(document.ref));
         await batch.commit();
       }
-      await store.deleteDoc(store.doc(db, 'events', event.id));
+      const deleteBatch = store.writeBatch(db);
+      const publicPath = normalizedPublicEventPath(event.publicPath);
+      const claimId = event.publicPathClaimId
+        || (publicPath ? await guestNameIndexId(publicPath) : '');
+      if (claimId) deleteBatch.delete(store.doc(db, 'public-paths', claimId));
+      deleteBatch.delete(store.doc(db, 'events', event.id));
+      await deleteBatch.commit();
     } else {
       localStorage.removeItem(demoOrdersKey(event.id));
       const nextEvents = events.filter((item) => item.id !== event.id);
@@ -3483,6 +3959,11 @@ export default function Home() {
                 <Smartphone size={14} /> Nights Host
               </span>
             )}
+            {mode === 'host' && accountProfile && (
+              <button type="button" className="account-header-button" onClick={() => void signOutAccount()} title={`Signed in as ${accountProfile.email}`}>
+                <UsersRound size={15} /><span>Sign out</span>
+              </button>
+            )}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
               onClick={() => void (pushNotificationState === 'enabled'
@@ -3490,11 +3971,11 @@ export default function Home() {
                 : enableChatNotifications())}
               disabled={!chatActor || pushNotificationBusy || pushNotificationState === 'unsupported'}
               className={`chat-header-button ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
-              title={pushNotificationState === 'enabled' ? 'Turn off chat notifications' : 'Turn on chat notifications'}
-              aria-label={pushNotificationState === 'enabled' ? 'Turn off chat notifications' : 'Turn on chat notifications'}
+              title={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for all events'}
+              aria-label={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for all events'}
             >
-              {pushNotificationState === 'enabled' ? <BellRing size={16} /> : <Bell size={16} />}
-              <span>{pushNotificationState === 'enabled' ? 'Notifications on' : 'Notify me'}</span>
+              {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
+              <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
@@ -3517,17 +3998,30 @@ export default function Home() {
       {mode === 'guest' ? (
         menu.id === EMPTY_EVENT_ID ? (
           <GuestAccessPortal
-            name={guestName}
-            phone={phoneNumber}
-            pin={guestPin}
-            session={guestSession}
+            authReady={accountAuthReady}
+            user={accountUser}
+            profile={accountProfile}
+            authMode={accountAuthMode}
+            email={accountEmail}
+            password={accountPassword}
+            firstName={accountFirstName}
+            lastName={accountLastName}
+            phone={accountPhone}
             events={guestEvents}
             pendingEvent={pendingGuestEvent}
-            busy={profileBusy || guestEventsBusy}
-            setName={setGuestName}
-            setPhone={(value) => setPhoneNumber(formatPhoneInput(value))}
-            setPin={(value) => setGuestPin(value.replace(/\D/g, '').slice(0, 4))}
-            unlock={() => void unlockGuestEvents()}
+            busy={accountAuthBusy || guestEventsBusy}
+            setAuthMode={setAccountAuthMode}
+            setEmail={setAccountEmail}
+            setPassword={setAccountPassword}
+            setFirstName={setAccountFirstName}
+            setLastName={setAccountLastName}
+            setPhone={(value) => setAccountPhone(formatPhoneInput(value))}
+            signInEmail={() => void signInWithEmail()}
+            signUpEmail={() => void signUpWithEmail()}
+            signInGoogle={() => void signInWithProvider('google')}
+            signInApple={() => void signInWithProvider('apple')}
+            resetPassword={() => void resetAccountPassword()}
+            completeProfile={() => void completeProviderProfile()}
             selectEvent={selectGuestEvent}
             clearAccess={clearGuestAccess}
           />
@@ -3616,6 +4110,7 @@ export default function Home() {
           }}
           onMinimize={() => setChatOpen(false)}
           pushNotificationState={pushNotificationState}
+          eventMuted={currentEventMuted}
           pushNotificationBusy={pushNotificationBusy}
           onTogglePush={() => void (pushNotificationState === 'enabled'
             ? disableChatNotifications()
@@ -3624,26 +4119,33 @@ export default function Home() {
         />
       )}
 
-      {mode === 'host' && firebaseConfigured && !hostUser && (
+      {mode === 'host' && firebaseConfigured && (!accountAuthReady || !hostUser) && (
         <div className="fixed inset-0 z-40 grid place-items-center bg-[var(--cream)]/96 p-6 backdrop-blur">
-          <div className="max-w-sm text-center">
-            <span className="mx-auto grid size-16 place-items-center rounded-full bg-[var(--ink)] text-white">
-              <LockKeyhole size={26} />
-            </span>
-            <h2 className="font-display mt-6 text-4xl font-semibold">
-              For the host only
-            </h2>
-            <p className="mt-3 text-black/55">
-              Sign in with the Google account that owns this event to see
-              incoming orders.
-            </p>
-            <button
-              onClick={() => void signInHost()}
-              className="primary-button mx-auto mt-7"
-            >
-              Continue with Google
-            </button>
-          </div>
+          <AccountAuthCard
+            context="host"
+            authReady={accountAuthReady}
+            user={accountUser}
+            profile={accountProfile}
+            authMode={accountAuthMode}
+            email={accountEmail}
+            password={accountPassword}
+            firstName={accountFirstName}
+            lastName={accountLastName}
+            phone={accountPhone}
+            busy={accountAuthBusy}
+            setAuthMode={setAccountAuthMode}
+            setEmail={setAccountEmail}
+            setPassword={setAccountPassword}
+            setFirstName={setAccountFirstName}
+            setLastName={setAccountLastName}
+            setPhone={(value) => setAccountPhone(formatPhoneInput(value))}
+            signInEmail={() => void signInWithEmail()}
+            signUpEmail={() => void signUpWithEmail()}
+            signInGoogle={() => void signInWithProvider('google')}
+            signInApple={() => void signInWithProvider('apple')}
+            resetPassword={() => void resetAccountPassword()}
+            completeProfile={() => void completeProviderProfile()}
+          />
         </div>
       )}
       {creatingEvent && (
@@ -3908,6 +4410,27 @@ export default function Home() {
           </section>
         </div>
       )}
+      {showNotificationPrompt && (
+        <div className="fixed inset-0 z-[85] grid place-items-end bg-black/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-5">
+          <section className="notification-onboarding-card">
+            <span className="notification-onboarding-icon"><BellRing size={25} /></span>
+            <p className="eyebrow">Stay in the loop</p>
+            <h2 className="font-display">Turn on Nights notifications</h2>
+            <p>Get chat and event updates for all of your events. You can mute any single event without affecting the others.</p>
+            <button type="button" className="primary-button" disabled={pushNotificationBusy} onClick={() => void enableChatNotifications()}>
+              <Bell size={17} /> {pushNotificationBusy ? 'Turning on…' : 'Turn on notifications'}
+            </button>
+            <button type="button" className="notification-onboarding-later" onClick={() => {
+              if (accountUser)
+                localStorage.setItem(notificationPromptKey(accountUser.uid), 'dismissed');
+              setShowNotificationPrompt(false);
+            }}>Not now</button>
+            <small>{typeof Notification !== 'undefined' && Notification.permission === 'granted'
+              ? 'This updates your existing notification setup to cover every eligible event.'
+              : 'Your phone requires this tap before Nights can show the system permission request.'}</small>
+          </section>
+        </div>
+      )}
       {showInstallGuide && (
         <div className="fixed inset-0 z-[80] grid place-items-end bg-black/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-5">
           <section className="install-guide">
@@ -4019,11 +4542,10 @@ export default function Home() {
                 <div className="guest-rsvp-heading">
                   <div><p className="eyebrow">Your details</p><h2 className="font-display">{changingGuestPhone ? 'Use another guest profile' : effectiveGuestProfile ? 'Edit your guest profile' : 'Tell us who you are'}</h2></div>
                 </div>
-                <p className="guest-rsvp-explainer">Your phone number and temporary 4-digit PIN let you reopen this RSVP on another device. No verification code or permanent account is created.</p>
+                <p className="guest-rsvp-explainer">Your Nights account keeps your identity consistent across devices. Your display name can be different for this event.</p>
                 <div className="guest-rsvp-form">
                   <label className="field-label">Display Name<input value={guestName} onChange={(event) => setGuestName(event.target.value)} className="field-input" placeholder="How guests will see you" autoComplete="name" /></label>
-                  <label className="field-label">Phone number<input value={phoneNumber} onChange={(event) => setPhoneNumber(formatPhoneInput(event.target.value))} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} readOnly={Boolean(effectiveGuestProfile) && !changingGuestPhone} /></label>
-                  <label className="field-label guest-pin-field">Temporary PIN<input value={guestPin} onChange={(event) => setGuestPin(event.target.value.replace(/\D/g, '').slice(0, 4))} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" /></label>
+                  <label className="field-label">Phone number<input value={phoneNumber} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} readOnly /></label>
                   <div className="guest-profile-actions">
                     <button type="button" className="secondary-button" onClick={() => {
                       setGuestName(effectiveGuestProfile?.guestName || '');
@@ -4033,7 +4555,7 @@ export default function Home() {
                       if (effectiveGuestProfile) setEditingGuestProfile(false);
                       else closeRsvpPanel();
                     }}>Cancel</button>
-                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim() || !/^\d{4}$/.test(guestPin)} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue'}</button>
+                    <button type="button" onClick={() => void saveGuestProfile()} disabled={profileBusy || !guestName.trim() || !phoneNumber.trim() || !accountProfile} className="primary-button">{effectiveGuestProfile && !changingGuestPhone ? 'Save details' : 'Continue'}</button>
                   </div>
                 </div>
               </div>
@@ -4045,7 +4567,7 @@ export default function Home() {
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
-                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit Display Name</button><button type="button" onClick={clearGuestAccess}>Switch guest</button></div>
+                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit Display Name</button><button type="button" onClick={clearGuestAccess}>Sign out</button></div>
                 </div>
                 <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Going responses need host approval. Maybe and Not going are saved immediately; only approved Going guests can chat or order.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
@@ -4278,32 +4800,129 @@ export default function Home() {
   );
 }
 
+type AccountAuthCardProps = {
+  context: 'guest' | 'host';
+  authReady: boolean;
+  user: AccountUser | null;
+  profile: AccountProfile | null;
+  authMode: AccountAuthMode;
+  email: string;
+  password: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  busy: boolean;
+  setAuthMode: (mode: AccountAuthMode) => void;
+  setEmail: (value: string) => void;
+  setPassword: (value: string) => void;
+  setFirstName: (value: string) => void;
+  setLastName: (value: string) => void;
+  setPhone: (value: string) => void;
+  signInEmail: () => void;
+  signUpEmail: () => void;
+  signInGoogle: () => void;
+  signInApple: () => void;
+  resetPassword: () => void;
+  completeProfile: () => void;
+};
+
+function AccountAuthCard(props: AccountAuthCardProps) {
+  const profileRequired = Boolean(props.user && !props.profile);
+  const mode = profileRequired ? 'profile' : props.authMode;
+  if (!props.authReady) {
+    return (
+      <section className="account-auth-card account-auth-loading" aria-live="polite">
+        <span className="account-auth-logo"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={58} height={58} /></span>
+        <h2 className="font-display">Opening Nights…</h2>
+      </section>
+    );
+  }
+  return (
+    <section className="account-auth-card">
+      <div className="account-auth-heading">
+        <span className="account-auth-logo"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={58} height={58} /></span>
+        <p className="eyebrow">{props.context === 'host' ? 'Nights Host' : 'Your nights, in one place'}</p>
+        <h2 className="font-display">
+          {mode === 'signup' ? 'Create your account' : mode === 'profile' ? 'Complete your profile' : 'Welcome back'}
+        </h2>
+        <p>
+          {mode === 'signup'
+            ? 'One account keeps your invitations, RSVPs, orders, and chats together.'
+            : mode === 'profile'
+              ? 'Add the details other guests and hosts will recognize.'
+              : props.context === 'host'
+                ? 'Sign in to create and manage your own events.'
+                : 'Sign in to see every event you are invited to.'}
+        </p>
+      </div>
+      {mode !== 'profile' && (
+        <>
+          <div className="account-provider-buttons">
+            <button type="button" onClick={props.signInGoogle} disabled={props.busy} className="account-provider-button"><b>G</b> Continue with Google</button>
+            <button type="button" onClick={props.signInApple} disabled={props.busy} className="account-provider-button account-provider-apple"><b>●</b> Continue with Apple</button>
+          </div>
+          <div className="account-auth-divider"><span>or use email</span></div>
+        </>
+      )}
+      <div className="account-auth-fields">
+        {mode !== 'signin' && (
+          <div className="account-name-row">
+            <label className="field-label">First name<input value={props.firstName} onChange={(event) => props.setFirstName(event.target.value)} className="field-input" autoComplete="name" /></label>
+            <label className="field-label">Last name<input value={props.lastName} onChange={(event) => props.setLastName(event.target.value)} className="field-input" autoComplete="name" /></label>
+          </div>
+        )}
+        {mode !== 'profile' && <label className="field-label">Email<input type="email" value={props.email} onChange={(event) => props.setEmail(event.target.value)} className="field-input" autoComplete="email" inputMode="email" placeholder="you@example.com" /></label>}
+        {mode !== 'profile' && <label className="field-label">Password<input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} className="field-input" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} onKeyDown={(event) => { if (event.key === 'Enter') (mode === 'signup' ? props.signUpEmail : props.signInEmail)(); }} /></label>}
+        {mode !== 'signin' && <label className="field-label">Phone number<input value={props.phone} onChange={(event) => props.setPhone(event.target.value)} className="field-input" autoComplete="tel" inputMode="tel" placeholder="555-555-5555" maxLength={12} /></label>}
+      </div>
+      {mode === 'signin' ? (
+        <>
+          <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.email || !props.password} onClick={props.signInEmail}>{props.busy ? 'Signing in…' : 'Sign in'}</button>
+          <div className="account-auth-links"><button type="button" onClick={props.resetPassword}>Forgot password?</button><button type="button" onClick={() => props.setAuthMode('signup')}>Create account</button></div>
+        </>
+      ) : mode === 'signup' ? (
+        <>
+          <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.email || props.password.length < 8 || !props.firstName || !props.lastName || !props.phone} onClick={props.signUpEmail}>{props.busy ? 'Creating account…' : 'Create account'}</button>
+          <div className="account-auth-links"><span>Already have an account?</span><button type="button" onClick={() => props.setAuthMode('signin')}>Sign in</button></div>
+        </>
+      ) : (
+        <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.firstName || !props.lastName || !props.phone} onClick={props.completeProfile}>{props.busy ? 'Saving profile…' : 'Continue to Nights'}</button>
+      )}
+      <small className="account-auth-terms">By continuing, you agree to use Nights responsibly. Subscription features will be clearly identified before they are introduced.</small>
+    </section>
+  );
+}
+
 function GuestAccessPortal({
-  name,
+  authReady,
+  user,
+  profile,
+  authMode,
+  email,
+  password,
+  firstName,
+  lastName,
   phone,
-  pin,
-  session,
   events,
   pendingEvent,
   busy,
-  setName,
+  setAuthMode,
+  setEmail,
+  setPassword,
+  setFirstName,
+  setLastName,
   setPhone,
-  setPin,
-  unlock,
+  signInEmail,
+  signUpEmail,
+  signInGoogle,
+  signInApple,
+  resetPassword,
+  completeProfile,
   selectEvent,
   clearAccess,
-}: {
-  name: string;
-  phone: string;
-  pin: string;
-  session: GuestSession | null;
+}: Omit<AccountAuthCardProps, 'context'> & {
   events: GuestEventAccess[];
   pendingEvent: PendingGuestEvent | null;
-  busy: boolean;
-  setName: (value: string) => void;
-  setPhone: (value: string) => void;
-  setPin: (value: string) => void;
-  unlock: () => void;
   selectEvent: (event: GuestEventAccess) => void;
   clearAccess: () => void;
 }) {
@@ -4313,24 +4932,18 @@ function GuestAccessPortal({
         <span className="guest-access-mark"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={62} height={62} /></span>
         <p className="eyebrow">Your nights, in one place</p>
         <h1 className="font-display">Your events</h1>
-        <p>Sign in once to see every event you have RSVP&apos;d to or been invited to.</p>
+        <p>Use one secure account for every invitation, RSVP, order, and event chat.</p>
       </div>
-      {!session ? (
-        <div className="guest-access-form">
+      {!profile ? (
+        <div className="guest-access-auth-shell">
           {pendingEvent && <div className="guest-invitation-cached"><Check size={17} /><span><strong>Invitation saved</strong><small>Sign in and this event will be added to your event list.</small></span></div>}
-          <label className="field-label">Display Name<input value={name} onChange={(event) => setName(event.target.value)} className="field-input" autoComplete="name" placeholder="How guests will see you" /></label>
-          <label className="field-label">Phone number<input value={phone} onChange={(event) => setPhone(event.target.value)} className="field-input" inputMode="tel" autoComplete="tel" placeholder="555-555-5555" maxLength={12} /></label>
-          <label className="field-label">Temporary PIN<input value={pin} onChange={(event) => setPin(event.target.value)} className="field-input" inputMode="numeric" autoComplete="off" pattern="[0-9]{4}" maxLength={4} placeholder="4 digits" onKeyDown={(event) => { if (event.key === 'Enter') unlock(); }} /></label>
-          <button type="button" className="primary-button" disabled={busy || !name.trim() || !phone.trim() || !/^\d{4}$/.test(pin)} onClick={unlock}>
-            <Sparkles size={17} /> {busy ? 'Opening your events…' : 'Continue'}
-          </button>
-          <small>Your PIN stays temporary. No SMS verification or permanent account is created.</small>
+          <AccountAuthCard context="guest" authReady={authReady} user={user} profile={profile} authMode={authMode} email={email} password={password} firstName={firstName} lastName={lastName} phone={phone} busy={busy} setAuthMode={setAuthMode} setEmail={setEmail} setPassword={setPassword} setFirstName={setFirstName} setLastName={setLastName} setPhone={setPhone} signInEmail={signInEmail} signUpEmail={signUpEmail} signInGoogle={signInGoogle} signInApple={signInApple} resetPassword={resetPassword} completeProfile={completeProfile} />
         </div>
       ) : (
         <div className="guest-access-events">
           <div className="guest-access-signed-in">
-            <span>Welcome, <strong>{session.guestName}</strong></span>
-            <button type="button" onClick={clearAccess}>Use another guest</button>
+            <span>Welcome, <strong>{accountDisplayName(profile)}</strong></span>
+            <button type="button" onClick={clearAccess}>Sign out</button>
           </div>
           {events.length ? (
             <div className="guest-event-card-grid">
@@ -4405,7 +5018,7 @@ function GuestEventPicker({
             ))}
           </div>
         ) : <p className="guest-access-loading">No invitations or RSVPs were found.</p>}
-        <footer><button type="button" onClick={onUseAnotherGuest}>Use another guest profile</button></footer>
+        <footer><button type="button" onClick={onUseAnotherGuest}>Sign out of Nights</button></footer>
       </dialog>
     </div>
   );
@@ -4669,6 +5282,7 @@ function EventChat({
   onOpen,
   onMinimize,
   pushNotificationState,
+  eventMuted,
   pushNotificationBusy,
   onTogglePush,
   notify,
@@ -4679,6 +5293,7 @@ function EventChat({
   onOpen: () => void;
   onMinimize: () => void;
   pushNotificationState: PushNotificationState;
+  eventMuted: boolean;
   pushNotificationBusy: boolean;
   onTogglePush: () => void;
   notify: (message: string) => void;
@@ -5178,10 +5793,12 @@ function EventChat({
                   onClick={onTogglePush}
                   disabled={pushNotificationBusy || pushNotificationState === 'unsupported'}
                   aria-label={pushNotificationState === 'enabled'
-                    ? 'Turn off chat notifications for this event'
-                    : 'Turn on chat notifications for this event'}
+                    ? 'Mute notifications for this event'
+                    : eventMuted ? 'Unmute notifications for this event' : 'Turn on notifications for all events'}
                   title={pushNotificationState === 'enabled'
                     ? 'Notifications on'
+                    : eventMuted
+                      ? 'Notifications muted for this event'
                     : pushNotificationState === 'blocked'
                       ? 'Notifications blocked in device settings'
                       : pushNotificationState === 'unsupported'
@@ -5190,7 +5807,7 @@ function EventChat({
                 >
                   {pushNotificationState === 'enabled'
                     ? <BellRing size={18} />
-                    : pushNotificationState === 'blocked'
+                    : pushNotificationState === 'blocked' || eventMuted
                       ? <BellOff size={18} />
                       : <Bell size={18} />}
                 </button>
