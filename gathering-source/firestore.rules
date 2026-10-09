@@ -166,7 +166,20 @@ service cloud.firestore {
         && request.resource.data.phone.size() >= 11
         && request.resource.data.phone.size() <= 16
         && request.resource.data.createdAt == request.time;
-      allow update, delete: if false;
+      // Firebase Authentication deletion does not cascade into Firestore. If
+      // the same email creates a replacement Auth user, let that user reclaim
+      // the old phone identity without opening the phone number to anyone else.
+      allow update: if signedIn()
+        && resource.data.accountUid != request.auth.uid
+        && exists(/databases/$(database)/documents/users/$(resource.data.accountUid))
+        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.email == request.auth.token.email
+        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.phone == resource.data.phone
+        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.guestUid == guestUid
+        && request.resource.data.keys().hasOnly(['accountUid', 'phone', 'createdAt'])
+        && request.resource.data.accountUid == request.auth.uid
+        && request.resource.data.phone == resource.data.phone
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if signedIn() && resource.data.accountUid == request.auth.uid;
     }
 
     match /account-emails/{emailHash} {

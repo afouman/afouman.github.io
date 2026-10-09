@@ -1354,11 +1354,21 @@ export default function Home() {
             store.getDoc(store.doc(db, 'events', event.id, 'guests', session.guestUid)),
             store.getDoc(store.doc(db, 'events', event.id, 'rsvps', session.guestUid)),
           ]);
-          const profileData = profileDocument.data();
+          let profileData = profileDocument.data();
+          if (
+            profileData?.accountUid
+            && session.authUid
+            && profileData.accountUid !== session.authUid
+          ) {
+            await store.updateDoc(profileDocument.ref, {
+              accountUid: session.authUid,
+              updatedAt: store.serverTimestamp(),
+            });
+            profileData = { ...profileData, accountUid: session.authUid };
+          }
           if (
             (!profileData && !invitation)
             || (!session.authUid && profileData?.pinHash !== session.pinHash)
-            || (profileData?.accountUid && session.authUid && profileData.accountUid !== session.authUid)
           ) return null;
           const rsvpData = rsvpDocument.data();
           return {
@@ -2590,45 +2600,58 @@ export default function Home() {
     const identityRef = store.doc(db, 'guest-identities', guestUid);
     const emailRef = store.doc(db, 'account-emails', await guestNameIndexId(email));
     const directoryRef = store.doc(db, 'account-directory', currentAccount.uid);
-    await store.runTransaction(db, async (transaction) => {
-      const [existing, identity] = await Promise.all([
-        transaction.get(profileRef),
-        transaction.get(identityRef),
-      ]);
-      if (identity.exists() && identity.data().accountUid !== currentAccount.uid)
-        throw new Error('That phone number is already connected to another Nights account.');
-      if (!identity.exists()) transaction.set(identityRef, {
-        accountUid: currentAccount.uid,
-        phone: fields.phone,
-        createdAt: store.serverTimestamp(),
+    try {
+      await store.runTransaction(db, async (transaction) => {
+        const [existing, identity] = await Promise.all([
+          transaction.get(profileRef),
+          transaction.get(identityRef),
+        ]);
+        if (!identity.exists()) {
+          transaction.set(identityRef, {
+            accountUid: currentAccount.uid,
+            phone: fields.phone,
+            createdAt: store.serverTimestamp(),
+          });
+        } else if (identity.data().accountUid !== currentAccount.uid) {
+          transaction.set(identityRef, {
+            accountUid: currentAccount.uid,
+            phone: identity.data().phone,
+            createdAt: identity.data().createdAt,
+          });
+        }
+        transaction.set(profileRef, {
+          uid: currentAccount.uid,
+          email,
+          ...fields,
+          guestUid,
+          membershipTier: 'free' as const,
+          membershipStatus: 'active' as const,
+          mutedEventIds: existing.exists() && Array.isArray(existing.data().mutedEventIds)
+            ? existing.data().mutedEventIds
+            : [],
+          createdAt: existing.exists() ? existing.data().createdAt : store.serverTimestamp(),
+          updatedAt: store.serverTimestamp(),
+        });
+        transaction.set(emailRef, {
+          accountUid: currentAccount.uid,
+          email,
+          guestUid,
+          updatedAt: store.serverTimestamp(),
+        }, { merge: true });
+        transaction.set(directoryRef, {
+          uid: currentAccount.uid,
+          email,
+          ...fields,
+          guestUid,
+          updatedAt: store.serverTimestamp(),
+        }, { merge: true });
       });
-      transaction.set(profileRef, {
-        uid: currentAccount.uid,
-        email,
-        ...fields,
-        guestUid,
-        membershipTier: 'free' as const,
-        membershipStatus: 'active' as const,
-        mutedEventIds: existing.exists() && Array.isArray(existing.data().mutedEventIds)
-          ? existing.data().mutedEventIds
-          : [],
-        createdAt: existing.exists() ? existing.data().createdAt : store.serverTimestamp(),
-        updatedAt: store.serverTimestamp(),
-      });
-      transaction.set(emailRef, {
-        accountUid: currentAccount.uid,
-        email,
-        guestUid,
-        updatedAt: store.serverTimestamp(),
-      }, { merge: true });
-      transaction.set(directoryRef, {
-        uid: currentAccount.uid,
-        email,
-        ...fields,
-        guestUid,
-        updatedAt: store.serverTimestamp(),
-      }, { merge: true });
-    });
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      if (code === 'permission-denied' || code === 'firestore/permission-denied')
+        throw new Error('That phone number is connected to an account with a different email address.');
+      throw error;
+    }
     await authModule.updateProfile(auth.currentUser, {
       displayName: `${fields.firstName} ${fields.lastName}`,
     });
