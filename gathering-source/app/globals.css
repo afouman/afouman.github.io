@@ -1678,6 +1678,18 @@ button:disabled {
   font-size: 0.72rem;
   font-weight: 800;
 }
+.app-header-actions { padding-right: 6.8rem; }
+.persistent-sign-out {
+  position: fixed;
+  z-index: 95;
+  top: calc(env(safe-area-inset-top) + 0.9rem);
+  right: 1rem;
+  border: 1px solid rgb(255 255 255 / 0.3);
+  background: #123b42;
+  color: #fff;
+  box-shadow: 0 8px 24px rgb(4 34 42 / 0.2);
+}
+.persistent-sign-out:hover { background: #0c2e35; }
 .notification-onboarding-card {
   width: min(430px, 100%);
   border: 1px solid rgb(255 255 255 / 0.18);
@@ -3049,9 +3061,81 @@ button:disabled {
 .host-actions .edit {
   color: var(--acid);
 }
+.host-actions .invite { color: #8ee4d2; }
 .host-actions .delete {
   color: var(--peach);
 }
+.invite-dialog-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: rgb(5 15 18 / 0.7);
+  padding: 1.25rem;
+  backdrop-filter: blur(12px);
+}
+.invite-dialog {
+  width: min(620px, 100%);
+  max-height: min(86dvh, 780px);
+  overflow: hidden;
+  border: 1px solid rgb(18 59 66 / 0.12);
+  border-radius: 1.7rem;
+  background: #f7f4ed;
+  padding: 1.5rem;
+  color: #17363b;
+  box-shadow: 0 35px 100px rgb(0 0 0 / 0.35);
+}
+.invite-dialog > header,
+.host-contact-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
+.invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
+.invite-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; margin-top: 1.1rem; }
+.invite-entry-row label { display: grid; gap: 0.42rem; color: rgb(23 54 59 / 0.6); font-size: 0.68rem; font-weight: 850; }
+.invite-entry-row input {
+  width: 100%;
+  border: 1px solid rgb(18 59 66 / 0.14);
+  border-radius: 0.9rem;
+  background: #fff;
+  padding: 0.86rem 0.95rem;
+  color: #17363b;
+  font-size: 0.86rem;
+  outline: none;
+}
+.invite-entry-row input:focus { border-color: #279887; box-shadow: 0 0 0 3px rgb(39 152 135 / 0.12); }
+.invite-entry-row .primary-button { height: 47px; justify-content: center; white-space: nowrap; }
+.host-contact-list { margin-top: 1.35rem; border-top: 1px solid rgb(18 59 66 / 0.1); padding-top: 1.1rem; }
+.host-contact-list-heading { justify-content: flex-start; }
+.host-contact-list-heading > div { display: grid; gap: 0.08rem; }
+.host-contact-list-heading strong { font-size: 0.82rem; }
+.host-contact-list-heading span { color: rgb(23 54 59 / 0.48); font-size: 0.66rem; }
+.host-contact-list-scroll { display: grid; max-height: 300px; overflow-y: auto; gap: 0.45rem; margin-top: 0.8rem; padding-right: 0.15rem; }
+.host-contact-list-scroll > button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  border: 1px solid rgb(18 59 66 / 0.09);
+  border-radius: 0.9rem;
+  background: #fff;
+  padding: 0.72rem;
+  color: #17363b;
+  text-align: left;
+}
+.host-contact-list-scroll > button:hover { border-color: #3cab98; background: #f9fffc; }
+.host-contact-avatar { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: #dcefe9; color: #176d64; font-weight: 900; }
+.host-contact-list-scroll > button > span:nth-child(2) { display: grid; gap: 0.06rem; }
+.host-contact-list-scroll strong { font-size: 0.78rem; }
+.host-contact-list-scroll small { color: rgb(23 54 59 / 0.5); font-size: 0.64rem; }
+.host-contact-list-scroll b { color: #19766c; font-size: 0.69rem; }
+.host-contact-empty { margin-top: 0.8rem; border-radius: 0.8rem; background: rgb(18 59 66 / 0.05); padding: 1rem; color: rgb(23 54 59 / 0.5); font-size: 0.72rem; text-align: center; }
 .order-board-heading {
   display: flex;
   align-items: end;
@@ -3202,7 +3286,7 @@ button:disabled {
   }
   .host-actions {
     grid-column: 1/-1;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     min-height: 76px;
     border-top: 1px solid rgb(255 255 255/0.07);
   }
@@ -3329,13 +3413,35 @@ button:disabled {
   }
   .host-actions {
     grid-column: auto;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
   }
   .host-actions a,
   .host-actions button {
     flex-direction: column;
     padding: 1rem 0.25rem;
   }
+  .app-header-actions { padding-right: 3.15rem; }
+  .persistent-sign-out {
+    top: calc(env(safe-area-inset-top) + 0.72rem);
+    right: 0.65rem;
+    width: 2.35rem;
+    height: 2.35rem;
+    justify-content: center;
+    padding: 0;
+  }
+  .persistent-sign-out span { display: none; }
+  .invite-dialog-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+  .invite-dialog {
+    width: 100%;
+    max-height: min(88dvh, 760px);
+    border-radius: 1.5rem 1.5rem 0 0;
+    padding: 1.25rem;
+  }
+  .invite-entry-row { grid-template-columns: 1fr; }
+  .invite-entry-row .primary-button { width: 100%; justify-content: center; }
   .host-command-main h2 {
     font-size: 2.8rem;
   }

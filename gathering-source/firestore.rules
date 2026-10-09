@@ -31,6 +31,31 @@ service cloud.firestore {
     function ownsGuestIdentity(guestUid) {
       return hasCompleteAccount() && accountProfile().data.guestUid == guestUid;
     }
+    function validHostInvitation(eventId, recipientUid, guestUid) {
+      return signedIn()
+        && canManageEvent(eventId)
+        && existsAfter(/databases/$(database)/documents/users/$(recipientUid)/invitations/$(eventId))
+        && getAfter(/databases/$(database)/documents/users/$(recipientUid)/invitations/$(eventId)).data.eventId == eventId
+        && getAfter(/databases/$(database)/documents/users/$(recipientUid)/invitations/$(eventId)).data.hostUid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(recipientUid)/invitations/$(eventId)).data.recipientUid == recipientUid
+        && getAfter(/databases/$(database)/documents/users/$(recipientUid)/invitations/$(eventId)).data.recipientGuestUid == guestUid;
+    }
+    function hostInvitesGuest(eventId, guestUid) {
+      return canManageEvent(eventId)
+        && existsAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid))
+        && getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.accountUid is string
+        && validHostInvitation(
+          eventId,
+          getAfter(/databases/$(database)/documents/events/$(eventId)/guests/$(guestUid)).data.accountUid,
+          guestUid
+        );
+    }
+    function hasHostInvitation(eventId) {
+      return hasCompleteAccount()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/invitations/$(eventId))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)/invitations/$(eventId)).data.recipientGuestUid
+          == accountProfile().data.guestUid;
+    }
     function activeOrders(data) {
       return data.keys().hasAny(['activeOrderCount']) ? data.activeOrderCount : 0;
     }
@@ -50,7 +75,7 @@ service cloud.firestore {
         && event.requireGuestApproval == true;
     }
     function guestIsApprovedForEvent(eventId, guestUid) {
-      return !eventRequiresApproval(eventId) || (
+      return !eventRequiresApproval(eventId) || hasHostInvitation(eventId) || (
         exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid))
         && (
           guestRsvp(eventId, guestUid).data.status != 'yes'
@@ -144,6 +169,41 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /account-emails/{emailHash} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'accountUid', 'email', 'guestUid', 'updatedAt'
+        ])
+        && request.resource.data.accountUid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.email is string
+        && request.resource.data.guestUid is string
+        && request.resource.data.guestUid.size() == 64
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && resource.data.accountUid == request.auth.uid;
+    }
+
+    match /account-directory/{userId} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'firstName', 'lastName', 'phone', 'guestUid', 'updatedAt'
+        ])
+        && request.resource.data.uid == userId
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.firstName is string
+        && request.resource.data.lastName is string
+        && request.resource.data.phone is string
+        && request.resource.data.guestUid is string
+        && request.resource.data.guestUid.size() == 64
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if signedIn() && request.auth.uid == userId;
+    }
+
     match /users/{userId} {
       allow get: if signedIn() && (request.auth.uid == userId || isApprovedHost());
       allow list: if isApprovedHost();
@@ -196,6 +256,49 @@ service cloud.firestore {
           'firstName', 'lastName', 'mutedEventIds', 'updatedAt'
         ]);
       allow delete: if signedIn() && request.auth.uid == userId;
+
+      match /invitations/{eventId} {
+        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow create, update: if canManageEvent(eventId)
+          && request.resource.data.keys().hasOnly([
+            'eventId', 'hostUid', 'recipientUid', 'recipientGuestUid',
+            'recipientEmail', 'recipientPhone', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.eventId == eventId
+          && request.resource.data.hostUid == request.auth.uid
+          && request.resource.data.recipientUid == userId
+          && request.resource.data.recipientGuestUid is string
+          && request.resource.data.recipientGuestUid.size() == 64
+          && request.resource.data.recipientEmail is string
+          && request.resource.data.recipientPhone is string
+          && request.resource.data.updatedAt == request.time
+          && (
+            (resource == null && request.resource.data.createdAt == request.time)
+            || (resource != null && request.resource.data.createdAt == resource.data.createdAt)
+          );
+        allow delete: if (signedIn() && request.auth.uid == userId) || canManageEvent(eventId);
+      }
+
+      match /contacts/{contactUid} {
+        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+            'accountUid', 'guestUid', 'email', 'phone', 'firstName', 'lastName',
+            'inviteCount', 'eventIds', 'lastInvitedAt'
+          ])
+          && request.resource.data.accountUid == contactUid
+          && request.resource.data.guestUid is string
+          && request.resource.data.email is string
+          && request.resource.data.phone is string
+          && request.resource.data.firstName is string
+          && request.resource.data.lastName is string
+          && request.resource.data.inviteCount is int
+          && request.resource.data.inviteCount >= 1
+          && request.resource.data.eventIds is list
+          && request.resource.data.lastInvitedAt == request.time;
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
     }
 
     match /public-paths/{pathHash} {
@@ -324,7 +427,8 @@ service cloud.firestore {
       match /guest-names/{nameHash} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if ownsGuestIdentity(request.resource.data.guestUid)
+        allow create: if (ownsGuestIdentity(request.resource.data.guestUid)
+            || hostInvitesGuest(eventId, request.resource.data.guestUid))
           && request.resource.data.keys().hasOnly(['guestUid', 'guestName', 'createdAt'])
           && request.resource.data.guestUid is string
           && request.resource.data.guestName is string
@@ -337,7 +441,8 @@ service cloud.firestore {
       match /guest-phones/{phoneHash} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if ownsGuestIdentity(request.resource.data.guestUid)
+        allow create: if (ownsGuestIdentity(request.resource.data.guestUid)
+            || hostInvitesGuest(eventId, request.resource.data.guestUid))
           && request.resource.data.keys().hasOnly(['guestUid', 'guestPhone', 'createdAt'])
           && request.resource.data.guestUid is string
           && request.resource.data.guestPhone is string
@@ -350,12 +455,19 @@ service cloud.firestore {
       match /guests/{guestUid} {
         allow get: if true;
         allow list: if canManageEvent(eventId);
-        allow create: if ownsGuestIdentity(guestUid)
+        allow create: if (ownsGuestIdentity(guestUid) || hostInvitesGuest(eventId, guestUid))
           && request.resource.data.keys().hasOnly([
             'guestUid', 'accountUid', 'guestName', 'guestPhone', 'pinHash', 'createdAt', 'updatedAt'
           ])
           && request.resource.data.guestUid == guestUid
-          && request.resource.data.accountUid == request.auth.uid
+          && (
+            (ownsGuestIdentity(guestUid) && request.resource.data.accountUid == request.auth.uid)
+            ||
+            (hostInvitesGuest(eventId, guestUid)
+              && exists(/databases/$(database)/documents/account-directory/$(request.resource.data.accountUid))
+              && get(/databases/$(database)/documents/account-directory/$(request.resource.data.accountUid)).data.guestUid == guestUid
+              && get(/databases/$(database)/documents/account-directory/$(request.resource.data.accountUid)).data.phone == request.resource.data.guestPhone)
+          )
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
           && request.resource.data.guestName.size() <= 80
@@ -403,7 +515,7 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
           && request.resource.data.approvalStatus == (
-            eventRequiresApproval(eventId) && request.resource.data.status == 'yes'
+            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId)
               ? 'pending'
               : 'approved'
           )
@@ -422,7 +534,7 @@ service cloud.firestore {
           && request.resource.data.activeOrderCount >= 0
           && request.resource.data.approvalStatus in ['pending', 'approved', 'declined']
           && request.resource.data.approvalStatus == (
-            !eventRequiresApproval(eventId) || request.resource.data.status != 'yes'
+            !eventRequiresApproval(eventId) || request.resource.data.status != 'yes' || hasHostInvitation(eventId)
               ? 'approved'
               : resource.data.status == 'yes'
                 ? (resource.data.keys().hasAny(['approvalStatus'])
