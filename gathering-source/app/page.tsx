@@ -1152,6 +1152,7 @@ export default function Home() {
   const [accountLastName, setAccountLastName] = useState('');
   const [accountPhone, setAccountPhone] = useState('');
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState('');
   const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
@@ -1835,8 +1836,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=36', window.location.origin)
-        : new URL('sw.js?v=36', document.baseURI);
+        ? new URL('/sw.js?v=37', window.location.origin)
+        : new URL('sw.js?v=37', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2394,8 +2395,8 @@ export default function Home() {
 
   const ensureBrowserPushSubscription = useCallback(async () => {
     const workerUrl = usesCleanEventUrls()
-      ? new URL('/sw.js?v=36', window.location.origin)
-      : new URL('sw.js?v=36', document.baseURI);
+      ? new URL('/sw.js?v=37', window.location.origin)
+      : new URL('sw.js?v=37', document.baseURI);
     const registration = await navigator.serviceWorker.register(workerUrl.href, {
       scope: './',
       updateViaCache: 'none',
@@ -2804,7 +2805,7 @@ export default function Home() {
     setHostUser(null);
   };
   const deleteAccountPermanently = async () => {
-    if (!accountUser || !accountProfile || deleteAccountConfirmation !== 'DELETE') return;
+    if (!accountUser || deleteAccountConfirmation !== 'DELETE') return;
     setDeleteAccountBusy(true);
     try {
       const [{ getApp }, authModule, store] = await Promise.all([
@@ -2821,7 +2822,7 @@ export default function Home() {
           if (!deleteAccountPassword) throw new Error('Enter your password to confirm account deletion.');
           await authModule.reauthenticateWithCredential(
             user,
-            authModule.EmailAuthProvider.credential(accountProfile.email, deleteAccountPassword),
+            authModule.EmailAuthProvider.credential(accountUser.email, deleteAccountPassword),
           );
         } else if (accountUser.providerIds.includes('google.com')) {
           await authModule.reauthenticateWithPopup(user, new authModule.GoogleAuthProvider());
@@ -2832,6 +2833,15 @@ export default function Home() {
         } else {
           throw new Error('Sign out, sign back in, and delete the account within four minutes.');
         }
+      }
+
+      if (!accountProfile) {
+        await authModule.deleteUser(user);
+        Object.keys(localStorage)
+          .filter((key) => key.startsWith('gather-') || key.startsWith('nights-'))
+          .forEach((key) => localStorage.removeItem(key));
+        window.location.assign(guestHomeRoute());
+        return;
       }
 
       const idToken = await user.getIdToken(true);
@@ -4433,21 +4443,21 @@ export default function Home() {
                 <Smartphone size={14} /> Nights Host
               </span>
             )}
-            {accountProfile && (
+            {accountUser && (
               <>
                 <button
                   type="button"
-                  className="account-header-button persistent-delete-account"
-                  onClick={() => {
-                    setDeleteAccountConfirmation('');
-                    setDeleteAccountPassword('');
-                    setDeleteAccountOpen(true);
-                  }}
-                  title="Permanently delete account"
+                  className="persistent-profile-button"
+                  onClick={() => setProfileMenuOpen((current) => !current)}
+                  aria-label="Open user profile"
+                  aria-expanded={profileMenuOpen}
+                  title={accountUser.email}
                 >
-                  <Trash2 size={15} /><span>Delete account</span>
+                  {accountProfile
+                    ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase()
+                    : <UsersRound size={17} />}
                 </button>
-                <button type="button" className="account-header-button persistent-sign-out" onClick={() => void signOutAccount()} title={`Signed in as ${accountProfile.email}`}>
+                <button type="button" className="account-header-button persistent-sign-out" onClick={() => void signOutAccount()} title={`Signed in as ${accountUser.email}`}>
                   <UsersRound size={15} /><span>Sign out</span>
                 </button>
               </>
@@ -4579,7 +4589,28 @@ export default function Home() {
         />
       )}
 
-      {deleteAccountOpen && accountProfile && (
+      {profileMenuOpen && accountUser && (
+        <>
+          <button type="button" className="profile-menu-scrim" onClick={() => setProfileMenuOpen(false)} aria-label="Close user profile" />
+          <section className="profile-menu" aria-label="User profile">
+            <div className="profile-menu-identity">
+              <span>{accountProfile ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase() : <UsersRound size={17} />}</span>
+              <div>
+                <strong>{accountProfile ? accountDisplayName(accountProfile) : 'Account setup'}</strong>
+                <small>{accountUser.email}</small>
+              </div>
+            </div>
+            <button type="button" className="profile-menu-delete" onClick={() => {
+              setProfileMenuOpen(false);
+              setDeleteAccountConfirmation('');
+              setDeleteAccountPassword('');
+              setDeleteAccountOpen(true);
+            }}><Trash2 size={16} /><span><strong>Delete account</strong><small>Permanently remove your account and data</small></span></button>
+          </section>
+        </>
+      )}
+
+      {deleteAccountOpen && accountUser && (
         <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !deleteAccountBusy) setDeleteAccountOpen(false);
         }}>
@@ -4587,7 +4618,7 @@ export default function Home() {
             <span className="delete-account-icon"><Trash2 size={24} /></span>
             <p className="eyebrow">Permanent account deletion</p>
             <h2 id="delete-account-title" className="font-display">Delete everything?</h2>
-            <p>This permanently removes your Nights login, profile, invitations, contacts, RSVPs, orders, messages, reactions, votes, notification registrations, and every event you host. It cannot be undone.</p>
+            <p>This permanently removes your Nights login and all data linked to it, including your profile, invitations, contacts, RSVPs, orders, messages, reactions, votes, notification registrations, and every event you host. It cannot be undone.</p>
             {accountUser?.providerIds.includes('password') && (
               <label className="field-label">Password
                 <input

@@ -1678,7 +1678,7 @@ button:disabled {
   font-size: 0.72rem;
   font-weight: 800;
 }
-.app-header-actions { padding-right: 14.2rem; }
+.app-header-actions { padding-right: 10.2rem; }
 .persistent-sign-out {
   position: fixed;
   z-index: 95;
@@ -1690,17 +1690,48 @@ button:disabled {
   box-shadow: 0 8px 24px rgb(4 34 42 / 0.2);
 }
 .persistent-sign-out:hover { background: #0c2e35; }
-.persistent-delete-account {
+.persistent-profile-button {
   position: fixed;
   z-index: 95;
   top: calc(env(safe-area-inset-top) + 0.9rem);
   right: 7.35rem;
-  border: 1px solid rgb(142 47 47 / 0.18);
-  background: #fff4f0;
-  color: #8b2f31;
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  place-items: center;
+  border: 1px solid rgb(18 59 66 / 0.16);
+  border-radius: 50%;
+  background: #dcefe9;
+  color: #176d64;
   box-shadow: 0 8px 24px rgb(4 34 42 / 0.1);
+  font-size: 0.68rem;
+  font-weight: 950;
 }
-.persistent-delete-account:hover { background: #ffe8e0; }
+.persistent-profile-button:hover { background: #c7e8de; }
+.profile-menu-scrim { position: fixed; z-index: 96; inset: 0; border: 0; background: transparent; }
+.profile-menu {
+  position: fixed;
+  z-index: 97;
+  top: calc(env(safe-area-inset-top) + 3.9rem);
+  right: 1rem;
+  width: min(330px, calc(100vw - 2rem));
+  border: 1px solid rgb(18 59 66 / 0.12);
+  border-radius: 1.2rem;
+  background: #fffdf8;
+  padding: 0.65rem;
+  color: #17363b;
+  box-shadow: 0 24px 70px rgb(4 34 42 / 0.22);
+}
+.profile-menu-identity { display: flex; align-items: center; gap: 0.7rem; padding: 0.65rem; }
+.profile-menu-identity > span { display: grid; width: 38px; height: 38px; flex: none; place-items: center; border-radius: 50%; background: #dcefe9; color: #176d64; font-size: 0.69rem; font-weight: 950; }
+.profile-menu-identity > div { display: grid; min-width: 0; gap: 0.08rem; }
+.profile-menu-identity strong { font-size: 0.78rem; }
+.profile-menu-identity small { overflow: hidden; color: rgb(23 54 59 / 0.52); font-size: 0.64rem; text-overflow: ellipsis; }
+.profile-menu-delete { display: flex; align-items: center; gap: 0.7rem; width: 100%; border: 0; border-top: 1px solid rgb(18 59 66 / 0.08); border-radius: 0.75rem; background: transparent; padding: 0.72rem; color: #983639; text-align: left; }
+.profile-menu-delete:hover { background: #fff0eb; }
+.profile-menu-delete > span { display: grid; gap: 0.08rem; }
+.profile-menu-delete strong { font-size: 0.72rem; }
+.profile-menu-delete small { color: rgb(152 54 57 / 0.58); font-size: 0.61rem; }
 .delete-account-backdrop {
   position: fixed;
   z-index: 130;
@@ -3470,7 +3501,7 @@ button:disabled {
     padding: 0;
   }
   .persistent-sign-out span { display: none; }
-  .persistent-delete-account {
+  .persistent-profile-button {
     top: calc(env(safe-area-inset-top) + 0.72rem);
     right: 3.25rem;
     width: 2.35rem;
@@ -3478,7 +3509,7 @@ button:disabled {
     justify-content: center;
     padding: 0;
   }
-  .persistent-delete-account span { display: none; }
+  .profile-menu { top: calc(env(safe-area-inset-top) + 3.55rem); right: 0.65rem; }
   .delete-account-backdrop { align-items: end; padding: 0; }
   .delete-account-dialog { width: 100%; border-radius: 1.5rem 1.5rem 0 0; padding: 1.35rem; }
   .delete-account-actions { grid-template-columns: 1fr; }

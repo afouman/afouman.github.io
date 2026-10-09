@@ -1,6 +1,6 @@
 // Keep the cache name deliberately versioned. A new release clears the old
 // HTML shell, so GitHub Pages never leaves a host looking at an older UI.
-const CACHE_NAME = 'nights-v36';
+const CACHE_NAME = 'nights-v37';
 const APP_SHELL = ['./', './manifest.webmanifest', './manifest-guest.webmanifest', './manifest-host.webmanifest', './icons/nights-favicon-48.png', './icons/nights-app-icon-180.png', './icons/nights-app-icon-192.png', './icons/nights-app-icon-512.png'];
 const BADGE_CACHE_NAME = 'nights-chat-badge-v1';
 const BADGE_STATE_URL = new URL('/__nights_chat_badge_state__', self.location.origin).href;
