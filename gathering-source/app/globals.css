@@ -1678,7 +1678,7 @@ button:disabled {
   font-size: 0.72rem;
   font-weight: 800;
 }
-.app-header-actions { padding-right: 6.8rem; }
+.app-header-actions { padding-right: 14.2rem; }
 .persistent-sign-out {
   position: fixed;
   z-index: 95;
@@ -1690,6 +1690,46 @@ button:disabled {
   box-shadow: 0 8px 24px rgb(4 34 42 / 0.2);
 }
 .persistent-sign-out:hover { background: #0c2e35; }
+.persistent-delete-account {
+  position: fixed;
+  z-index: 95;
+  top: calc(env(safe-area-inset-top) + 0.9rem);
+  right: 7.35rem;
+  border: 1px solid rgb(142 47 47 / 0.18);
+  background: #fff4f0;
+  color: #8b2f31;
+  box-shadow: 0 8px 24px rgb(4 34 42 / 0.1);
+}
+.persistent-delete-account:hover { background: #ffe8e0; }
+.delete-account-backdrop {
+  position: fixed;
+  z-index: 130;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow-y: auto;
+  background: rgb(5 15 18 / 0.76);
+  padding: 1.25rem;
+  backdrop-filter: blur(12px);
+}
+.delete-account-dialog {
+  width: min(500px, 100%);
+  border: 0;
+  border-radius: 1.6rem;
+  background: #f8f4ec;
+  padding: 1.8rem;
+  color: #22201d;
+  box-shadow: 0 35px 100px rgb(0 0 0 / 0.4);
+}
+.delete-account-icon { display: grid; width: 52px; height: 52px; margin-bottom: 1rem; place-items: center; border-radius: 1rem; background: #fee2db; color: #a53234; }
+.delete-account-dialog h2 { margin-top: 0.35rem; font-size: 2.5rem; line-height: 1; }
+.delete-account-dialog > p:not(.eyebrow) { margin: 0.85rem 0 1.15rem; color: rgb(34 32 29 / 0.62); font-size: 0.78rem; line-height: 1.6; }
+.delete-account-dialog .field-label + .field-label { margin-top: 0.8rem; }
+.delete-account-actions { display: grid; grid-template-columns: 1fr 1.3fr; gap: 0.7rem; margin-top: 1.25rem; }
+.delete-account-actions button { min-height: 46px; border: 0; border-radius: 0.85rem; font-size: 0.73rem; font-weight: 900; }
+.delete-account-actions button:first-child { background: rgb(19 40 44 / 0.08); color: #17363b; }
+.delete-account-actions .danger-button { background: #8b2f31; color: #fff; }
+.delete-account-actions button:disabled { cursor: wait; opacity: 0.5; }
 .notification-onboarding-card {
   width: min(430px, 100%);
   border: 1px solid rgb(255 255 255 / 0.18);
@@ -3420,7 +3460,7 @@ button:disabled {
     flex-direction: column;
     padding: 1rem 0.25rem;
   }
-  .app-header-actions { padding-right: 3.15rem; }
+  .app-header-actions { padding-right: 5.9rem; }
   .persistent-sign-out {
     top: calc(env(safe-area-inset-top) + 0.72rem);
     right: 0.65rem;
@@ -3430,6 +3470,18 @@ button:disabled {
     padding: 0;
   }
   .persistent-sign-out span { display: none; }
+  .persistent-delete-account {
+    top: calc(env(safe-area-inset-top) + 0.72rem);
+    right: 3.25rem;
+    width: 2.35rem;
+    height: 2.35rem;
+    justify-content: center;
+    padding: 0;
+  }
+  .persistent-delete-account span { display: none; }
+  .delete-account-backdrop { align-items: end; padding: 0; }
+  .delete-account-dialog { width: 100%; border-radius: 1.5rem 1.5rem 0 0; padding: 1.35rem; }
+  .delete-account-actions { grid-template-columns: 1fr; }
   .invite-dialog-backdrop {
     align-items: end;
     padding: 0;

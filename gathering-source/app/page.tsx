@@ -557,13 +557,16 @@ const PUSH_NOTIFICATIONS_ENABLED =
   process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
 const PUSH_API_URL = 'https://gaemaj.tech/api/push';
 const callPushApi = async (
-  path: 'subscribe' | 'send',
+  path: 'subscribe' | 'send' | 'account',
   method: 'POST' | 'DELETE',
   body: Record<string, unknown>,
+  authToken = '',
 ) => {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (authToken) headers.authorization = `Bearer ${authToken}`;
   const response = await fetch(`${PUSH_API_URL}/${path}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -1148,6 +1151,10 @@ export default function Home() {
   const [accountFirstName, setAccountFirstName] = useState('');
   const [accountLastName, setAccountLastName] = useState('');
   const [accountPhone, setAccountPhone] = useState('');
+  const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState('');
+  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
+  const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [, setReceipts] = useState<Receipt[]>([]);
   const [rememberedOrder, setRememberedOrder] = useState<Order | null>(null);
@@ -1354,21 +1361,11 @@ export default function Home() {
             store.getDoc(store.doc(db, 'events', event.id, 'guests', session.guestUid)),
             store.getDoc(store.doc(db, 'events', event.id, 'rsvps', session.guestUid)),
           ]);
-          let profileData = profileDocument.data();
-          if (
-            profileData?.accountUid
-            && session.authUid
-            && profileData.accountUid !== session.authUid
-          ) {
-            await store.updateDoc(profileDocument.ref, {
-              accountUid: session.authUid,
-              updatedAt: store.serverTimestamp(),
-            });
-            profileData = { ...profileData, accountUid: session.authUid };
-          }
+          const profileData = profileDocument.data();
           if (
             (!profileData && !invitation)
             || (!session.authUid && profileData?.pinHash !== session.pinHash)
+            || (profileData?.accountUid && session.authUid && profileData.accountUid !== session.authUid)
           ) return null;
           const rsvpData = rsvpDocument.data();
           return {
@@ -1838,8 +1835,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=33', window.location.origin)
-        : new URL('sw.js?v=33', document.baseURI);
+        ? new URL('/sw.js?v=36', window.location.origin)
+        : new URL('sw.js?v=36', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2397,8 +2394,8 @@ export default function Home() {
 
   const ensureBrowserPushSubscription = useCallback(async () => {
     const workerUrl = usesCleanEventUrls()
-      ? new URL('/sw.js?v=33', window.location.origin)
-      : new URL('sw.js?v=33', document.baseURI);
+      ? new URL('/sw.js?v=36', window.location.origin)
+      : new URL('sw.js?v=36', document.baseURI);
     const registration = await navigator.serviceWorker.register(workerUrl.href, {
       scope: './',
       updateViaCache: 'none',
@@ -2606,19 +2603,13 @@ export default function Home() {
           transaction.get(profileRef),
           transaction.get(identityRef),
         ]);
-        if (!identity.exists()) {
-          transaction.set(identityRef, {
-            accountUid: currentAccount.uid,
-            phone: fields.phone,
-            createdAt: store.serverTimestamp(),
-          });
-        } else if (identity.data().accountUid !== currentAccount.uid) {
-          transaction.set(identityRef, {
-            accountUid: currentAccount.uid,
-            phone: identity.data().phone,
-            createdAt: identity.data().createdAt,
-          });
-        }
+        if (identity.exists() && identity.data().accountUid !== currentAccount.uid)
+          throw new Error('That phone number is already connected to another Nights account.');
+        if (!identity.exists()) transaction.set(identityRef, {
+          accountUid: currentAccount.uid,
+          phone: fields.phone,
+          createdAt: store.serverTimestamp(),
+        });
         transaction.set(profileRef, {
           uid: currentAccount.uid,
           email,
@@ -2811,6 +2802,190 @@ export default function Home() {
     setAccountProfile(null);
     setAccountUser(null);
     setHostUser(null);
+  };
+  const deleteAccountPermanently = async () => {
+    if (!accountUser || !accountProfile || deleteAccountConfirmation !== 'DELETE') return;
+    setDeleteAccountBusy(true);
+    try {
+      const [{ getApp }, authModule, store] = await Promise.all([
+        import('firebase/app'),
+        import('firebase/auth'),
+        import('firebase/firestore'),
+      ]);
+      const auth = authModule.getAuth(getApp());
+      const user = auth.currentUser;
+      if (!user || user.uid !== accountUser.uid) throw new Error('Sign in again before deleting your account.');
+      const signedInAt = Date.parse(user.metadata.lastSignInTime || '');
+      if (!Number.isFinite(signedInAt) || Date.now() - signedInAt > 4 * 60 * 1000) {
+        if (accountUser.providerIds.includes('password')) {
+          if (!deleteAccountPassword) throw new Error('Enter your password to confirm account deletion.');
+          await authModule.reauthenticateWithCredential(
+            user,
+            authModule.EmailAuthProvider.credential(accountProfile.email, deleteAccountPassword),
+          );
+        } else if (accountUser.providerIds.includes('google.com')) {
+          await authModule.reauthenticateWithPopup(user, new authModule.GoogleAuthProvider());
+        } else if (accountUser.providerIds.includes('apple.com')) {
+          const provider = new authModule.OAuthProvider('apple.com');
+          provider.addScope('email');
+          await authModule.reauthenticateWithPopup(user, provider);
+        } else {
+          throw new Error('Sign out, sign back in, and delete the account within four minutes.');
+        }
+      }
+
+      const idToken = await user.getIdToken(true);
+      await callPushApi('account', 'DELETE', { guestUid: accountProfile.guestUid }, idToken);
+
+      const db = store.getFirestore(getApp());
+      const userRef = store.doc(db, 'users', accountUser.uid);
+      type DocumentReference = typeof userRef;
+      const deleteRefs = new Map<string, DocumentReference>();
+      const addDelete = (reference: DocumentReference) => deleteRefs.set(reference.path, reference);
+      const messageUpdates: Array<{ ref: DocumentReference; data: Record<string, unknown> }> = [];
+      const commitDeletes = async (references: DocumentReference[]) => {
+        for (let index = 0; index < references.length; index += 400) {
+          const batch = store.writeBatch(db);
+          references.slice(index, index + 400).forEach((reference) => batch.delete(reference));
+          await batch.commit();
+        }
+      };
+      const commitUpdates = async () => {
+        for (let index = 0; index < messageUpdates.length; index += 300) {
+          const batch = store.writeBatch(db);
+          messageUpdates.slice(index, index + 300).forEach(({ ref, data }) => batch.update(ref, data));
+          await batch.commit();
+        }
+      };
+
+      const [eventSnapshot, receivedInvitations, ownContacts, sentInvitations, referringContacts] = await Promise.all([
+        store.getDocs(store.collection(db, 'events')),
+        store.getDocs(store.collection(db, 'users', accountUser.uid, 'invitations')),
+        store.getDocs(store.collection(db, 'users', accountUser.uid, 'contacts')),
+        store.getDocs(store.query(
+          store.collectionGroup(db, 'invitations'),
+          store.where('hostUid', '==', accountUser.uid),
+        )),
+        store.getDocs(store.query(
+          store.collectionGroup(db, 'contacts'),
+          store.where('accountUid', '==', accountUser.uid),
+        )),
+      ]);
+      receivedInvitations.docs.forEach((document) => addDelete(document.ref));
+      ownContacts.docs.forEach((document) => addDelete(document.ref));
+      sentInvitations.docs.forEach((document) => addDelete(document.ref));
+      referringContacts.docs.forEach((document) => addDelete(document.ref));
+
+      for (const eventDocument of eventSnapshot.docs) {
+        const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
+        const legacyOwned = !event.ownerUid
+          && normalizedAccountEmail(accountProfile.email) === normalizedAccountEmail(HOST_EMAIL || '');
+        if (event.ownerUid === accountUser.uid || legacyOwned) {
+          const collections = await Promise.all([
+            'orders', 'rsvps', 'guests', 'guest-names', 'guest-phones',
+            'name-index', 'pushSubscriptions', 'chat',
+          ].map((collectionName) => store.getDocs(
+            store.collection(db, 'events', event.id, collectionName),
+          )));
+          collections.flatMap((snapshot) => snapshot.docs).forEach((document) => addDelete(document.ref));
+          const publicPath = normalizedPublicEventPath(event.publicPath);
+          const claimId = event.publicPathClaimId || (publicPath ? await guestNameIndexId(publicPath) : '');
+          if (claimId) addDelete(store.doc(db, 'public-paths', claimId));
+          addDelete(eventDocument.ref);
+          continue;
+        }
+
+        const profileRef = store.doc(db, 'events', event.id, 'guests', accountProfile.guestUid);
+        const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', accountProfile.guestUid);
+        const [profileDocument, rsvpDocument, orderSnapshot, chatSnapshot] = await Promise.all([
+          store.getDoc(profileRef),
+          store.getDoc(rsvpRef),
+          store.getDocs(store.query(
+            store.collection(db, 'events', event.id, 'orders'),
+            store.where('guestUid', '==', accountProfile.guestUid),
+          )),
+          store.getDocs(store.collection(db, 'events', event.id, 'chat')),
+        ]);
+        const profile = profileDocument.data();
+        const authoredMessageIds = new Set(chatSnapshot.docs
+          .filter((document) => document.data().authorUid === accountProfile.guestUid)
+          .map((document) => document.id));
+        chatSnapshot.docs.forEach((document) => {
+          const message = document.data() as ChatMessage;
+          if (message.authorUid === accountProfile.guestUid) {
+            addDelete(document.ref);
+            return;
+          }
+          const reactions = { ...message.reactions };
+          const pollVotes = { ...message.pollVotes };
+          const pollVoterNames = { ...message.pollVoterNames };
+          let changed = false;
+          if (accountProfile.guestUid in reactions) { delete reactions[accountProfile.guestUid]; changed = true; }
+          if (accountProfile.guestUid in pollVotes) { delete pollVotes[accountProfile.guestUid]; changed = true; }
+          if (accountProfile.guestUid in pollVoterNames) { delete pollVoterNames[accountProfile.guestUid]; changed = true; }
+          const removeReply = Boolean(message.replyTo?.id && authoredMessageIds.has(message.replyTo.id));
+          if (removeReply) changed = true;
+          if (changed) messageUpdates.push({
+            ref: document.ref,
+            data: {
+              reactions,
+              pollVotes,
+              pollVoterNames,
+              ...(removeReply ? { replyTo: null } : {}),
+              updatedAt: store.serverTimestamp(),
+              lastActorUid: accountProfile.guestUid,
+              lastActorRole: 'guest',
+            },
+          });
+        });
+        orderSnapshot.docs.forEach((document) => addDelete(document.ref));
+        if (profile) {
+          const nameClaimRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(profile.guestName));
+          const phoneClaimRef = store.doc(db, 'events', event.id, 'guest-phones', await guestNameIndexId(profile.guestPhone));
+          const [nameClaim, phoneClaim] = await Promise.all([
+            store.getDoc(nameClaimRef), store.getDoc(phoneClaimRef),
+          ]);
+          if (nameClaim.exists()) addDelete(nameClaimRef);
+          if (phoneClaim.exists()) addDelete(phoneClaimRef);
+        }
+        const subscriptionId = localStorage.getItem(pushSubscriptionKey(event.id, accountProfile.guestUid));
+        if (subscriptionId) {
+          const subscriptionRef = store.doc(db, 'events', event.id, 'pushSubscriptions', subscriptionId);
+          const subscription = await store.getDoc(subscriptionRef);
+          if (subscription.exists()) addDelete(subscriptionRef);
+        }
+        if (rsvpDocument.exists()) addDelete(rsvpRef);
+        if (profileDocument.exists()) addDelete(profileRef);
+      }
+
+      await commitUpdates();
+      await commitDeletes([...deleteRefs.values()]);
+      const finalBatch = store.writeBatch(db);
+      const accountEmailRef = store.doc(db, 'account-emails', await guestNameIndexId(normalizedAccountEmail(accountProfile.email)));
+      const directoryRef = store.doc(db, 'account-directory', accountUser.uid);
+      const [accountEmailDocument, directoryDocument] = await Promise.all([
+        store.getDoc(accountEmailRef), store.getDoc(directoryRef),
+      ]);
+      if (accountEmailDocument.exists()) finalBatch.delete(accountEmailRef);
+      if (directoryDocument.exists()) finalBatch.delete(directoryRef);
+      finalBatch.delete(store.doc(db, 'guest-identities', accountProfile.guestUid));
+      finalBatch.delete(userRef);
+      await finalBatch.commit();
+      await authModule.deleteUser(user);
+
+      Object.keys(localStorage)
+        .filter((key) => key.startsWith('gather-') || key.startsWith('nights-'))
+        .forEach((key) => localStorage.removeItem(key));
+      setDeleteAccountOpen(false);
+      window.location.assign(guestHomeRoute());
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      notify(code === 'auth/requires-recent-login'
+        ? 'Sign out, sign back in, then delete the account again.'
+        : error instanceof Error ? error.message : 'Account deletion could not be completed.');
+    } finally {
+      setDeleteAccountBusy(false);
+    }
   };
   const inviteRegisteredGuest = async (event: EventMenu, identifier: string) => {
     if (!accountUser || !accountProfile) return false;
@@ -4259,9 +4434,23 @@ export default function Home() {
               </span>
             )}
             {accountProfile && (
-              <button type="button" className="account-header-button persistent-sign-out" onClick={() => void signOutAccount()} title={`Signed in as ${accountProfile.email}`}>
-                <UsersRound size={15} /><span>Sign out</span>
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="account-header-button persistent-delete-account"
+                  onClick={() => {
+                    setDeleteAccountConfirmation('');
+                    setDeleteAccountPassword('');
+                    setDeleteAccountOpen(true);
+                  }}
+                  title="Permanently delete account"
+                >
+                  <Trash2 size={15} /><span>Delete account</span>
+                </button>
+                <button type="button" className="account-header-button persistent-sign-out" onClick={() => void signOutAccount()} title={`Signed in as ${accountProfile.email}`}>
+                  <UsersRound size={15} /><span>Sign out</span>
+                </button>
+              </>
             )}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
@@ -4388,6 +4577,46 @@ export default function Home() {
           onClose={() => setGuestEventPickerOpen(false)}
           onUseAnotherGuest={clearGuestAccess}
         />
+      )}
+
+      {deleteAccountOpen && accountProfile && (
+        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !deleteAccountBusy) setDeleteAccountOpen(false);
+        }}>
+          <dialog open className="delete-account-dialog" aria-labelledby="delete-account-title">
+            <span className="delete-account-icon"><Trash2 size={24} /></span>
+            <p className="eyebrow">Permanent account deletion</p>
+            <h2 id="delete-account-title" className="font-display">Delete everything?</h2>
+            <p>This permanently removes your Nights login, profile, invitations, contacts, RSVPs, orders, messages, reactions, votes, notification registrations, and every event you host. It cannot be undone.</p>
+            {accountUser?.providerIds.includes('password') && (
+              <label className="field-label">Password
+                <input
+                  type="password"
+                  value={deleteAccountPassword}
+                  onChange={(event) => setDeleteAccountPassword(event.target.value)}
+                  className="field-input"
+                  autoComplete="current-password"
+                  placeholder="Confirm your password"
+                />
+              </label>
+            )}
+            <label className="field-label">Type DELETE to confirm
+              <input
+                value={deleteAccountConfirmation}
+                onChange={(event) => setDeleteAccountConfirmation(event.target.value.toUpperCase())}
+                className="field-input"
+                autoComplete="off"
+                placeholder="DELETE"
+              />
+            </label>
+            <div className="delete-account-actions">
+              <button type="button" onClick={() => setDeleteAccountOpen(false)} disabled={deleteAccountBusy}>Keep account</button>
+              <button type="button" className="danger-button" onClick={() => void deleteAccountPermanently()} disabled={deleteAccountBusy || deleteAccountConfirmation !== 'DELETE'}>
+                {deleteAccountBusy ? 'Deleting everything…' : 'Delete account forever'}
+              </button>
+            </div>
+          </dialog>
+        </div>
       )}
 
       {backgroundEditor && (

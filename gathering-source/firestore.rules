@@ -139,6 +139,35 @@ service cloud.firestore {
         && data.replyTo.text.size() <= 300
       );
     }
+    function removesOwnMessageFootprint(eventId, before, after) {
+      let guestUid = accountProfile().data.guestUid;
+      return ownsGuestIdentity(guestUid)
+        && after.updatedAt == request.time
+        && after.lastActorUid == guestUid
+        && after.lastActorRole == 'guest'
+        && after.reactions is map
+        && after.pollVotes is map
+        && after.pollVoterNames is map
+        && after.reactions.diff(before.reactions).affectedKeys().hasOnly([guestUid])
+        && after.pollVotes.diff(before.pollVotes).affectedKeys().hasOnly([guestUid])
+        && after.pollVoterNames.diff(before.pollVoterNames).affectedKeys().hasOnly([guestUid])
+        && !after.reactions.keys().hasAny([guestUid])
+        && !after.pollVotes.keys().hasAny([guestUid])
+        && !after.pollVoterNames.keys().hasAny([guestUid])
+        && (
+          after.replyTo == before.replyTo
+          || (
+            before.replyTo is map
+            && after.replyTo == null
+            && exists(/databases/$(database)/documents/events/$(eventId)/chat/$(before.replyTo.id))
+            && get(/databases/$(database)/documents/events/$(eventId)/chat/$(before.replyTo.id)).data.authorUid == guestUid
+          )
+        )
+        && after.diff(before).affectedKeys().hasOnly([
+          'reactions', 'pollVotes', 'pollVoterNames', 'replyTo',
+          'updatedAt', 'lastActorUid', 'lastActorRole'
+        ]);
+    }
     function messageDeleted(data) {
       return data.keys().hasAny(['deleted']) && data.deleted == true;
     }
@@ -166,19 +195,7 @@ service cloud.firestore {
         && request.resource.data.phone.size() >= 11
         && request.resource.data.phone.size() <= 16
         && request.resource.data.createdAt == request.time;
-      // Firebase Authentication deletion does not cascade into Firestore. If
-      // the same email creates a replacement Auth user, let that user reclaim
-      // the old phone identity without opening the phone number to anyone else.
-      allow update: if signedIn()
-        && resource.data.accountUid != request.auth.uid
-        && exists(/databases/$(database)/documents/users/$(resource.data.accountUid))
-        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.email == request.auth.token.email
-        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.phone == resource.data.phone
-        && get(/databases/$(database)/documents/users/$(resource.data.accountUid)).data.guestUid == guestUid
-        && request.resource.data.keys().hasOnly(['accountUid', 'phone', 'createdAt'])
-        && request.resource.data.accountUid == request.auth.uid
-        && request.resource.data.phone == resource.data.phone
-        && request.resource.data.createdAt == resource.data.createdAt;
+      allow update: if false;
       allow delete: if signedIn() && resource.data.accountUid == request.auth.uid;
     }
 
@@ -271,7 +288,9 @@ service cloud.firestore {
       allow delete: if signedIn() && request.auth.uid == userId;
 
       match /invitations/{eventId} {
-        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow get: if signedIn() && (request.auth.uid == userId || canManageEvent(eventId));
+        allow list: if signedIn()
+          && (request.auth.uid == userId || resource.data.hostUid == request.auth.uid);
         allow create, update: if canManageEvent(eventId)
           && request.resource.data.keys().hasOnly([
             'eventId', 'hostUid', 'recipientUid', 'recipientGuestUid',
@@ -289,11 +308,18 @@ service cloud.firestore {
             (resource == null && request.resource.data.createdAt == request.time)
             || (resource != null && request.resource.data.createdAt == resource.data.createdAt)
           );
-        allow delete: if (signedIn() && request.auth.uid == userId) || canManageEvent(eventId);
+        allow delete: if signedIn() && (
+          request.auth.uid == userId
+          || resource.data.hostUid == request.auth.uid
+          || canManageEvent(eventId)
+        );
       }
 
       match /contacts/{contactUid} {
-        allow get, list: if signedIn() && request.auth.uid == userId;
+        allow get: if signedIn()
+          && (request.auth.uid == userId || resource.data.accountUid == request.auth.uid);
+        allow list: if signedIn()
+          && (request.auth.uid == userId || resource.data.accountUid == request.auth.uid);
         allow create, update: if signedIn()
           && request.auth.uid == userId
           && request.resource.data.keys().hasOnly([
@@ -310,7 +336,8 @@ service cloud.firestore {
           && request.resource.data.inviteCount >= 1
           && request.resource.data.eventIds is list
           && request.resource.data.lastInvitedAt == request.time;
-        allow delete: if signedIn() && request.auth.uid == userId;
+        allow delete: if signedIn()
+          && (request.auth.uid == userId || resource.data.accountUid == request.auth.uid);
       }
     }
 
@@ -429,7 +456,7 @@ service cloud.firestore {
             'updatedAt', 'cancelledAt', 'revision'
           ])
         );
-        allow delete: if canManageEvent(eventId);
+        allow delete: if canManageEvent(eventId) || ownsGuestIdentity(resource.data.guestUid);
       }
 
       match /name-index/{nameHash} {
@@ -512,7 +539,7 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'accountUid', 'guestName', 'pinHash', 'updatedAt'
           ]);
-        allow delete: if canManageEvent(eventId);
+        allow delete: if canManageEvent(eventId) || ownsGuestIdentity(guestUid);
       }
 
       match /rsvps/{guestUid} {
@@ -583,11 +610,15 @@ service cloud.firestore {
             'activeOrderCount', 'updatedAt'
           ])
         );
-        allow delete: if canManageEvent(eventId);
+        allow delete: if canManageEvent(eventId) || ownsGuestIdentity(guestUid);
       }
 
       match /pushSubscriptions/{subscriptionId} {
-        allow read: if false;
+        allow get: if canManageEvent(eventId) || (
+          resource.data.actorRole == 'guest'
+          && ownsGuestIdentity(resource.data.actorUid)
+        );
+        allow list: if canManageEvent(eventId);
         allow create, update: if request.resource.data.keys().hasOnly([
             'endpoint', 'expirationTime', 'keys', 'actorUid', 'actorRole',
             'actorName', 'createdAt', 'updatedAt'
@@ -627,7 +658,6 @@ service cloud.firestore {
         allow delete: if canManageEvent(eventId) || (
           resource.data.actorRole == 'guest'
           && ownsGuestIdentity(resource.data.actorUid)
-          && guestCanChat(eventId, resource.data.actorUid)
         );
       }
 
@@ -773,7 +803,11 @@ service cloud.firestore {
               ])
             )
           );
-        allow delete: if false;
+        allow update: if removesOwnMessageFootprint(eventId, resource.data, request.resource.data);
+        allow delete: if canManageEvent(eventId) || (
+          resource.data.authorRole == 'guest'
+          && ownsGuestIdentity(resource.data.authorUid)
+        );
       }
     }
   }

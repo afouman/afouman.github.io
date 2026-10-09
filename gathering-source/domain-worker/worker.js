@@ -26,7 +26,7 @@ function corsHeaders(request) {
   return {
     'access-control-allow-origin': origin && ALLOWED_ORIGINS.has(origin) ? origin : 'https://gaemaj.tech',
     'access-control-allow-methods': 'POST, DELETE, OPTIONS',
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'authorization, content-type',
     'access-control-max-age': '86400',
     vary: 'Origin',
   };
@@ -57,11 +57,88 @@ function firestoreFields(fields) {
   return Object.fromEntries(Object.entries(fields || {}).map(([key, value]) => [key, firestoreValue(value)]));
 }
 
-async function firestoreDocument(path) {
-  const response = await fetch(`${FIRESTORE_ROOT}/${path}`, { headers: { accept: 'application/json' } });
+async function firestoreDocument(path, token = '') {
+  const headers = { accept: 'application/json' };
+  if (token) headers.authorization = `Bearer ${token}`;
+  const response = await fetch(`${FIRESTORE_ROOT}/${path}`, { headers });
   if (!response.ok) return null;
   const document = await response.json();
   return firestoreFields(document.fields);
+}
+
+function decodeBase64Url(value) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  return Uint8Array.from(atob(padded), character => character.charCodeAt(0));
+}
+
+async function verifyFirebaseToken(request) {
+  const authorization = request.headers.get('authorization') || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  const parts = token.split('.');
+  if (parts.length !== 3) throw new Error('Missing or invalid account session.');
+  const header = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[0])));
+  const claims = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[1])));
+  const now = Math.floor(Date.now() / 1000);
+  if (
+    header.alg !== 'RS256'
+    || !header.kid
+    || claims.aud !== 'gathering-app-109eb'
+    || claims.iss !== 'https://securetoken.google.com/gathering-app-109eb'
+    || typeof claims.sub !== 'string'
+    || claims.sub.length < 2
+    || claims.exp <= now
+    || claims.iat > now + 60
+  ) throw new Error('Invalid account session.');
+  const response = await fetch('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com');
+  if (!response.ok) throw new Error('Could not verify account session.');
+  const keys = await response.json();
+  const jwk = keys.keys?.find(candidate => candidate.kid === header.kid);
+  if (!jwk) throw new Error('Could not verify account session.');
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['verify'],
+  );
+  const verified = await crypto.subtle.verify(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    decodeBase64Url(parts[2]),
+    new TextEncoder().encode(`${parts[0]}.${parts[1]}`),
+  );
+  if (!verified) throw new Error('Invalid account session.');
+  return { token, claims };
+}
+
+async function deleteAccountPushData(request, env) {
+  try {
+    const { token, claims } = await verifyFirebaseToken(request);
+    const body = await request.json().catch(() => null);
+    if (!body || !safeSegment(body.guestUid))
+      return json(request, { error: 'Invalid account identity.' }, 400);
+    const profile = await firestoreDocument(`users/${encodeURIComponent(claims.sub)}`, token);
+    if (!profile || profile.uid !== claims.sub || profile.guestUid !== body.guestUid)
+      return json(request, { error: 'Account identity does not match.' }, 403);
+    let cursor;
+    let deleted = 0;
+    do {
+      const page = await env.PUSH_SUBSCRIPTIONS.list({ cursor });
+      const records = await Promise.all(page.keys.map(async key => ({
+        key: key.name,
+        value: await env.PUSH_SUBSCRIPTIONS.get(key.name, 'json'),
+      })));
+      const matching = records.filter(record => record.value
+        && (record.value.actorUid === body.guestUid || record.value.actorUid === claims.sub));
+      await Promise.all(matching.map(record => env.PUSH_SUBSCRIPTIONS.delete(record.key)));
+      deleted += matching.length;
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+    return json(request, { ok: true, deleted });
+  } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : 'Account cleanup failed.' }, 401);
+  }
 }
 
 async function subscribe(request, env) {
@@ -180,6 +257,7 @@ export default {
       if (incomingUrl.pathname === '/api/push/subscribe' && request.method === 'POST') return subscribe(request, env);
       if (incomingUrl.pathname === '/api/push/subscribe' && request.method === 'DELETE') return unsubscribe(request, env);
       if (incomingUrl.pathname === '/api/push/send' && request.method === 'POST') return sendPush(request, env, context);
+      if (incomingUrl.pathname === '/api/push/account' && request.method === 'DELETE') return deleteAccountPushData(request, env);
       return json(request, { error: 'Not found.' }, 404);
     }
 
