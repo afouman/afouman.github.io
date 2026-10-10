@@ -7,7 +7,8 @@ const VAPID_PUBLIC_KEY = 'BBLVoXFRiUDSV72gImtZXfRgu92qgCEmBY-nByHqKDiaQrB7uEkvAW
 const ALLOWED_ORIGINS = new Set(['https://gaemaj.tech', 'https://www.gaemaj.tech', 'https://afouman.github.io']);
 
 const APP_ASSETS = new Set([
-  '/favicon.svg', '/manifest.webmanifest', '/og.png', '/sw.js',
+  '/favicon.svg', '/manifest.webmanifest', '/manifest-guest.webmanifest',
+  '/manifest-host.webmanifest', '/og.png', '/sw.js',
   '/vinext-client-entry-manifest.json', '/gather-birthday-party-hero.jpg',
   '/gather-custom-event-hero.jpg', '/gather-dinner-hero.jpg',
   '/gather-game-night-hero.jpg', '/gather-movie-night-hero.jpg',
