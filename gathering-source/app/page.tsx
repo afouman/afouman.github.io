@@ -7,7 +7,6 @@ import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
   ArrowLeft,
   Bell,
-  BellOff,
   BellRing,
   BookUser,
   CalendarPlus,
@@ -749,6 +748,11 @@ const eventRoute = (
 };
 const hostHomeRoute = () => usesCleanEventUrls() ? '/nights-host/' : '?view=host';
 const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1';
+const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const serviceWorkerLocation = () => usesCleanEventUrls()
+  ? { url: new URL('/sw.js?v=39', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=39', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -1890,11 +1894,23 @@ export default function Home() {
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
-      const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=38', window.location.origin)
-        : new URL('sw.js?v=38', document.baseURI);
+      const serviceWorker = serviceWorkerLocation();
       void navigator.serviceWorker
-        .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
+        .register(serviceWorker.url.href, { scope: serviceWorker.scope, updateViaCache: 'none' })
+        .then(async () => {
+          const desiredScope = new URL(serviceWorker.scope, serviceWorker.url).href;
+          const workerPath = serviceWorker.url.pathname;
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(registrations
+            .filter((registration) => registration.scope !== desiredScope)
+            .filter((registration) => {
+              const scriptUrl = registration.active?.scriptURL
+                || registration.waiting?.scriptURL
+                || registration.installing?.scriptURL;
+              return Boolean(scriptUrl && new URL(scriptUrl).pathname === workerPath);
+            })
+            .map((registration) => registration.unregister()));
+        })
         .catch(() => undefined);
     }
   }, [mode]);
@@ -2453,11 +2469,9 @@ export default function Home() {
   }, [accountUser]);
 
   const ensureBrowserPushSubscription = useCallback(async () => {
-    const workerUrl = usesCleanEventUrls()
-      ? new URL('/sw.js?v=38', window.location.origin)
-      : new URL('sw.js?v=38', document.baseURI);
-    const registration = await navigator.serviceWorker.register(workerUrl.href, {
-      scope: './',
+    const serviceWorker = serviceWorkerLocation();
+    const registration = await navigator.serviceWorker.register(serviceWorker.url.href, {
+      scope: serviceWorker.scope,
       updateViaCache: 'none',
     });
     await navigator.serviceWorker.ready;
@@ -2537,9 +2551,8 @@ export default function Home() {
       notify('This browser does not support web-app notifications.');
       return false;
     }
-    const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-    if (isAppleMobile && !isStandalone) {
-      notify('On iPhone, add Nights to the Home Screen before enabling notifications.');
+    if (isAppleMobileDevice() && !isStandalone) {
+      notify('On iPhone or iPad, install Nights on the Home Screen before enabling notifications.');
       return false;
     }
     return true;
@@ -2861,17 +2874,14 @@ export default function Home() {
       if (providerName === 'apple' && provider instanceof authModule.OAuthProvider)
         provider.addScope('email');
       const auth = authModule.getAuth(getApp());
-      const redirectSignIn = isStandalone || /iPhone|iPad|iPod/i.test(navigator.userAgent);
-      if (redirectSignIn) {
-        await authModule.signInWithRedirect(auth, provider);
-        return;
-      }
       const result = await authModule.signInWithPopup(auth, provider);
       if (!result.user.email) notify('Add an email to your Apple account before continuing.');
     } catch (error) {
       const code = (error as { code?: string }).code;
       notify(code === 'auth/popup-closed-by-user'
         ? 'Sign-in was closed before it finished.'
+        : code === 'auth/popup-blocked'
+          ? 'Allow pop-ups for Nights, then try signing in again.'
         : code === 'auth/operation-not-allowed'
           ? `${providerName === 'apple' ? 'Apple' : 'Google'} sign-in still needs to be enabled in Firebase Authentication.`
           : code === 'auth/account-exists-with-different-credential'
@@ -4625,16 +4635,26 @@ export default function Home() {
             </button>}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
-              onClick={() => void (pushNotificationState === 'enabled'
-                ? disableChatNotifications()
-                : enableChatNotifications())}
-              disabled={!chatActor || pushNotificationBusy || pushNotificationState === 'unsupported'}
-              className={`chat-header-button ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
+              onClick={() => {
+                if (!chatActor) {
+                  notify(mode === 'guest'
+                    ? 'RSVP Going before enabling notifications for this event.'
+                    : 'Sign in before enabling event notifications.');
+                  return;
+                }
+                void (pushNotificationState === 'enabled'
+                  ? disableChatNotifications()
+                  : enableChatNotifications());
+              }}
+              disabled={pushNotificationBusy}
+              className={`chat-header-button notification-switch ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
+              role="switch"
+              aria-checked={pushNotificationState === 'enabled'}
               title={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
               aria-label={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
             >
-              {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
-              <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
+              <span>{pushNotificationState === 'enabled' ? 'Notifications' : currentEventMuted ? 'Muted' : 'Notify me'}</span>
+              <i className="notification-switch-track" aria-hidden="true"><b /></i>
             </button>}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
@@ -4788,9 +4808,20 @@ export default function Home() {
             <h2 id="settings-title" className="font-display">Settings</h2>
             <section className="settings-notification-row">
               <div><strong>Default notifications</strong><small>Automatically notify this device about messages in every eligible event. Event-level Notify Me controls can override this.</small></div>
-              <button type="button" className={notificationsDefaultEnabled ? 'enabled' : ''} disabled={pushNotificationBusy} onClick={() => void (notificationsDefaultEnabled
-                ? disableDefaultNotifications()
-                : enableDefaultNotifications())}>{pushNotificationBusy ? 'Updating…' : notificationsDefaultEnabled ? 'On' : 'Off'}</button>
+              <button
+                type="button"
+                className={`settings-notification-switch ${notificationsDefaultEnabled ? 'enabled' : ''}`}
+                role="switch"
+                aria-checked={notificationsDefaultEnabled}
+                aria-label="Default notifications"
+                disabled={pushNotificationBusy}
+                onClick={() => void (notificationsDefaultEnabled
+                  ? disableDefaultNotifications()
+                  : enableDefaultNotifications())}
+              >
+                <span>{pushNotificationBusy ? 'Updating…' : notificationsDefaultEnabled ? 'On' : 'Off'}</span>
+                <i className="notification-switch-track" aria-hidden="true"><b /></i>
+              </button>
             </section>
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
@@ -6514,9 +6545,11 @@ function EventChat({
               {PUSH_NOTIFICATIONS_ENABLED && (
                 <button
                   type="button"
-                  className={pushNotificationState === 'enabled' ? 'enabled' : ''}
+                  className={`chat-notification-switch ${pushNotificationState === 'enabled' ? 'enabled' : ''}`}
                   onClick={onTogglePush}
-                  disabled={pushNotificationBusy || pushNotificationState === 'unsupported'}
+                  disabled={pushNotificationBusy}
+                  role="switch"
+                  aria-checked={pushNotificationState === 'enabled'}
                   aria-label={pushNotificationState === 'enabled'
                     ? 'Mute notifications for this event'
                     : eventMuted ? 'Unmute notifications for this event' : 'Turn on notifications for this event'}
@@ -6530,11 +6563,7 @@ function EventChat({
                         ? 'Notifications are not supported here'
                         : 'Notify me about new messages'}
                 >
-                  {pushNotificationState === 'enabled'
-                    ? <BellRing size={18} />
-                    : pushNotificationState === 'blocked' || eventMuted
-                      ? <BellOff size={18} />
-                      : <Bell size={18} />}
+                  <i className="notification-switch-track" aria-hidden="true"><b /></i>
                 </button>
               )}
               <button type="button" onClick={() => { rememberReadPosition(); onMinimize(); }} aria-label="Minimize chat"><Minus size={20} /></button>
@@ -7032,11 +7061,18 @@ function HostWorkspace({
                   {contacts.map((contact) => {
                     const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
                     const identifier = contact.email || formatPhone(contact.phone);
+                    const invited = eventInvitations.some((invitation) => invitation.recipientUid === contact.accountUid);
                     return (
-                      <button type="button" key={contact.accountUid} onClick={() => setInviteIdentifier(identifier)}>
+                      <button
+                        type="button"
+                        key={contact.accountUid}
+                        className={invited ? 'invited' : ''}
+                        disabled={invited}
+                        onClick={() => setInviteIdentifier(identifier)}
+                      >
                         <span className="host-contact-avatar">{name.slice(0, 1).toUpperCase()}</span>
                         <span><strong>{name}</strong><small>{contact.email}</small><small>{formatPhone(contact.phone)}</small></span>
-                        <b>Invite</b>
+                        <b>{invited ? <><Check size={13} /> Invited</> : 'Invite'}</b>
                       </button>
                     );
                   })}

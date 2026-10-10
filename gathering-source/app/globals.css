@@ -1762,8 +1762,14 @@ button:disabled {
 .settings-notification-row > div { display: grid; gap: 0.3rem; }
 .settings-notification-row strong { font-size: 0.8rem; }
 .settings-notification-row small { max-width: 330px; color: rgb(23 54 59 / 0.58); font-size: 0.67rem; line-height: 1.45; }
-.settings-notification-row > button { min-width: 58px; border: 0; border-radius: 999px; background: #dfe7e5; padding: 0.6rem 0.75rem; color: #526360; font-size: 0.7rem; font-weight: 900; }
-.settings-notification-row > button.enabled { background: #176d64; color: #fff; }
+.settings-notification-row > button.settings-notification-switch { display: flex; min-width: 92px; align-items: center; justify-content: flex-end; gap: 0.55rem; border: 0; background: transparent; padding: 0.35rem; color: #526360; font-size: 0.7rem; font-weight: 900; }
+.settings-notification-row > button.settings-notification-switch.enabled { background: transparent; color: #176d64; }
+.notification-switch-track { position: relative; display: inline-block; width: 42px; height: 24px; flex: none; border: 1px solid rgb(82 99 96 / 0.25); border-radius: 999px; background: #d9e1df; box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.08); transition: background 180ms ease, border-color 180ms ease; }
+.notification-switch-track > b { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgb(0 0 0 / 0.22); transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.enabled .notification-switch-track,
+.notification-enabled .notification-switch-track { border-color: #228979; background: #279887; }
+.enabled .notification-switch-track > b,
+.notification-enabled .notification-switch-track > b { transform: translateX(18px); }
 .delete-account-actions.single-action { grid-template-columns: 1fr; }
 .notification-onboarding-card {
   width: min(430px, 100%);
@@ -2520,6 +2526,12 @@ button:disabled {
   border-color: color-mix(in srgb, var(--tomato) 60%, transparent);
   background: var(--tomato);
 }
+.chat-header-button.notification-switch { gap: 0.65rem; padding-block: 0.42rem; padding-right: 0.5rem; }
+.chat-header-button.notification-switch.notification-enabled { border-color: rgb(39 152 135 / 0.48); background: var(--ink); }
+.chat-header-button.notification-switch .notification-switch-track { width: 38px; height: 22px; border-color: rgb(255 255 255 / 0.2); background: rgb(255 255 255 / 0.18); }
+.chat-header-button.notification-switch .notification-switch-track > b { width: 16px; height: 16px; background: #fff; }
+.chat-header-button.notification-switch.notification-enabled .notification-switch-track { border-color: #55c5ad; background: #279887; }
+.chat-header-button.notification-switch.notification-enabled .notification-switch-track > b { transform: translateX(16px); }
 .chat-float-layer {
   position: fixed;
   z-index: 90;
@@ -2619,6 +2631,11 @@ button:disabled {
   background: rgb(242 166 142 / 0.16);
   color: var(--peach);
 }
+.chat-header-actions > button.chat-notification-switch { display: flex; width: 44px; height: 28px; border-radius: 999px; padding: 2px; }
+.chat-header-actions > button.chat-notification-switch:hover,
+.chat-header-actions > button.chat-notification-switch.enabled { background: transparent; }
+.chat-notification-switch .notification-switch-track { width: 40px; height: 24px; border-color: rgb(255 255 255 / 0.16); background: rgb(255 255 255 / 0.14); }
+.chat-notification-switch.enabled .notification-switch-track { border-color: #55c5ad; background: #279887; }
 .chat-header-actions > button:disabled { cursor: not-allowed; opacity: 0.35; }
 .chat-pinned-banner {
   display: flex;
@@ -3210,7 +3227,9 @@ button:disabled {
 .host-contact-list-scroll > button > span:nth-child(2) { display: grid; gap: 0.06rem; }
 .host-contact-list-scroll strong { font-size: 0.78rem; }
 .host-contact-list-scroll small { color: rgb(23 54 59 / 0.5); font-size: 0.64rem; }
-.host-contact-list-scroll b { color: #19766c; font-size: 0.69rem; }
+.host-contact-list-scroll b { display: inline-flex; align-items: center; gap: 0.25rem; color: #19766c; font-size: 0.69rem; }
+.host-contact-list-scroll > button.invited { cursor: default; border-color: rgb(39 152 135 / 0.2); background: #f1f7f4; opacity: 1; }
+.host-contact-list-scroll > button.invited b { color: rgb(23 54 59 / 0.48); }
 .host-contact-empty { margin-top: 0.8rem; border-radius: 0.8rem; background: rgb(18 59 66 / 0.05); padding: 1rem; color: rgb(23 54 59 / 0.5); font-size: 0.72rem; text-align: center; }
 .host-invitation-list-scroll { display: grid; max-height: 190px; overflow-y: auto; gap: 0.45rem; margin-top: 0.8rem; }
 .host-invitation-row { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.9rem; background: #fff; padding: 0.75rem; }
