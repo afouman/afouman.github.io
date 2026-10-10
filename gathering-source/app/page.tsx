@@ -7,6 +7,7 @@ import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
   ArrowLeft,
   Bell,
+  BellOff,
   BellRing,
   BookUser,
   CalendarPlus,
@@ -751,8 +752,8 @@ const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=39', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=39', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=40', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=40', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -4647,14 +4648,12 @@ export default function Home() {
                   : enableChatNotifications());
               }}
               disabled={pushNotificationBusy}
-              className={`chat-header-button notification-switch ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
-              role="switch"
-              aria-checked={pushNotificationState === 'enabled'}
+              className={`chat-header-button ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
               title={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
               aria-label={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
             >
-              <span>{pushNotificationState === 'enabled' ? 'Notifications' : currentEventMuted ? 'Muted' : 'Notify me'}</span>
-              <i className="notification-switch-track" aria-hidden="true"><b /></i>
+              {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
+              <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
@@ -6545,11 +6544,9 @@ function EventChat({
               {PUSH_NOTIFICATIONS_ENABLED && (
                 <button
                   type="button"
-                  className={`chat-notification-switch ${pushNotificationState === 'enabled' ? 'enabled' : ''}`}
+                  className={pushNotificationState === 'enabled' ? 'enabled' : ''}
                   onClick={onTogglePush}
                   disabled={pushNotificationBusy}
-                  role="switch"
-                  aria-checked={pushNotificationState === 'enabled'}
                   aria-label={pushNotificationState === 'enabled'
                     ? 'Mute notifications for this event'
                     : eventMuted ? 'Unmute notifications for this event' : 'Turn on notifications for this event'}
@@ -6563,7 +6560,11 @@ function EventChat({
                         ? 'Notifications are not supported here'
                         : 'Notify me about new messages'}
                 >
-                  <i className="notification-switch-track" aria-hidden="true"><b /></i>
+                  {pushNotificationState === 'enabled'
+                    ? <BellRing size={18} />
+                    : pushNotificationState === 'blocked' || eventMuted
+                      ? <BellOff size={18} />
+                      : <Bell size={18} />}
                 </button>
               )}
               <button type="button" onClick={() => { rememberReadPosition(); onMinimize(); }} aria-label="Minimize chat"><Minus size={20} /></button>
