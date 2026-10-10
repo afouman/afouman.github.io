@@ -21,10 +21,12 @@ import {
   ExternalLink,
   Flame,
   GripVertical,
+  House,
   ImagePlus,
   Leaf,
   ListChecks,
   LockKeyhole,
+  LogOut,
   MapPin,
   MessageCircle,
   Minus,
@@ -168,6 +170,7 @@ type AccountUser = {
 type AccountAuthMode = 'signin' | 'signup' | 'profile';
 type EventInvitation = {
   eventId: string;
+  eventTitle?: string;
   hostUid: string;
   recipientUid: string;
   recipientGuestUid: string;
@@ -557,7 +560,7 @@ const PUSH_NOTIFICATIONS_ENABLED =
   process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
 const PUSH_API_URL = 'https://gaemaj.tech/api/push';
 const callPushApi = async (
-  path: 'subscribe' | 'send' | 'account',
+  path: 'subscribe' | 'send' | 'invite' | 'account',
   method: 'POST' | 'DELETE',
   body: Record<string, unknown>,
   authToken = '',
@@ -632,6 +635,7 @@ const RESERVED_EVENT_PATHS = new Set([
   '_next',
   'gathering',
   'nights-guests',
+  'nights-guest',
   'nights-host',
   'icons',
   'favicon.svg',
@@ -651,7 +655,9 @@ const isGuestPortalUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment).toLowerCase());
   if (segments[0] === 'gathering') segments.shift();
-  return segments[0] === 'nights-guests' || url.searchParams.get('guest') === '1';
+  return segments[0] === 'nights-guest'
+    || segments[0] === 'nights-guests'
+    || url.searchParams.get('guest') === '1';
 };
 const isHostPortalUrl = (url: URL) => {
   const segments = url.pathname
@@ -682,7 +688,7 @@ const eventPublicPathFromUrl = (url: URL) => {
     .filter(Boolean)
     .map((segment) => decodeURIComponent(segment).toLowerCase());
   if (segments[0] === 'gathering') segments.shift();
-  if (segments[0] === 'nights-guests' || segments[0] === 'nights-host') return null;
+  if (segments[0] === 'nights-guest' || segments[0] === 'nights-guests' || segments[0] === 'nights-host') return null;
   return segments.length === 2
     && segments.every((segment) => EVENT_PATH_SEGMENT_PATTERN.test(segment))
     ? segments.join('/')
@@ -742,7 +748,7 @@ const eventRoute = (
     : `?event=${encodedEventId}`;
 };
 const hostHomeRoute = () => usesCleanEventUrls() ? '/nights-host/' : '?view=host';
-const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guests/' : '?guest=1';
+const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1';
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -1153,9 +1159,9 @@ export default function Home() {
   const [accountPhone, setAccountPhone] = useState('');
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState('');
-  const [deleteAccountPassword, setDeleteAccountPassword] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
+  const [notificationsDefaultEnabled, setNotificationsDefaultEnabled] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const [, setReceipts] = useState<Receipt[]>([]);
   const [rememberedOrder, setRememberedOrder] = useState<Order | null>(null);
@@ -1193,6 +1199,7 @@ export default function Home() {
   const [guestEventsBusy, setGuestEventsBusy] = useState(false);
   const [guestEventPickerOpen, setGuestEventPickerOpen] = useState(false);
   const [hostContacts, setHostContacts] = useState<HostContact[]>([]);
+  const [hostInvitations, setHostInvitations] = useState<EventInvitation[]>([]);
   const [pendingGuestEvent, setPendingGuestEvent] = useState<PendingGuestEvent | null>(null);
   const pendingEnrollmentRef = useRef('');
   const [newEvent, setNewEvent] = useState({
@@ -1598,6 +1605,7 @@ export default function Home() {
   useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile) return;
     let unsubscribe = () => {};
+    const notifiedPrefix = `nights-invitation-notified:${accountUser.uid}:`;
     void (async () => {
       const [{ getApp }, store] = await Promise.all([
         import('firebase/app'), import('firebase/firestore'),
@@ -1612,7 +1620,25 @@ export default function Home() {
       };
       unsubscribe = store.onSnapshot(
         store.collection(db, 'users', accountUser.uid, 'invitations'),
-        () => void loadGuestEvents(session),
+        (snapshot) => {
+          void loadGuestEvents(session);
+          snapshot.docChanges().filter((change) => change.type === 'added').forEach((change) => {
+            const invitationData = change.doc.data();
+            const invitation = invitationData as EventInvitation;
+            const marker = `${notifiedPrefix}${change.doc.id}:${invitationData.updatedAt?.toMillis?.() || invitation.updatedAt || ''}`;
+            if (localStorage.getItem(marker)) return;
+            localStorage.setItem(marker, '1');
+            const title = invitation.eventTitle || 'a new event';
+            setToast(`You were invited to ${title}`);
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && 'serviceWorker' in navigator)
+              void navigator.serviceWorker.ready.then((registration) => registration.showNotification('You’re invited', {
+                body: `${title} is now waiting on your Nights home page.`,
+                icon: '/gathering/icons/nights-app-icon-192.png',
+                badge: '/gathering/icons/nights-favicon-48.png',
+                data: { url: guestHomeRoute() },
+              })).catch(() => undefined);
+          });
+        },
       );
     })();
     return () => unsubscribe();
@@ -1641,6 +1667,35 @@ export default function Home() {
           })
           .sort((left, right) => right.lastInvitedAt - left.lastInvitedAt)),
       );
+    })();
+    return () => unsubscribe();
+  }, [accountUser]);
+
+  useEffect(() => {
+    if (!firebaseConfigured || !accountUser) {
+      queueMicrotask(() => setHostInvitations([]));
+      return;
+    }
+    let unsubscribe = () => {};
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const invitationQuery = store.query(
+        store.collectionGroup(store.getFirestore(getApp()), 'invitations'),
+        store.where('hostUid', '==', accountUser.uid),
+      );
+      unsubscribe = store.onSnapshot(invitationQuery, (snapshot) => {
+        setHostInvitations(snapshot.docs.map((document) => {
+          const data = document.data();
+          return {
+            ...data,
+            eventId: data.eventId || document.id,
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: data.updatedAt?.toMillis?.(),
+          } as EventInvitation;
+        }));
+      }, () => setHostInvitations([]));
     })();
     return () => unsubscribe();
   }, [accountUser]);
@@ -1836,8 +1891,8 @@ export default function Home() {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorkerUrl = usesCleanEventUrls()
-        ? new URL('/sw.js?v=37', window.location.origin)
-        : new URL('sw.js?v=37', document.baseURI);
+        ? new URL('/sw.js?v=38', window.location.origin)
+        : new URL('sw.js?v=38', document.baseURI);
       void navigator.serviceWorker
         .register(serviceWorkerUrl.href, { scope: './', updateViaCache: 'none' })
         .catch(() => undefined);
@@ -2359,6 +2414,11 @@ export default function Home() {
   const currentEventMuted = Boolean(accountProfile?.mutedEventIds.includes(menu.id));
   const pushActorUid = chatActorUid;
   useEffect(() => {
+    queueMicrotask(() => setNotificationsDefaultEnabled(Boolean(
+      accountUser && localStorage.getItem(globalPushKey(accountUser.uid)),
+    )));
+  }, [accountUser]);
+  useEffect(() => {
     let nextState: PushNotificationState = 'disabled';
     if (!pushActorUid) {
       queueMicrotask(() => setPushNotificationState(nextState));
@@ -2375,7 +2435,6 @@ export default function Home() {
     } else {
       const enabled = !currentEventMuted
         && Notification.permission === 'granted'
-        && Boolean(accountUser && localStorage.getItem(globalPushKey(accountUser.uid)))
         && Boolean(localStorage.getItem(pushSubscriptionKey(menu.id, pushActorUid)));
       nextState = enabled ? 'enabled' : 'disabled';
     }
@@ -2395,8 +2454,8 @@ export default function Home() {
 
   const ensureBrowserPushSubscription = useCallback(async () => {
     const workerUrl = usesCleanEventUrls()
-      ? new URL('/sw.js?v=37', window.location.origin)
-      : new URL('sw.js?v=37', document.baseURI);
+      ? new URL('/sw.js?v=38', window.location.origin)
+      : new URL('sw.js?v=38', document.baseURI);
     const registration = await navigator.serviceWorker.register(workerUrl.href, {
       scope: './',
       updateViaCache: 'none',
@@ -2464,11 +2523,10 @@ export default function Home() {
     void syncGlobalPushTargets().catch(() => undefined);
   }, [accountProfile, accountUser, notificationTargets, syncGlobalPushTargets]);
 
-  const enableChatNotifications = async () => {
-    if (!accountUser || pushNotificationBusy) return;
+  const notificationPermissionReady = () => {
     if (!firebaseConfigured || !VAPID_PUBLIC_KEY || !PUSH_NOTIFICATIONS_ENABLED) {
       notify('Push notifications are not configured for this release yet.');
-      return;
+      return false;
     }
     if (
       typeof Notification === 'undefined'
@@ -2477,13 +2535,18 @@ export default function Home() {
     ) {
       setPushNotificationState('unsupported');
       notify('This browser does not support web-app notifications.');
-      return;
+      return false;
     }
     const isAppleMobile = /iPhone|iPad|iPod/i.test(navigator.userAgent);
     if (isAppleMobile && !isStandalone) {
       notify('On iPhone, add Nights to the Home Screen before enabling notifications.');
-      return;
+      return false;
     }
+    return true;
+  };
+
+  const enableChatNotifications = async () => {
+    if (!accountUser || !chatActor || pushNotificationBusy || !notificationPermissionReady()) return;
     setPushNotificationBusy(true);
     try {
       const permission = await Notification.requestPermission();
@@ -2499,22 +2562,80 @@ export default function Home() {
       if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
         throw new Error('The browser returned an incomplete push subscription.');
       const subscriptionId = await sha256Text(serialized.endpoint);
-      localStorage.setItem(globalPushKey(accountUser.uid), subscriptionId);
       if (currentEventMuted)
         await saveMutedEvents((accountProfile?.mutedEventIds || []).filter((eventId) => eventId !== menu.id));
-      await Promise.allSettled(notificationTargets
-        .filter((target) => target.event.id !== menu.id || !currentEventMuted || Boolean(chatActor))
-        .filter((target) => !(accountProfile?.mutedEventIds || []).includes(target.event.id) || target.event.id === menu.id)
-        .map((target) => registerPushTarget(target, serialized, subscriptionId)));
+      await registerPushTarget({ event: menu, actor: chatActor }, serialized, subscriptionId);
       setPushNotificationState('enabled');
       setShowNotificationPrompt(false);
       localStorage.setItem(notificationPromptKey(accountUser.uid), 'enabled');
-      notify(currentEventMuted
-        ? 'Notifications are back on for this event.'
-        : 'Notifications are on for all your events.');
+      notify('Notifications are on for this event.');
     } catch (error) {
       setPushNotificationState('disabled');
       notify(error instanceof Error ? error.message : 'Could not enable notifications.');
+    } finally {
+      setPushNotificationBusy(false);
+    }
+  };
+
+  const enableDefaultNotifications = async () => {
+    if (!accountUser || pushNotificationBusy || !notificationPermissionReady()) return;
+    setPushNotificationBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setPushNotificationState(permission === 'denied' ? 'blocked' : 'disabled');
+        notify(permission === 'denied'
+          ? 'Notifications are blocked. Enable them for Nights in device settings.'
+          : 'Notification permission was not enabled.');
+        return;
+      }
+      const subscription = await ensureBrowserPushSubscription();
+      const serialized = subscription.toJSON();
+      if (!serialized.endpoint || !serialized.keys?.p256dh || !serialized.keys?.auth)
+        throw new Error('The browser returned an incomplete push subscription.');
+      const subscriptionId = await sha256Text(serialized.endpoint);
+      localStorage.setItem(globalPushKey(accountUser.uid), subscriptionId);
+      setNotificationsDefaultEnabled(true);
+      const muted = new Set(accountProfile?.mutedEventIds || []);
+      await Promise.allSettled(notificationTargets
+        .filter((target) => !muted.has(target.event.id))
+        .map((target) => registerPushTarget(target, serialized, subscriptionId)));
+      setShowNotificationPrompt(false);
+      localStorage.setItem(notificationPromptKey(accountUser.uid), 'enabled');
+      notify('New eligible events will notify you by default.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not enable default notifications.');
+    } finally {
+      setPushNotificationBusy(false);
+    }
+  };
+
+  const disableDefaultNotifications = async () => {
+    if (!accountUser || pushNotificationBusy) return;
+    setPushNotificationBusy(true);
+    try {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const db = store.getFirestore(getApp());
+      await Promise.allSettled(notificationTargets.map(async (target) => {
+        const storageKey = pushSubscriptionKey(target.event.id, target.actor.uid);
+        const subscriptionId = localStorage.getItem(storageKey);
+        if (!subscriptionId) return;
+        try {
+          await Promise.allSettled([
+            store.deleteDoc(store.doc(db, 'events', target.event.id, 'pushSubscriptions', subscriptionId)),
+            callPushApi('subscribe', 'DELETE', { eventId: target.event.id, subscriptionId }),
+          ]);
+        } finally {
+          localStorage.removeItem(storageKey);
+        }
+      }));
+      localStorage.removeItem(globalPushKey(accountUser.uid));
+      await saveMutedEvents([]);
+      setNotificationsDefaultEnabled(false);
+      setPushNotificationState('disabled');
+      notify('Default notifications are off. You can still enable individual events.');
     } finally {
       setPushNotificationBusy(false);
     }
@@ -2541,9 +2662,10 @@ export default function Home() {
         await callPushApi('subscribe', 'DELETE', { eventId: menu.id, subscriptionId });
       }
       localStorage.removeItem(storageKey);
-      await saveMutedEvents([...new Set([...accountProfile.mutedEventIds, menu.id])]);
+      if (notificationsDefaultEnabled)
+        await saveMutedEvents([...new Set([...accountProfile.mutedEventIds, menu.id])]);
       setPushNotificationState('disabled');
-      notify('Notifications are muted for this event. Your other events stay on.');
+      notify('Notifications are off for this event.');
     } catch {
       notify('Could not turn off notifications. Try again.');
     } finally {
@@ -2792,6 +2914,7 @@ export default function Home() {
   };
 
   const signOutAccount = async () => {
+    const destination = mode === 'host' ? hostHomeRoute() : guestHomeRoute();
     if (firebaseConfigured) {
       const [{ getApp }, authModule] = await Promise.all([
         import('firebase/app'), import('firebase/auth'),
@@ -2803,9 +2926,10 @@ export default function Home() {
     setAccountProfile(null);
     setAccountUser(null);
     setHostUser(null);
+    window.location.assign(destination);
   };
   const deleteAccountPermanently = async () => {
-    if (!accountUser || deleteAccountConfirmation !== 'DELETE') return;
+    if (!accountUser) return;
     setDeleteAccountBusy(true);
     try {
       const [{ getApp }, authModule, store] = await Promise.all([
@@ -2819,11 +2943,7 @@ export default function Home() {
       const signedInAt = Date.parse(user.metadata.lastSignInTime || '');
       if (!Number.isFinite(signedInAt) || Date.now() - signedInAt > 4 * 60 * 1000) {
         if (accountUser.providerIds.includes('password')) {
-          if (!deleteAccountPassword) throw new Error('Enter your password to confirm account deletion.');
-          await authModule.reauthenticateWithCredential(
-            user,
-            authModule.EmailAuthProvider.credential(accountUser.email, deleteAccountPassword),
-          );
+          throw new Error('For security, sign out and sign in again immediately before deleting your account.');
         } else if (accountUser.providerIds.includes('google.com')) {
           await authModule.reauthenticateWithPopup(user, new authModule.GoogleAuthProvider());
         } else if (accountUser.providerIds.includes('apple.com')) {
@@ -3008,8 +3128,8 @@ export default function Home() {
       return false;
     }
     try {
-      const [{ getApp }, store] = await Promise.all([
-        import('firebase/app'), import('firebase/firestore'),
+      const [{ getApp }, authModule, store] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
       ]);
       const db = store.getFirestore(getApp());
       let targetUid = '';
@@ -3074,6 +3194,7 @@ export default function Home() {
           throw new Error('phone-conflict');
         transaction.set(invitationRef, {
           eventId: event.id,
+          eventTitle: event.title,
           hostUid: accountUser.uid,
           recipientUid: targetUid,
           recipientGuestUid: directory.guestUid,
@@ -3114,6 +3235,14 @@ export default function Home() {
           });
         }
       });
+      const currentUser = authModule.getAuth(getApp()).currentUser;
+      if (currentUser) {
+        const idToken = await currentUser.getIdToken();
+        await callPushApi('invite', 'POST', {
+          eventId: event.id,
+          recipientUid: targetUid,
+        }, idToken).catch(() => undefined);
+      }
       notify(`${displayName || directory.email} was invited`);
       return true;
     } catch (error) {
@@ -3126,6 +3255,57 @@ export default function Home() {
           : reason === 'permission-denied' || firebaseCode === 'permission-denied' || firebaseCode === 'firestore/permission-denied'
             ? 'Invitations need the updated Firebase rules before they can be sent'
             : 'The invitation could not be sent. Try again.');
+      return false;
+    }
+  };
+  const revokeRegisteredGuest = async (event: EventMenu, invitation: EventInvitation) => {
+    if (!accountUser || invitation.hostUid !== accountUser.uid) return false;
+    try {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const db = store.getFirestore(getApp());
+      const invitationRef = store.doc(db, 'users', invitation.recipientUid, 'invitations', event.id);
+      const profileRef = store.doc(db, 'events', event.id, 'guests', invitation.recipientGuestUid);
+      const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', invitation.recipientGuestUid);
+      const [profileDocument, orderSnapshot, subscriptionSnapshot] = await Promise.all([
+        store.getDoc(profileRef),
+        store.getDocs(store.query(
+          store.collection(db, 'events', event.id, 'orders'),
+          store.where('guestUid', '==', invitation.recipientGuestUid),
+        )),
+        store.getDocs(store.query(
+          store.collection(db, 'events', event.id, 'pushSubscriptions'),
+          store.where('actorUid', '==', invitation.recipientGuestUid),
+        )),
+      ]);
+      const profile = profileDocument.data();
+      const batch = store.writeBatch(db);
+      batch.delete(invitationRef);
+      batch.delete(rsvpRef);
+      batch.delete(profileRef);
+      orderSnapshot.docs.forEach((document) => batch.delete(document.ref));
+      subscriptionSnapshot.docs.forEach((document) => batch.delete(document.ref));
+      if (profile?.guestName) {
+        const nameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(profile.guestName));
+        const nameClaim = await store.getDoc(nameRef);
+        if (nameClaim.data()?.guestUid === invitation.recipientGuestUid) batch.delete(nameRef);
+      }
+      if (profile?.guestPhone) {
+        const phoneRef = store.doc(db, 'events', event.id, 'guest-phones', await guestNameIndexId(profile.guestPhone));
+        const phoneClaim = await store.getDoc(phoneRef);
+        if (phoneClaim.data()?.guestUid === invitation.recipientGuestUid) batch.delete(phoneRef);
+      }
+      await batch.commit();
+      await Promise.allSettled(subscriptionSnapshot.docs.map((document) => callPushApi(
+        'subscribe',
+        'DELETE',
+        { eventId: event.id, subscriptionId: document.id },
+      )));
+      notify(`Invitation to ${invitation.recipientEmail || formatPhone(invitation.recipientPhone)} was revoked`);
+      return true;
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'The invitation could not be revoked.');
       return false;
     }
   };
@@ -3146,14 +3326,6 @@ export default function Home() {
       return;
     }
     window.location.assign(nextRoute);
-  };
-  const openGuestEventPicker = async () => {
-    if (!guestSession) {
-      window.location.assign(guestHomeRoute());
-      return;
-    }
-    setGuestEventPickerOpen(true);
-    await loadGuestEvents(guestSession);
   };
   const clearGuestAccess = () => {
     void signOutAccount();
@@ -4401,10 +4573,7 @@ export default function Home() {
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
           <button
-            onClick={() => {
-              if (!isStandalone)
-                window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute());
-            }}
+            onClick={() => window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute())}
             className="flex items-center gap-3"
             aria-label={mode === 'host' ? 'Nights Host home' : 'Open guest events'}
           >
@@ -4420,12 +4589,11 @@ export default function Home() {
               <button
                 type="button"
                 className="guest-event-switch-button"
-                onClick={() => void openGuestEventPicker()}
-                aria-label="Switch event"
+                onClick={() => window.location.assign(guestHomeRoute())}
+                aria-label="Open Nights home"
               >
-                <CalendarPlus size={15} />
-                <span>Events</span>
-                {guestEvents.length > 0 && <b>{guestEvents.length}</b>}
+                <House size={15} />
+                <span>Home</span>
               </button>
             )}
             {!isStandalone && (
@@ -4443,25 +4611,18 @@ export default function Home() {
                 <Smartphone size={14} /> Nights Host
               </span>
             )}
-            {accountUser && (
-              <>
-                <button
-                  type="button"
-                  className="persistent-profile-button"
-                  onClick={() => setProfileMenuOpen((current) => !current)}
-                  aria-label="Open user profile"
-                  aria-expanded={profileMenuOpen}
-                  title={accountUser.email}
-                >
-                  {accountProfile
-                    ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase()
-                    : <UsersRound size={17} />}
-                </button>
-                <button type="button" className="account-header-button persistent-sign-out" onClick={() => void signOutAccount()} title={`Signed in as ${accountUser.email}`}>
-                  <UsersRound size={15} /><span>Sign out</span>
-                </button>
-              </>
-            )}
+            {accountUser && <button
+              type="button"
+              className="persistent-profile-button"
+              onClick={() => setProfileMenuOpen((current) => !current)}
+              aria-label="Open user profile"
+              aria-expanded={profileMenuOpen}
+              title={accountUser.email}
+            >
+              {accountProfile
+                ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase()
+                : <UsersRound size={17} />}
+            </button>}
             {menu.id !== EMPTY_EVENT_ID && <button
               type="button"
               onClick={() => void (pushNotificationState === 'enabled'
@@ -4469,8 +4630,8 @@ export default function Home() {
                 : enableChatNotifications())}
               disabled={!chatActor || pushNotificationBusy || pushNotificationState === 'unsupported'}
               className={`chat-header-button ${pushNotificationState === 'enabled' ? 'notification-enabled' : ''}`}
-              title={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for all events'}
-              aria-label={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for all events'}
+              title={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
+              aria-label={pushNotificationState === 'enabled' ? 'Mute this event' : currentEventMuted ? 'Unmute this event' : 'Turn on notifications for this event'}
             >
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
@@ -4544,6 +4705,7 @@ export default function Home() {
           orders={orders}
           rsvps={rsvps}
           contacts={hostContacts}
+          invitations={hostInvitations}
           eventIncomingCounts={eventIncomingCounts}
           editing={editing}
           setEditing={setEditing}
@@ -4573,6 +4735,7 @@ export default function Home() {
           setRsvpOpen={setEventRsvpOpen}
           setChatOpen={setEventChatOpen}
           inviteGuest={inviteRegisteredGuest}
+          revokeInvitation={revokeRegisteredGuest}
           notify={notify}
         />
       )}
@@ -4600,14 +4763,40 @@ export default function Home() {
                 <small>{accountUser.email}</small>
               </div>
             </div>
+            <button type="button" className="profile-menu-action" onClick={() => {
+              setProfileMenuOpen(false);
+              setSettingsOpen(true);
+            }}><Settings2 size={16} /><span><strong>Settings</strong><small>Notifications and app preferences</small></span></button>
+            <button type="button" className="profile-menu-action" onClick={() => void signOutAccount()}>
+              <LogOut size={16} /><span><strong>Sign out</strong><small>Return to the login page</small></span>
+            </button>
             <button type="button" className="profile-menu-delete" onClick={() => {
               setProfileMenuOpen(false);
-              setDeleteAccountConfirmation('');
-              setDeleteAccountPassword('');
               setDeleteAccountOpen(true);
             }}><Trash2 size={16} /><span><strong>Delete account</strong><small>Permanently remove your account and data</small></span></button>
           </section>
         </>
+      )}
+
+      {settingsOpen && accountUser && (
+        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !pushNotificationBusy) setSettingsOpen(false);
+        }}>
+          <dialog open className="delete-account-dialog settings-dialog" aria-labelledby="settings-title">
+            <span className="settings-dialog-icon"><Settings2 size={24} /></span>
+            <p className="eyebrow">Account preferences</p>
+            <h2 id="settings-title" className="font-display">Settings</h2>
+            <section className="settings-notification-row">
+              <div><strong>Default notifications</strong><small>Automatically notify this device about messages in every eligible event. Event-level Notify Me controls can override this.</small></div>
+              <button type="button" className={notificationsDefaultEnabled ? 'enabled' : ''} disabled={pushNotificationBusy} onClick={() => void (notificationsDefaultEnabled
+                ? disableDefaultNotifications()
+                : enableDefaultNotifications())}>{pushNotificationBusy ? 'Updating…' : notificationsDefaultEnabled ? 'On' : 'Off'}</button>
+            </section>
+            <div className="delete-account-actions single-action">
+              <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
+            </div>
+          </dialog>
+        </div>
       )}
 
       {deleteAccountOpen && accountUser && (
@@ -4617,33 +4806,12 @@ export default function Home() {
           <dialog open className="delete-account-dialog" aria-labelledby="delete-account-title">
             <span className="delete-account-icon"><Trash2 size={24} /></span>
             <p className="eyebrow">Permanent account deletion</p>
-            <h2 id="delete-account-title" className="font-display">Delete everything?</h2>
-            <p>This permanently removes your Nights login and all data linked to it, including your profile, invitations, contacts, RSVPs, orders, messages, reactions, votes, notification registrations, and every event you host. It cannot be undone.</p>
-            {accountUser?.providerIds.includes('password') && (
-              <label className="field-label">Password
-                <input
-                  type="password"
-                  value={deleteAccountPassword}
-                  onChange={(event) => setDeleteAccountPassword(event.target.value)}
-                  className="field-input"
-                  autoComplete="current-password"
-                  placeholder="Confirm your password"
-                />
-              </label>
-            )}
-            <label className="field-label">Type DELETE to confirm
-              <input
-                value={deleteAccountConfirmation}
-                onChange={(event) => setDeleteAccountConfirmation(event.target.value.toUpperCase())}
-                className="field-input"
-                autoComplete="off"
-                placeholder="DELETE"
-              />
-            </label>
+            <h2 id="delete-account-title" className="font-display">Are you sure?</h2>
+            <p>Your account, RSVPs, orders, messages, notification registrations, and events you host will be permanently removed. Your RSVP will disappear from each host’s guest list. This cannot be undone.</p>
             <div className="delete-account-actions">
-              <button type="button" onClick={() => setDeleteAccountOpen(false)} disabled={deleteAccountBusy}>Keep account</button>
-              <button type="button" className="danger-button" onClick={() => void deleteAccountPermanently()} disabled={deleteAccountBusy || deleteAccountConfirmation !== 'DELETE'}>
-                {deleteAccountBusy ? 'Deleting everything…' : 'Delete account forever'}
+              <button type="button" onClick={() => setDeleteAccountOpen(false)} disabled={deleteAccountBusy}>Cancel</button>
+              <button type="button" className="danger-button" onClick={() => void deleteAccountPermanently()} disabled={deleteAccountBusy}>
+                {deleteAccountBusy ? 'Deleting account…' : 'Yes, I’m sure — delete'}
               </button>
             </div>
           </dialog>
@@ -4977,7 +5145,7 @@ export default function Home() {
             <p className="eyebrow">Stay in the loop</p>
             <h2 className="font-display">Turn on Nights notifications</h2>
             <p>Get chat and event updates for all of your events. You can mute any single event without affecting the others.</p>
-            <button type="button" className="primary-button" disabled={pushNotificationBusy} onClick={() => void enableChatNotifications()}>
+            <button type="button" className="primary-button" disabled={pushNotificationBusy} onClick={() => void enableDefaultNotifications()}>
               <Bell size={17} /> {pushNotificationBusy ? 'Turning on…' : 'Turn on notifications'}
             </button>
             <button type="button" className="notification-onboarding-later" onClick={() => {
@@ -5038,7 +5206,7 @@ export default function Home() {
             <p className="install-note">
               {mode === 'host'
                 ? 'The Nights icon will reopen this event in the host view. '
-                : 'The blue and green Nights icon will reopen your guest dashboard at gaemaj.tech/nights-guests/. '}
+                : 'The blue and green Nights icon will reopen your guest dashboard at gaemaj.tech/nights-guest/. '}
               If an older Nights shortcut is already installed, remove it first—iOS does not refresh an existing Home Screen icon.
             </p>
             <button
@@ -6351,7 +6519,7 @@ function EventChat({
                   disabled={pushNotificationBusy || pushNotificationState === 'unsupported'}
                   aria-label={pushNotificationState === 'enabled'
                     ? 'Mute notifications for this event'
-                    : eventMuted ? 'Unmute notifications for this event' : 'Turn on notifications for all events'}
+                    : eventMuted ? 'Unmute notifications for this event' : 'Turn on notifications for this event'}
                   title={pushNotificationState === 'enabled'
                     ? 'Notifications on'
                     : eventMuted
@@ -6553,6 +6721,7 @@ function HostWorkspace({
   orders,
   rsvps,
   contacts,
+  invitations,
   eventIncomingCounts,
   editing,
   setEditing,
@@ -6577,6 +6746,7 @@ function HostWorkspace({
   setRsvpOpen,
   setChatOpen,
   inviteGuest,
+  revokeInvitation,
   notify,
 }: {
   events: EventMenu[];
@@ -6584,6 +6754,7 @@ function HostWorkspace({
   orders: Order[];
   rsvps: Rsvp[];
   contacts: HostContact[];
+  invitations: EventInvitation[];
   eventIncomingCounts: Record<string, number>;
   editing: boolean;
   setEditing: (value: boolean) => void;
@@ -6608,11 +6779,14 @@ function HostWorkspace({
   setRsvpOpen: (rsvpOpen: boolean) => Promise<void>;
   setChatOpen: (chatOpen: boolean) => Promise<void>;
   inviteGuest: (event: EventMenu, identifier: string) => Promise<boolean>;
+  revokeInvitation: (event: EventMenu, invitation: EventInvitation) => Promise<boolean>;
   notify: (message: string) => void;
 }) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [inviteIdentifier, setInviteIdentifier] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [revokeBusy, setRevokeBusy] = useState('');
+  const eventInvitations = invitations.filter((invitation) => invitation.eventId === menu.id);
   const activeOrders = orders.filter(
     (order) => order.status === 'new' || order.status === 'preparing',
   ).length;
@@ -6832,6 +7006,25 @@ function HostWorkspace({
                 }).finally(() => setInviteBusy(false));
               }}><Send size={16} /> {inviteBusy ? 'Sending…' : 'Send invite'}</button>
             </div>
+            <section className="host-invitation-list">
+              <div className="host-contact-list-heading"><Send size={17} /><div><strong>Invited guests</strong><span>Revoke an invitation and remove that guest’s event access</span></div></div>
+              {eventInvitations.length ? (
+                <div className="host-invitation-list-scroll">
+                  {eventInvitations.map((invitation) => {
+                    const label = invitation.recipientEmail || formatPhone(invitation.recipientPhone);
+                    return (
+                      <div key={`${invitation.recipientUid}:${invitation.eventId}`} className="host-invitation-row">
+                        <span><strong>{label}</strong><small>{formatPhone(invitation.recipientPhone)}</small></span>
+                        <button type="button" className="danger-link" disabled={Boolean(revokeBusy)} onClick={() => {
+                          setRevokeBusy(invitation.recipientUid);
+                          void revokeInvitation(menu, invitation).finally(() => setRevokeBusy(''));
+                        }}>{revokeBusy === invitation.recipientUid ? 'Revoking…' : 'Revoke'}</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <p className="host-contact-empty">No active invitations for this event.</p>}
+            </section>
             <section className="host-contact-list">
               <div className="host-contact-list-heading"><BookUser size={17} /><div><strong>Contacts</strong><span>People you have invited before</span></div></div>
               {contacts.length ? (

@@ -194,6 +194,77 @@ async function listEventSubscriptions(env, eventId) {
   return records;
 }
 
+async function listAccountSubscriptions(env, actorUid) {
+  let cursor;
+  const records = [];
+  do {
+    const page = await env.PUSH_SUBSCRIPTIONS.list({ cursor });
+    const values = await Promise.all(page.keys
+      .filter((key) => key.name.startsWith('subscription:'))
+      .map((key) => env.PUSH_SUBSCRIPTIONS.get(key.name, 'json')));
+    records.push(...values.filter((record) => record?.actorUid === actorUid));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+  return [...new Map(records.map((record) => [record.subscription?.endpoint, record])).values()];
+}
+
+async function sendInvitationPush(request, env, context) {
+  try {
+    const { token, claims } = await verifyFirebaseToken(request);
+    const body = await request.json().catch(() => null);
+    if (!body || !safeSegment(body.eventId) || !safeSegment(body.recipientUid))
+      return json(request, { error: 'Invalid invitation.' }, 400);
+    const [invitation, event] = await Promise.all([
+      firestoreDocument(
+        `users/${encodeURIComponent(body.recipientUid)}/invitations/${encodeURIComponent(body.eventId)}`,
+        token,
+      ),
+      firestoreDocument(`events/${encodeURIComponent(body.eventId)}`, token),
+    ]);
+    if (
+      !invitation
+      || invitation.hostUid !== claims.sub
+      || invitation.recipientUid !== body.recipientUid
+      || invitation.eventId !== body.eventId
+    ) return json(request, { error: 'Invitation not found.' }, 403);
+    const sentKey = `invite-sent:${body.eventId}:${body.recipientUid}:${Date.parse(invitation.updatedAt || '') || 0}`;
+    if (await env.PUSH_SUBSCRIPTIONS.get(sentKey)) return json(request, { ok: true, duplicate: true });
+    await env.PUSH_SUBSCRIPTIONS.put(sentKey, '1', { expirationTtl: 60 * 60 * 24 * 7 });
+    const subscriptions = await listAccountSubscriptions(env, invitation.recipientGuestUid);
+    const vapid = {
+      subject: 'mailto:alaki.dolaki.holholaki@gmail.com',
+      publicKey: VAPID_PUBLIC_KEY,
+      privateKey: env.VAPID_PRIVATE_KEY,
+    };
+    const title = event?.title || invitation.eventTitle || 'a new event';
+    context.waitUntil(Promise.all(subscriptions.map(async (record) => {
+      try {
+        const payload = await buildPushPayload(
+          {
+            data: JSON.stringify({
+              title: 'You’re invited',
+              body: `${title} is waiting on your Nights home page.`,
+              tag: `nights-invitation-${body.eventId}`,
+              url: 'https://gaemaj.tech/nights-guest/',
+            }),
+            options: { ttl: 86400, urgency: 'normal' },
+          },
+          record.subscription,
+          vapid,
+        );
+        const response = await fetch(record.subscription.endpoint, payload);
+        if (response.status === 404 || response.status === 410)
+          await env.PUSH_SUBSCRIPTIONS.delete(`subscription:${record.eventId}:${record.subscriptionId}`);
+      } catch (error) {
+        console.error('Invitation push delivery failed', error);
+      }
+    })));
+    return json(request, { ok: true, recipients: subscriptions.length });
+  } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : 'Invitation notification failed.' }, 401);
+  }
+}
+
 async function sendPush(request, env, context) {
   const body = await request.json().catch(() => null);
   if (!body || !safeSegment(body.eventId) || !safeSegment(body.messageId))
@@ -257,6 +328,7 @@ export default {
       if (incomingUrl.pathname === '/api/push/subscribe' && request.method === 'POST') return subscribe(request, env);
       if (incomingUrl.pathname === '/api/push/subscribe' && request.method === 'DELETE') return unsubscribe(request, env);
       if (incomingUrl.pathname === '/api/push/send' && request.method === 'POST') return sendPush(request, env, context);
+      if (incomingUrl.pathname === '/api/push/invite' && request.method === 'POST') return sendInvitationPush(request, env, context);
       if (incomingUrl.pathname === '/api/push/account' && request.method === 'DELETE') return deleteAccountPushData(request, env);
       return json(request, { error: 'Not found.' }, 404);
     }

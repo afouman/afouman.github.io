@@ -1678,23 +1678,12 @@ button:disabled {
   font-size: 0.72rem;
   font-weight: 800;
 }
-.app-header-actions { padding-right: 10.2rem; }
-.persistent-sign-out {
-  position: fixed;
-  z-index: 95;
-  top: calc(env(safe-area-inset-top) + 0.9rem);
-  right: 1rem;
-  border: 1px solid rgb(255 255 255 / 0.3);
-  background: #123b42;
-  color: #fff;
-  box-shadow: 0 8px 24px rgb(4 34 42 / 0.2);
-}
-.persistent-sign-out:hover { background: #0c2e35; }
+.app-header-actions { padding-right: 3.4rem; }
 .persistent-profile-button {
   position: fixed;
   z-index: 95;
   top: calc(env(safe-area-inset-top) + 0.9rem);
-  right: 7.35rem;
+  right: 1rem;
   display: grid;
   width: 2.45rem;
   height: 2.45rem;
@@ -1727,11 +1716,18 @@ button:disabled {
 .profile-menu-identity > div { display: grid; min-width: 0; gap: 0.08rem; }
 .profile-menu-identity strong { font-size: 0.78rem; }
 .profile-menu-identity small { overflow: hidden; color: rgb(23 54 59 / 0.52); font-size: 0.64rem; text-overflow: ellipsis; }
-.profile-menu-delete { display: flex; align-items: center; gap: 0.7rem; width: 100%; border: 0; border-top: 1px solid rgb(18 59 66 / 0.08); border-radius: 0.75rem; background: transparent; padding: 0.72rem; color: #983639; text-align: left; }
+.profile-menu-action,
+.profile-menu-delete { display: flex; align-items: center; gap: 0.7rem; width: 100%; border: 0; border-top: 1px solid rgb(18 59 66 / 0.08); border-radius: 0.75rem; background: transparent; padding: 0.72rem; color: #17363b; text-align: left; }
+.profile-menu-action:hover { background: #edf8f4; }
 .profile-menu-delete:hover { background: #fff0eb; }
+.profile-menu-delete { color: #983639; }
+.profile-menu-action > span,
 .profile-menu-delete > span { display: grid; gap: 0.08rem; }
+.profile-menu-action strong,
 .profile-menu-delete strong { font-size: 0.72rem; }
+.profile-menu-action small,
 .profile-menu-delete small { color: rgb(152 54 57 / 0.58); font-size: 0.61rem; }
+.profile-menu-action small { color: rgb(23 54 59 / 0.52); }
 .delete-account-backdrop {
   position: fixed;
   z-index: 130;
@@ -1761,6 +1757,14 @@ button:disabled {
 .delete-account-actions button:first-child { background: rgb(19 40 44 / 0.08); color: #17363b; }
 .delete-account-actions .danger-button { background: #8b2f31; color: #fff; }
 .delete-account-actions button:disabled { cursor: wait; opacity: 0.5; }
+.settings-dialog-icon { display: grid; width: 52px; height: 52px; margin-bottom: 1rem; place-items: center; border-radius: 1rem; background: #dcefe9; color: #176d64; }
+.settings-notification-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1.25rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 1.1rem; background: #fffdf8; padding: 1rem; }
+.settings-notification-row > div { display: grid; gap: 0.3rem; }
+.settings-notification-row strong { font-size: 0.8rem; }
+.settings-notification-row small { max-width: 330px; color: rgb(23 54 59 / 0.58); font-size: 0.67rem; line-height: 1.45; }
+.settings-notification-row > button { min-width: 58px; border: 0; border-radius: 999px; background: #dfe7e5; padding: 0.6rem 0.75rem; color: #526360; font-size: 0.7rem; font-weight: 900; }
+.settings-notification-row > button.enabled { background: #176d64; color: #fff; }
+.delete-account-actions.single-action { grid-template-columns: 1fr; }
 .notification-onboarding-card {
   width: min(430px, 100%);
   border: 1px solid rgb(255 255 255 / 0.18);
@@ -3150,7 +3154,7 @@ button:disabled {
 .invite-dialog {
   width: min(620px, 100%);
   max-height: min(86dvh, 780px);
-  overflow: hidden;
+  overflow-y: auto;
   border: 1px solid rgb(18 59 66 / 0.12);
   border-radius: 1.7rem;
   background: #f7f4ed;
@@ -3181,7 +3185,8 @@ button:disabled {
 }
 .invite-entry-row input:focus { border-color: #279887; box-shadow: 0 0 0 3px rgb(39 152 135 / 0.12); }
 .invite-entry-row .primary-button { height: 47px; justify-content: center; white-space: nowrap; }
-.host-contact-list { margin-top: 1.35rem; border-top: 1px solid rgb(18 59 66 / 0.1); padding-top: 1.1rem; }
+.host-contact-list,
+.host-invitation-list { margin-top: 1.35rem; border-top: 1px solid rgb(18 59 66 / 0.1); padding-top: 1.1rem; }
 .host-contact-list-heading { justify-content: flex-start; }
 .host-contact-list-heading > div { display: grid; gap: 0.08rem; }
 .host-contact-list-heading strong { font-size: 0.82rem; }
@@ -3207,6 +3212,13 @@ button:disabled {
 .host-contact-list-scroll small { color: rgb(23 54 59 / 0.5); font-size: 0.64rem; }
 .host-contact-list-scroll b { color: #19766c; font-size: 0.69rem; }
 .host-contact-empty { margin-top: 0.8rem; border-radius: 0.8rem; background: rgb(18 59 66 / 0.05); padding: 1rem; color: rgb(23 54 59 / 0.5); font-size: 0.72rem; text-align: center; }
+.host-invitation-list-scroll { display: grid; max-height: 190px; overflow-y: auto; gap: 0.45rem; margin-top: 0.8rem; }
+.host-invitation-row { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.9rem; background: #fff; padding: 0.75rem; }
+.host-invitation-row > span { display: grid; min-width: 0; gap: 0.08rem; }
+.host-invitation-row strong { overflow: hidden; font-size: 0.74rem; text-overflow: ellipsis; }
+.host-invitation-row small { color: rgb(23 54 59 / 0.48); font-size: 0.63rem; }
+.host-invitation-row .danger-link { flex: none; border: 0; border-radius: 999px; background: #fee8e1; padding: 0.55rem 0.72rem; color: #94383a; font-size: 0.67rem; font-weight: 900; }
+.host-invitation-row .danger-link:disabled { opacity: 0.5; }
 .order-board-heading {
   display: flex;
   align-items: end;
@@ -3491,19 +3503,10 @@ button:disabled {
     flex-direction: column;
     padding: 1rem 0.25rem;
   }
-  .app-header-actions { padding-right: 5.9rem; }
-  .persistent-sign-out {
-    top: calc(env(safe-area-inset-top) + 0.72rem);
-    right: 0.65rem;
-    width: 2.35rem;
-    height: 2.35rem;
-    justify-content: center;
-    padding: 0;
-  }
-  .persistent-sign-out span { display: none; }
+  .app-header-actions { padding-right: 2.9rem; }
   .persistent-profile-button {
     top: calc(env(safe-area-inset-top) + 0.72rem);
-    right: 3.25rem;
+    right: 0.65rem;
     width: 2.35rem;
     height: 2.35rem;
     justify-content: center;
