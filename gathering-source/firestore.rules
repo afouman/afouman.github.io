@@ -105,6 +105,15 @@ service cloud.firestore {
         && guestRsvp(eventId, guestUid).data.status == 'yes'
         && guestIsApprovedForEvent(eventId, guestUid);
     }
+    function guestCanUseExpenses(eventId) {
+      let guestUid = accountProfile().data.guestUid;
+      return hasCompleteAccount()
+        && exists(/databases/$(database)/documents/events/$(eventId)/expense-participants/$(guestUid))
+        && get(/databases/$(database)/documents/events/$(eventId)/expense-participants/$(guestUid)).data.accountUid == request.auth.uid
+        && exists(/databases/$(database)/documents/events/$(eventId)/rsvps/$(guestUid))
+        && guestRsvp(eventId, guestUid).data.status == 'yes'
+        && guestIsApprovedForEvent(eventId, guestUid);
+    }
     function validChatActor(eventId, data) {
       return (
         data.authorRole == 'host'
@@ -473,6 +482,120 @@ service cloud.firestore {
           ])
         );
         allow delete: if canManageEvent(eventId) || ownsGuestIdentity(resource.data.guestUid);
+      }
+
+      match /expense-participants/{participantId} {
+        allow read: if canManageEvent(eventId) || guestCanUseExpenses(eventId) || (
+          signedIn() && resource.data.accountUid == request.auth.uid
+        );
+        allow create: if canManageEvent(eventId) || (
+          hasCompleteAccount()
+          && request.resource.data.accountUid == request.auth.uid
+          && request.resource.data.primaryGuestUid == accountProfile().data.guestUid
+          && existsAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid))
+          && request.resource.data.status == getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid)).data.status
+          && request.resource.data.approvalStatus == getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid)).data.approvalStatus
+        )
+        && request.resource.data.keys().hasOnly([
+          'id', 'accountUid', 'primaryGuestUid', 'name', 'role', 'status',
+          'approvalStatus', 'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.id == participantId
+        && request.resource.data.accountUid is string
+        && request.resource.data.primaryGuestUid is string
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.role in ['host', 'guest', 'companion']
+        && request.resource.data.status in ['host', 'invited', 'yes', 'maybe', 'no']
+        && request.resource.data.approvalStatus in ['pending', 'approved', 'declined']
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+        allow update: if (canManageEvent(eventId) || (
+          hasCompleteAccount()
+          && resource.data.accountUid == request.auth.uid
+          && resource.data.primaryGuestUid == accountProfile().data.guestUid
+          && request.resource.data.accountUid == resource.data.accountUid
+          && request.resource.data.primaryGuestUid == resource.data.primaryGuestUid
+          && request.resource.data.role == resource.data.role
+          && (
+            (
+              existsAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid))
+              && request.resource.data.status == getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid)).data.status
+              && request.resource.data.approvalStatus == getAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid)).data.approvalStatus
+            ) || (
+              !existsAfter(/databases/$(database)/documents/events/$(eventId)/rsvps/$(accountProfile().data.guestUid))
+              && hasHostInvitation(eventId)
+              && request.resource.data.status == resource.data.status
+              && request.resource.data.approvalStatus == resource.data.approvalStatus
+            )
+          )
+        ))
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 80
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'status', 'approvalStatus', 'updatedAt'
+        ]);
+        allow delete: if canManageEvent(eventId) || (
+          hasCompleteAccount()
+          && resource.data.accountUid == request.auth.uid
+          && resource.data.primaryGuestUid == accountProfile().data.guestUid
+        );
+      }
+
+      match /expenses/{expenseId} {
+        allow read: if canManageEvent(eventId) || guestCanUseExpenses(eventId) || (
+          signedIn() && resource.data.submittedByAccountUid == request.auth.uid
+        );
+        allow create: if (canManageEvent(eventId) || (
+          guestCanUseExpenses(eventId)
+          && request.resource.data.submittedByAccountUid == request.auth.uid
+          && request.resource.data.submittedByUid == accountProfile().data.guestUid
+          && request.resource.data.submittedByRole == 'guest'
+        ))
+        && request.resource.data.keys().hasOnly([
+          'id', 'kind', 'title', 'items', 'taxCents', 'feesCents',
+          'submittedByAccountUid', 'submittedByUid', 'submittedByName',
+          'submittedByRole', 'receiptUrl', 'receiptPath', 'receiptName',
+          'createdAt', 'updatedAt'
+        ])
+        && request.resource.data.id == expenseId
+        && request.resource.data.kind in ['manual', 'receipt']
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 120
+        && request.resource.data.items is list
+        && request.resource.data.items.size() <= 50
+        && request.resource.data.taxCents is int
+        && request.resource.data.taxCents >= 0
+        && request.resource.data.feesCents is int
+        && request.resource.data.feesCents >= 0
+        && request.resource.data.submittedByAccountUid is string
+        && request.resource.data.submittedByUid is string
+        && request.resource.data.submittedByName is string
+        && request.resource.data.submittedByName.size() > 0
+        && request.resource.data.submittedByName.size() <= 80
+        && request.resource.data.submittedByRole in ['host', 'guest']
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && (
+          (request.resource.data.kind == 'manual' && request.resource.data.items.size() > 0)
+          || (
+            request.resource.data.kind == 'receipt'
+            && request.resource.data.items.size() == 0
+            && request.resource.data.receiptUrl is string
+            && request.resource.data.receiptPath is string
+            && request.resource.data.receiptName is string
+          )
+        );
+        allow update: if canManageEvent(eventId);
+        allow delete: if canManageEvent(eventId) || (
+          signedIn() && resource.data.submittedByAccountUid == request.auth.uid
+        );
       }
 
       match /name-index/{nameHash} {

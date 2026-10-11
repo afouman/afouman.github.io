@@ -17,8 +17,13 @@ import {
   ChevronRight,
   Clock3,
   Copy,
+  Calculator,
+  ChevronDown,
+  ChevronUp,
   Download,
+  DollarSign,
   ExternalLink,
+  FileText,
   Flame,
   GripVertical,
   House,
@@ -28,6 +33,7 @@ import {
   LockKeyhole,
   LogOut,
   MapPin,
+  Menu as MenuIcon,
   MessageCircle,
   Minus,
   Move,
@@ -45,6 +51,7 @@ import {
   Sparkles,
   SquarePlus,
   Trash2,
+  Upload,
   UtensilsCrossed,
   UsersRound,
   UserPlus,
@@ -178,6 +185,47 @@ type EventInvitation = {
   recipientPhone: string;
   createdAt: number;
   updatedAt?: number;
+};
+type ExpenseParticipant = {
+  id: string;
+  accountUid: string;
+  primaryGuestUid: string;
+  name: string;
+  role: 'host' | 'guest' | 'companion';
+  status: 'host' | 'invited' | 'yes' | 'maybe' | 'no';
+  approvalStatus: 'pending' | 'approved' | 'declined';
+  createdAt: number;
+  updatedAt?: number;
+};
+type ExpenseAllocation = { participantUid: string; multiplier: number };
+type ExpenseLineItem = {
+  id: string;
+  name: string;
+  amountCents: number;
+  allocations: ExpenseAllocation[];
+};
+type EventExpense = {
+  id: string;
+  kind: 'manual' | 'receipt';
+  title: string;
+  items: ExpenseLineItem[];
+  taxCents: number;
+  feesCents: number;
+  submittedByAccountUid: string;
+  submittedByUid: string;
+  submittedByName: string;
+  submittedByRole: 'host' | 'guest';
+  receiptUrl?: string;
+  receiptPath?: string;
+  receiptName?: string;
+  createdAt: number;
+  updatedAt?: number;
+};
+type ExpenseActor = {
+  accountUid: string;
+  participantUid: string;
+  name: string;
+  role: 'host' | 'guest';
 };
 type HostContact = {
   accountUid: string;
@@ -411,6 +459,55 @@ type Receipt = {
   createdAt: number;
   expiresAt: number;
 };
+const expensePreviewKey = (eventId: string) => `gather-demo-expenses:${eventId}`;
+const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const formatCents = (cents: number) => money.format(Math.max(0, cents) / 100);
+const parseMoneyCents = (value: string) => {
+  const amount = Number(value.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : 0;
+};
+const companionParticipantId = (guestUid: string, index: number) => `${guestUid}--companion-${index + 1}`;
+const allocateCents = (amountCents: number, allocations: ExpenseAllocation[]) => {
+  const active = allocations
+    .filter((allocation) => allocation.multiplier > 0)
+    .map((allocation) => ({ ...allocation, multiplier: Math.max(1, Math.round(allocation.multiplier)) }));
+  const result: Record<string, number> = {};
+  const totalWeight = active.reduce((sum, allocation) => sum + allocation.multiplier, 0);
+  if (!totalWeight || amountCents <= 0) return result;
+  let assigned = 0;
+  active.forEach((allocation) => {
+    const share = Math.floor(amountCents * allocation.multiplier / totalWeight);
+    result[allocation.participantUid] = (result[allocation.participantUid] || 0) + share;
+    assigned += share;
+  });
+  let remainder = amountCents - assigned;
+  for (let index = 0; remainder > 0; index = (index + 1) % active.length, remainder -= 1) {
+    const participantUid = active[index].participantUid;
+    result[participantUid] = (result[participantUid] || 0) + 1;
+  }
+  return result;
+};
+const expenseShares = (expense: EventExpense) => {
+  const shares: Record<string, number> = {};
+  expense.items.forEach((item) => {
+    Object.entries(allocateCents(item.amountCents, item.allocations)).forEach(([participantUid, cents]) => {
+      shares[participantUid] = (shares[participantUid] || 0) + cents;
+    });
+  });
+  const extras = Math.max(0, expense.taxCents) + Math.max(0, expense.feesCents);
+  const weighted = Object.entries(shares).map(([participantUid, cents]) => ({
+    participantUid,
+    multiplier: Math.max(1, cents),
+  }));
+  Object.entries(allocateCents(extras, weighted)).forEach(([participantUid, cents]) => {
+    shares[participantUid] = (shares[participantUid] || 0) + cents;
+  });
+  return shares;
+};
+const expenseTotal = (expense: Pick<EventExpense, 'items' | 'taxCents' | 'feesCents'>) =>
+  expense.items.reduce((sum, item) => sum + Math.max(0, item.amountCents), 0)
+  + Math.max(0, expense.taxCents)
+  + Math.max(0, expense.feesCents);
 type ModelContext = {
   registerTool: (
     tool: {
@@ -752,8 +849,8 @@ const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=40', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=40', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=41', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=41', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -1165,6 +1262,8 @@ export default function Home() {
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [eventMenuOpen, setEventMenuOpen] = useState(false);
+  const [expensesOpen, setExpensesOpen] = useState(false);
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
   const [notificationsDefaultEnabled, setNotificationsDefaultEnabled] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
@@ -1207,6 +1306,7 @@ export default function Home() {
   const [hostInvitations, setHostInvitations] = useState<EventInvitation[]>([]);
   const [pendingGuestEvent, setPendingGuestEvent] = useState<PendingGuestEvent | null>(null);
   const pendingEnrollmentRef = useRef('');
+  const ensuredHostMembershipsRef = useRef(new Set<string>());
   const [newEvent, setNewEvent] = useState({
     title: '',
     date: '',
@@ -1675,6 +1775,94 @@ export default function Home() {
     })();
     return () => unsubscribe();
   }, [accountUser]);
+
+  useEffect(() => {
+    if (!firebaseConfigured || !accountUser || !accountProfile || mode !== 'host') return;
+    const ownedEvents = events.filter((event) => event.ownerUid === accountUser.uid);
+    ownedEvents.forEach((event) => {
+      if (ensuredHostMembershipsRef.current.has(event.id)) return;
+      ensuredHostMembershipsRef.current.add(event.id);
+      void (async () => {
+        try {
+          const [{ getApp }, store] = await Promise.all([
+            import('firebase/app'), import('firebase/firestore'),
+          ]);
+          const db = store.getFirestore(getApp());
+          const guestUid = accountProfile.guestUid;
+          const displayName = accountDisplayName(accountProfile);
+          const fallbackName = `${displayName} · Host`;
+          const invitationRef = store.doc(db, 'users', accountUser.uid, 'invitations', event.id);
+          const profileRef = store.doc(db, 'events', event.id, 'guests', guestUid);
+          const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', guestUid);
+          const participantRef = store.doc(db, 'events', event.id, 'expense-participants', guestUid);
+          const primaryNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(displayName));
+          const fallbackNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(fallbackName));
+          const phoneRef = store.doc(db, 'events', event.id, 'guest-phones', await guestNameIndexId(accountProfile.phone));
+          await store.runTransaction(db, async (transaction) => {
+            const [invitation, profile, rsvp, participant, primaryName, fallbackClaim, phoneClaim] = await Promise.all([
+              transaction.get(invitationRef), transaction.get(profileRef), transaction.get(rsvpRef),
+              transaction.get(participantRef), transaction.get(primaryNameRef), transaction.get(fallbackNameRef),
+              transaction.get(phoneRef),
+            ]);
+            if (invitation.exists() && profile.exists() && rsvp.exists() && participant.exists()) return;
+            const guestName = profile.data()?.guestName
+              || (!primaryName.exists() || primaryName.data().guestUid === guestUid ? displayName : fallbackName);
+            const nameRef = guestName === displayName ? primaryNameRef : fallbackNameRef;
+            const nameClaim = guestName === displayName ? primaryName : fallbackClaim;
+            if (!invitation.exists()) transaction.set(invitationRef, {
+              eventId: event.id,
+              eventTitle: event.title,
+              hostUid: accountUser.uid,
+              recipientUid: accountUser.uid,
+              recipientGuestUid: guestUid,
+              recipientEmail: accountProfile.email,
+              recipientPhone: accountProfile.phone,
+              createdAt: store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+            if (!nameClaim.exists()) transaction.set(nameRef, {
+              guestUid, guestName, createdAt: store.serverTimestamp(),
+            });
+            if (!phoneClaim.exists()) transaction.set(phoneRef, {
+              guestUid, guestPhone: accountProfile.phone, createdAt: store.serverTimestamp(),
+            });
+            if (!profile.exists()) transaction.set(profileRef, {
+              guestUid,
+              accountUid: accountUser.uid,
+              guestName,
+              guestPhone: accountProfile.phone,
+              createdAt: store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+            if (!rsvp.exists()) transaction.set(rsvpRef, {
+              guestUid,
+              guestName,
+              guestPhone: accountProfile.phone,
+              status: 'yes',
+              companions: [],
+              activeOrderCount: 0,
+              approvalStatus: 'approved',
+              createdAt: store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+            transaction.set(participantRef, {
+              id: guestUid,
+              accountUid: accountUser.uid,
+              primaryGuestUid: guestUid,
+              name: guestName,
+              role: 'host',
+              status: 'host',
+              approvalStatus: 'approved',
+              createdAt: participant.data()?.createdAt || store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+          });
+        } catch {
+          ensuredHostMembershipsRef.current.delete(event.id);
+        }
+      })();
+    });
+  }, [accountProfile, accountUser, events, mode]);
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser) {
@@ -2340,6 +2528,22 @@ export default function Home() {
       ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
       : null,
   [effectiveGuestProfile, guestHasEventAccess, hostUser, menu.ownerUid, mode, myRsvp?.status]);
+  const expenseActor: ExpenseActor | null = useMemo(() => {
+    if (!accountUser || !accountProfile || menu.id === EMPTY_EVENT_ID) return null;
+    if (mode === 'host') return {
+      accountUid: accountUser.uid,
+      participantUid: accountProfile.guestUid,
+      name: accountDisplayName(accountProfile),
+      role: 'host',
+    };
+    if (myRsvp?.status !== 'yes' || !guestHasEventAccess || !effectiveGuestProfile) return null;
+    return {
+      accountUid: accountUser.uid,
+      participantUid: effectiveGuestProfile.guestUid,
+      name: effectiveGuestProfile.guestName,
+      role: 'guest',
+    };
+  }, [accountProfile, accountUser, effectiveGuestProfile, guestHasEventAccess, menu.id, mode, myRsvp?.status]);
   const chatActorUid = chatActor?.uid;
   useEffect(() => {
     if (!chatActorUid) return;
@@ -2943,10 +3147,11 @@ export default function Home() {
     if (!accountUser) return;
     setDeleteAccountBusy(true);
     try {
-      const [{ getApp }, authModule, store] = await Promise.all([
+      const [{ getApp }, authModule, store, storageModule] = await Promise.all([
         import('firebase/app'),
         import('firebase/auth'),
         import('firebase/firestore'),
+        import('firebase/storage'),
       ]);
       const auth = authModule.getAuth(getApp());
       const user = auth.currentUser;
@@ -3024,10 +3229,14 @@ export default function Home() {
         if (event.ownerUid === accountUser.uid || legacyOwned) {
           const collections = await Promise.all([
             'orders', 'rsvps', 'guests', 'guest-names', 'guest-phones',
-            'name-index', 'pushSubscriptions', 'chat',
+            'name-index', 'pushSubscriptions', 'chat', 'expense-participants', 'expenses',
           ].map((collectionName) => store.getDocs(
             store.collection(db, 'events', event.id, collectionName),
           )));
+          await Promise.allSettled(collections.flatMap((snapshot) => snapshot.docs)
+            .map((document) => document.data().receiptPath as string | undefined)
+            .filter((path): path is string => Boolean(path))
+            .map((path) => storageModule.deleteObject(storageModule.ref(storageModule.getStorage(getApp()), path))));
           collections.flatMap((snapshot) => snapshot.docs).forEach((document) => addDelete(document.ref));
           const publicPath = normalizedPublicEventPath(event.publicPath);
           const claimId = event.publicPathClaimId || (publicPath ? await guestNameIndexId(publicPath) : '');
@@ -3038,7 +3247,7 @@ export default function Home() {
 
         const profileRef = store.doc(db, 'events', event.id, 'guests', accountProfile.guestUid);
         const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', accountProfile.guestUid);
-        const [profileDocument, rsvpDocument, orderSnapshot, chatSnapshot] = await Promise.all([
+        const [profileDocument, rsvpDocument, orderSnapshot, chatSnapshot, participantSnapshot, expenseSnapshot] = await Promise.all([
           store.getDoc(profileRef),
           store.getDoc(rsvpRef),
           store.getDocs(store.query(
@@ -3046,6 +3255,14 @@ export default function Home() {
             store.where('guestUid', '==', accountProfile.guestUid),
           )),
           store.getDocs(store.collection(db, 'events', event.id, 'chat')),
+          store.getDocs(store.query(
+            store.collection(db, 'events', event.id, 'expense-participants'),
+            store.where('accountUid', '==', accountUser.uid),
+          )),
+          store.getDocs(store.query(
+            store.collection(db, 'events', event.id, 'expenses'),
+            store.where('submittedByAccountUid', '==', accountUser.uid),
+          )),
         ]);
         const profile = profileDocument.data();
         const authoredMessageIds = new Set(chatSnapshot.docs
@@ -3080,6 +3297,12 @@ export default function Home() {
           });
         });
         orderSnapshot.docs.forEach((document) => addDelete(document.ref));
+        participantSnapshot.docs.forEach((document) => addDelete(document.ref));
+        expenseSnapshot.docs.forEach((document) => addDelete(document.ref));
+        await Promise.allSettled(expenseSnapshot.docs
+          .map((document) => document.data().receiptPath as string | undefined)
+          .filter((path): path is string => Boolean(path))
+          .map((path) => storageModule.deleteObject(storageModule.ref(storageModule.getStorage(getApp()), path))));
         if (profile) {
           const nameClaimRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(profile.guestName));
           const phoneClaimRef = store.doc(db, 'events', event.id, 'guest-phones', await guestNameIndexId(profile.guestPhone));
@@ -3174,6 +3397,7 @@ export default function Home() {
       const invitationRef = store.doc(db, 'users', targetUid, 'invitations', event.id);
       const contactRef = store.doc(db, 'users', accountUser.uid, 'contacts', targetUid);
       const profileRef = store.doc(db, 'events', event.id, 'guests', directory.guestUid);
+      const participantRef = store.doc(db, 'events', event.id, 'expense-participants', directory.guestUid);
       const primaryNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(displayName));
       const fallbackNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(fallbackName));
       const phoneRef = store.doc(
@@ -3184,10 +3408,11 @@ export default function Home() {
         await guestNameIndexId(directory.phone),
       );
       await store.runTransaction(db, async (transaction) => {
-        const [invitation, contact, profile, primaryName, fallbackNameClaim, phoneClaim] = await Promise.all([
+        const [invitation, contact, profile, participant, primaryName, fallbackNameClaim, phoneClaim] = await Promise.all([
           transaction.get(invitationRef),
           transaction.get(contactRef),
           transaction.get(profileRef),
+          transaction.get(participantRef),
           transaction.get(primaryNameRef),
           transaction.get(fallbackNameRef),
           transaction.get(phoneRef),
@@ -3245,6 +3470,17 @@ export default function Home() {
             updatedAt: store.serverTimestamp(),
           });
         }
+        transaction.set(participantRef, {
+          id: directory.guestUid,
+          accountUid: targetUid,
+          primaryGuestUid: directory.guestUid,
+          name: guestName,
+          role: 'guest',
+          status: participant.data()?.status || 'invited',
+          approvalStatus: participant.data()?.approvalStatus || 'approved',
+          createdAt: participant.data()?.createdAt || store.serverTimestamp(),
+          updatedAt: store.serverTimestamp(),
+        });
       });
       const currentUser = authModule.getAuth(getApp()).currentUser;
       if (currentUser) {
@@ -3295,6 +3531,11 @@ export default function Home() {
       batch.delete(invitationRef);
       batch.delete(rsvpRef);
       batch.delete(profileRef);
+      const companionParticipants = await store.getDocs(store.query(
+        store.collection(db, 'events', event.id, 'expense-participants'),
+        store.where('primaryGuestUid', '==', invitation.recipientGuestUid),
+      ));
+      companionParticipants.docs.forEach((document) => batch.delete(document.ref));
       orderSnapshot.docs.forEach((document) => batch.delete(document.ref));
       subscriptionSnapshot.docs.forEach((document) => batch.delete(document.ref));
       if (profile?.guestName) {
@@ -3661,12 +3902,14 @@ export default function Home() {
         const db = store.getFirestore(getApp());
         const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
+        const participantRef = store.doc(db, 'events', menu.id, 'expense-participants', uid);
         const nameRef = store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(name));
         const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(normalizedPhone));
         await store.runTransaction(db, async (transaction) => {
           const prior = await transaction.get(profileRef);
           const priorProfile = prior.data();
           const priorRsvp = await transaction.get(rsvpRef);
+          const priorParticipant = await transaction.get(participantRef);
           const nameClaim = await transaction.get(nameRef);
           const phoneClaim = await transaction.get(phoneRef);
           const previous = prior.exists() ? priorProfile : priorRsvp.data();
@@ -3702,6 +3945,10 @@ export default function Home() {
           if (priorRsvp.exists()) transaction.update(rsvpRef, {
             guestName: name, guestPhone: normalizedPhone,
             activeOrderCount: priorRsvp.data().activeOrderCount || 0,
+            updatedAt: store.serverTimestamp(),
+          });
+          if (priorParticipant.exists()) transaction.update(participantRef, {
+            name,
             updatedAt: store.serverTimestamp(),
           });
         });
@@ -3802,8 +4049,17 @@ export default function Home() {
         const db = store.getFirestore(getApp());
         const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
+        const participantRef = store.doc(db, 'events', menu.id, 'expense-participants', uid);
         await store.runTransaction(db, async (transaction) => {
-          const [savedProfile, prior] = await Promise.all([transaction.get(profileRef), transaction.get(rsvpRef)]);
+          const [savedProfile, prior, participant] = await Promise.all([
+            transaction.get(profileRef), transaction.get(rsvpRef), transaction.get(participantRef),
+          ]);
+          const priorCompanionCount = Array.isArray(prior.data()?.companions) ? prior.data()!.companions.length : 0;
+          const priorCompanionRefs = Array.from({ length: priorCompanionCount }, (_, index) =>
+            store.doc(db, 'events', menu.id, 'expense-participants', companionParticipantId(uid, index)));
+          const priorCompanionDocuments = await Promise.all(
+            priorCompanionRefs.map((reference) => transaction.get(reference)),
+          );
           if (!savedProfile.exists()) transaction.set(profileRef, {
             guestUid: uid, ...(accountUser ? { accountUid: accountUser.uid } : {}), guestName: profile.guestName, guestPhone: profile.guestPhone,
             createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
@@ -3822,6 +4078,32 @@ export default function Home() {
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
+          transaction.set(participantRef, {
+            id: uid,
+            accountUid: accountUser?.uid || '',
+            primaryGuestUid: uid,
+            name: profile.guestName,
+            role: participant.data()?.role === 'host' ? 'host' : 'guest',
+            status: participant.data()?.role === 'host' ? 'host' : rsvpChoice,
+            approvalStatus: nextApprovalStatus,
+            createdAt: participant.data()?.createdAt || store.serverTimestamp(),
+            updatedAt: store.serverTimestamp(),
+          });
+          companions.forEach((companion, index) => {
+            const id = companionParticipantId(uid, index);
+            transaction.set(store.doc(db, 'events', menu.id, 'expense-participants', id), {
+              id,
+              accountUid: accountUser?.uid || '',
+              primaryGuestUid: uid,
+              name: companion.name,
+              role: 'companion',
+              status: rsvpChoice,
+              approvalStatus: nextApprovalStatus,
+              createdAt: priorCompanionDocuments[index]?.data()?.createdAt || store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+          });
+          priorCompanionRefs.slice(companions.length).forEach((reference) => transaction.delete(reference));
         });
       } else {
         const others = rsvps.filter((entry) => entry.guestUid !== profile.guestUid);
@@ -4002,6 +4284,10 @@ export default function Home() {
   }
 
   async function deleteGuest(rsvp: Rsvp) {
+    if (menu.ownerUid && accountProfile?.guestUid === rsvp.guestUid) {
+      notify('The event host stays on their own guest list');
+      return;
+    }
     if ((rsvp.activeOrderCount || 0) > 0) {
       notify('Finish or clear this guest’s active orders before deleting them');
       return;
@@ -4013,11 +4299,16 @@ export default function Home() {
           import('firebase/app'), import('firebase/firestore'),
         ]);
         const db = store.getFirestore(getApp());
+        const participantSnapshot = await store.getDocs(store.query(
+          store.collection(db, 'events', menu.id, 'expense-participants'),
+          store.where('primaryGuestUid', '==', rsvp.guestUid),
+        ));
         const batch = store.writeBatch(db);
         batch.delete(store.doc(db, 'events', menu.id, 'rsvps', rsvp.guestUid));
         batch.delete(store.doc(db, 'events', menu.id, 'guests', rsvp.guestUid));
         batch.delete(store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(rsvp.guestName)));
         batch.delete(store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(rsvp.guestPhone)));
+        participantSnapshot.docs.forEach((document) => batch.delete(document.ref));
         await batch.commit();
       } else {
         const next = rsvps.filter((entry) => entry.guestUid !== rsvp.guestUid);
@@ -4048,10 +4339,21 @@ export default function Home() {
         const [{ getApp }, store] = await Promise.all([
           import('firebase/app'), import('firebase/firestore'),
         ]);
-        await store.updateDoc(
-          store.doc(store.getFirestore(getApp()), 'events', menu.id, 'rsvps', rsvp.guestUid),
-          { approvalStatus: nextStatus, updatedAt: store.serverTimestamp() },
-        );
+        const db = store.getFirestore(getApp());
+        const participantSnapshot = await store.getDocs(store.query(
+          store.collection(db, 'events', menu.id, 'expense-participants'),
+          store.where('primaryGuestUid', '==', rsvp.guestUid),
+        ));
+        const batch = store.writeBatch(db);
+        batch.update(store.doc(db, 'events', menu.id, 'rsvps', rsvp.guestUid), {
+          approvalStatus: nextStatus,
+          updatedAt: store.serverTimestamp(),
+        });
+        participantSnapshot.docs.forEach((document) => batch.update(document.ref, {
+          approvalStatus: nextStatus,
+          updatedAt: store.serverTimestamp(),
+        }));
+        await batch.commit();
       } else {
         const next = rsvps.map((entry) => entry.guestUid === rsvp.guestUid
           ? { ...entry, approvalStatus: nextStatus, updatedAt: Date.now() }
@@ -4533,10 +4835,14 @@ export default function Home() {
           }),
       );
       const eventDocuments = (await Promise.all(
-        ['orders', 'rsvps', 'guests', 'guest-names', 'guest-phones', 'name-index'].map((collectionName) =>
+        ['orders', 'rsvps', 'guests', 'guest-names', 'guest-phones', 'name-index', 'expense-participants', 'expenses'].map((collectionName) =>
           store.getDocs(store.collection(db, 'events', event.id, collectionName)),
         ),
       )).flatMap((snapshot) => snapshot.docs);
+      await Promise.allSettled(eventDocuments
+        .map((document) => document.data().receiptPath as string | undefined)
+        .filter((path): path is string => Boolean(path))
+        .map((path) => storageModule.deleteObject(storageModule.ref(storageModule.getStorage(app), path))));
       for (let index = 0; index < eventDocuments.length; index += 400) {
         const batch = store.writeBatch(db);
         eventDocuments
@@ -4655,23 +4961,53 @@ export default function Home() {
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
-            {menu.id !== EMPTY_EVENT_ID && <button
-              type="button"
-              onClick={() => {
-                primeChatAudio();
-                setChatStarted(true);
-                setChatOpen(true);
-              }}
-              disabled={!chatActor}
-              className="chat-header-button"
-              title={!chatActor && mode === 'guest' ? 'RSVP Going to join the chat' : undefined}
-            >
-              <MessageCircle size={16} />
-              <span>{menu.chatOpen === false ? 'Chat locked' : 'Chat'}</span>
-            </button>}
+            {menu.id !== EMPTY_EVENT_ID && <div className="event-menu-control">
+              <button
+                type="button"
+                className={`chat-header-button ${eventMenuOpen ? 'event-menu-active' : ''}`}
+                onClick={() => setEventMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={eventMenuOpen}
+              >
+                <MenuIcon size={16} />
+                <span>Event</span>
+                <ChevronDown size={14} />
+              </button>
+              {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!chatActor}
+                  onClick={() => {
+                    primeChatAudio();
+                    setChatStarted(true);
+                    setChatOpen(true);
+                    setEventMenuOpen(false);
+                  }}
+                >
+                  <span><MessageCircle size={18} /></span>
+                  <div><strong>Chat</strong><small>{menu.chatOpen === false ? 'Read the locked conversation' : 'Messages, reactions and polls'}</small></div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!expenseActor}
+                  onClick={() => {
+                    setExpensesOpen(true);
+                    setEventMenuOpen(false);
+                  }}
+                  title={!expenseActor && mode === 'guest' ? 'RSVP Going and receive approval to use expenses' : undefined}
+                >
+                  <span><DollarSign size={18} /></span>
+                  <div><strong>Expenses</strong><small>{expenseActor ? 'Receipts, splits and guest balances' : 'Available to approved Going guests'}</small></div>
+                </button>
+              </div>}
+            </div>}
           </div>
         </div>
       </header>
+
+      {eventMenuOpen && <button type="button" className="event-menu-scrim" onClick={() => setEventMenuOpen(false)} aria-label="Close event menu" />}
 
       {mode === 'guest' ? (
         menu.id === EMPTY_EVENT_ID ? (
@@ -4827,6 +5163,18 @@ export default function Home() {
             </div>
           </dialog>
         </div>
+      )}
+
+      {expensesOpen && expenseActor && (
+        <ExpensePanel
+          key={menu.id}
+          menu={menu}
+          actor={expenseActor}
+          canManage={mode === 'host'}
+          fallbackRsvps={rsvps}
+          onClose={() => setExpensesOpen(false)}
+          notify={notify}
+        />
       )}
 
       {deleteAccountOpen && accountUser && (
@@ -6030,6 +6378,399 @@ function GuestMenu({
   );
 }
 
+function ExpensePanel({
+  menu,
+  actor,
+  canManage,
+  fallbackRsvps,
+  onClose,
+  notify,
+}: {
+  menu: EventMenu;
+  actor: ExpenseActor;
+  canManage: boolean;
+  fallbackRsvps: Rsvp[];
+  onClose: () => void;
+  notify: (message: string) => void;
+}) {
+  type DraftItem = { id: string; name: string; amount: string; allocations: Record<string, number> };
+  const [expenses, setExpenses] = useState<EventExpense[]>([]);
+  const [participants, setParticipants] = useState<ExpenseParticipant[]>([]);
+  const [manualOpen, setManualOpen] = useState(false);
+  const [title, setTitle] = useState('');
+  const [tax, setTax] = useState('');
+  const [fees, setFees] = useState('');
+  const [items, setItems] = useState<DraftItem[]>([]);
+  const [expandedItemId, setExpandedItemId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [mobileDevice, setMobileDevice] = useState(false);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    queueMicrotask(() => setMobileDevice(
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
+    ));
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseConfigured) {
+      const previewParticipants: ExpenseParticipant[] = [{
+        id: actor.participantUid,
+        accountUid: actor.accountUid,
+        primaryGuestUid: actor.participantUid,
+        name: actor.name,
+        role: actor.role,
+        status: actor.role === 'host' ? 'host' : 'yes',
+        approvalStatus: 'approved',
+        createdAt: Date.now(),
+      }];
+      fallbackRsvps.forEach((rsvp) => {
+        if (rsvp.status === 'no' || approvalStatus(rsvp) === 'declined') return;
+        previewParticipants.push({
+          id: rsvp.guestUid,
+          accountUid: '',
+          primaryGuestUid: rsvp.guestUid,
+          name: rsvp.guestName,
+          role: 'guest',
+          status: rsvp.status,
+          approvalStatus: approvalStatus(rsvp),
+          createdAt: rsvp.createdAt,
+        });
+        (rsvp.companions || []).forEach((companion, index) => previewParticipants.push({
+          id: companionParticipantId(rsvp.guestUid, index),
+          accountUid: '',
+          primaryGuestUid: rsvp.guestUid,
+          name: companionName(companion),
+          role: 'companion',
+          status: rsvp.status,
+          approvalStatus: approvalStatus(rsvp),
+          createdAt: rsvp.createdAt,
+        }));
+      });
+      const unique = [...new Map(previewParticipants.map((participant) => [participant.id, participant])).values()];
+      queueMicrotask(() => {
+        setParticipants(unique);
+        setExpenses(JSON.parse(localStorage.getItem(expensePreviewKey(menu.id)) || '[]') as EventExpense[]);
+      });
+      return;
+    }
+    let stopParticipants = () => {};
+    let stopExpenses = () => {};
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const db = store.getFirestore(getApp());
+      stopParticipants = store.onSnapshot(
+        store.collection(db, 'events', menu.id, 'expense-participants'),
+        (snapshot) => setParticipants(snapshot.docs.map((document) => {
+          const data = document.data();
+          return {
+            ...data,
+            id: document.id,
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: data.updatedAt?.toMillis?.(),
+          } as ExpenseParticipant;
+        })),
+      );
+      stopExpenses = store.onSnapshot(
+        store.collection(db, 'events', menu.id, 'expenses'),
+        (snapshot) => setExpenses(snapshot.docs.map((document) => {
+          const data = document.data();
+          return {
+            ...data,
+            id: document.id,
+            createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+            updatedAt: data.updatedAt?.toMillis?.(),
+          } as EventExpense;
+        }).sort((left, right) => right.createdAt - left.createdAt)),
+      );
+    })().catch(() => setExpenses([]));
+    return () => {
+      stopParticipants();
+      stopExpenses();
+    };
+  }, [actor, fallbackRsvps, menu.id]);
+
+  const eligibleParticipants = useMemo(() => {
+    const filtered = participants.filter((participant) =>
+      participant.status !== 'no' && participant.approvalStatus !== 'declined');
+    if (!filtered.some((participant) => participant.id === actor.participantUid)) filtered.push({
+      id: actor.participantUid,
+      accountUid: actor.accountUid,
+      primaryGuestUid: actor.participantUid,
+      name: actor.name,
+      role: actor.role,
+      status: actor.role === 'host' ? 'host' : 'yes',
+      approvalStatus: 'approved',
+      createdAt: 0,
+    });
+    return filtered.sort((left, right) =>
+      Number(right.role === 'host') - Number(left.role === 'host') || left.name.localeCompare(right.name));
+  }, [actor, participants]);
+
+  const newDraftItem = (): DraftItem => ({
+    id: crypto.randomUUID(),
+    name: '',
+    amount: '',
+    allocations: Object.fromEntries(eligibleParticipants.map((participant) => [participant.id, 1])),
+  });
+  const beginManualExpense = () => {
+    const item = newDraftItem();
+    setTitle('');
+    setTax('');
+    setFees('');
+    setItems([item]);
+    setExpandedItemId(item.id);
+    setManualOpen(true);
+  };
+  const updateItem = (itemId: string, build: (item: DraftItem) => DraftItem) =>
+    setItems((current) => current.map((item) => item.id === itemId ? build(item) : item));
+
+  const persistExpense = async (expense: EventExpense) => {
+    if (firebaseConfigured) {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      await store.setDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'expenses', expense.id), {
+        ...expense,
+        createdAt: store.serverTimestamp(),
+        updatedAt: store.serverTimestamp(),
+      });
+      return;
+    }
+    const next = [expense, ...expenses.filter((entry) => entry.id !== expense.id)];
+    setExpenses(next);
+    localStorage.setItem(expensePreviewKey(menu.id), JSON.stringify(next));
+  };
+
+  const saveManualExpense = async () => {
+    const preparedItems: ExpenseLineItem[] = items.map((item) => ({
+      id: item.id,
+      name: item.name.trim(),
+      amountCents: parseMoneyCents(item.amount),
+      allocations: Object.entries(item.allocations)
+        .filter(([, multiplier]) => multiplier > 0)
+        .map(([participantUid, multiplier]) => ({ participantUid, multiplier })),
+    }));
+    if (!title.trim()) {
+      notify('Add an expense name');
+      return;
+    }
+    if (!preparedItems.length || preparedItems.some((item) => !item.name || item.amountCents <= 0)) {
+      notify('Every item needs a name and price');
+      return;
+    }
+    if (preparedItems.some((item) => !item.allocations.length)) {
+      notify('Choose at least one person for every item');
+      return;
+    }
+    setBusy(true);
+    try {
+      const now = Date.now();
+      await persistExpense({
+        id: crypto.randomUUID(),
+        kind: 'manual',
+        title: title.trim(),
+        items: preparedItems,
+        taxCents: parseMoneyCents(tax),
+        feesCents: parseMoneyCents(fees),
+        submittedByAccountUid: actor.accountUid,
+        submittedByUid: actor.participantUid,
+        submittedByName: actor.name,
+        submittedByRole: actor.role,
+        createdAt: now,
+        updatedAt: now,
+      });
+      setManualOpen(false);
+      notify('Expense added and split');
+    } catch {
+      notify('The expense could not be saved.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadReceipt = async (file: File) => {
+    if (file.size > 40 * 1024 * 1024) {
+      notify('The original receipt image must be smaller than 40 MB');
+      return;
+    }
+    if (!file.type.startsWith('image/') && !/\.(heic|heif)$/i.test(file.name)) {
+      notify('Choose a JPEG, PNG, WebP, HEIC, or HEIF receipt image');
+      return;
+    }
+    setBusy(true);
+    try {
+      const id = crypto.randomUUID();
+      const receiptUrl = await compressImageForDocument(file, 600_000);
+      const now = Date.now();
+      await persistExpense({
+        id,
+        kind: 'receipt',
+        title: file.name.replace(/\.[^.]+$/, '') || 'Receipt',
+        items: [],
+        taxCents: 0,
+        feesCents: 0,
+        submittedByAccountUid: actor.accountUid,
+        submittedByUid: actor.participantUid,
+        submittedByName: actor.name,
+        submittedByRole: actor.role,
+        receiptUrl,
+        receiptPath: '',
+        receiptName: file.name,
+        createdAt: now,
+        updatedAt: now,
+      });
+      notify('Receipt uploaded — item processing can be added next');
+    } catch {
+      notify('The receipt could not be uploaded.');
+    } finally {
+      setBusy(false);
+      if (receiptInputRef.current) receiptInputRef.current.value = '';
+    }
+  };
+
+  const deleteExpense = async (expense: EventExpense) => {
+    if (!canManage && expense.submittedByAccountUid !== actor.accountUid) return;
+    if (!window.confirm(`Delete “${expense.title}”?`)) return;
+    setBusy(true);
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
+        ]);
+        await store.deleteDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'expenses', expense.id));
+      } else {
+        const next = expenses.filter((entry) => entry.id !== expense.id);
+        setExpenses(next);
+        localStorage.setItem(expensePreviewKey(menu.id), JSON.stringify(next));
+      }
+      notify('Expense deleted');
+    } catch {
+      notify('The expense could not be deleted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const balances = useMemo(() => {
+    const result: Record<string, number> = {};
+    expenses.forEach((expense) => Object.entries(expenseShares(expense)).forEach(([participantUid, cents]) => {
+      result[participantUid] = (result[participantUid] || 0) + cents;
+    }));
+    return result;
+  }, [expenses]);
+  const total = expenses.reduce((sum, expense) => sum + expenseTotal(expense), 0);
+
+  return (
+    <div className="expense-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <dialog open className="expense-panel" aria-labelledby="expense-panel-title">
+        <header className="expense-panel-header">
+          <div><p className="eyebrow">{menu.title}</p><h2 id="expense-panel-title" className="font-display">Expenses</h2><span>Receipts, shared items and a clear total for every guest.</span></div>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Close expenses"><XCircle size={22} /></button>
+        </header>
+
+        <section className="expense-summary">
+          <div className="expense-total"><span>Total recorded</span><strong>{formatCents(total)}</strong><small>{expenses.length} entr{expenses.length === 1 ? 'y' : 'ies'}</small></div>
+          <div className="expense-guest-shares" aria-label="Guest expense shares">
+            {eligibleParticipants.map((participant) => (
+              <article key={participant.id} className={participant.id === actor.participantUid ? 'current' : ''}>
+                <span>{participant.name.slice(0, 1).toUpperCase()}</span>
+                <div><strong>{participant.name}{participant.role === 'host' ? ' · Host' : ''}</strong><small>{participant.id === actor.participantUid ? 'Your share' : 'Share'}</small></div>
+                <b>{formatCents(balances[participant.id] || 0)}</b>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="expense-actions" aria-label="Add an expense">
+          <button type="button" onClick={beginManualExpense} disabled={busy}><Calculator size={18} /><span><strong>Add manually</strong><small>Items, tax, fees and weighted shares</small></span></button>
+          <button type="button" onClick={() => receiptInputRef.current?.click()} disabled={busy}><Upload size={18} /><span><strong>Upload receipt</strong><small>JPEG, PNG, WebP or HEIC</small></span></button>
+          {mobileDevice && <button type="button" disabled className="camera-coming-soon"><Camera size={18} /><span><strong>Take a picture</strong><small>Camera capture coming next</small></span></button>}
+          <input ref={receiptInputRef} type="file" hidden accept="image/*,.heic,.heif" onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void uploadReceipt(file);
+          }} />
+        </section>
+
+        {manualOpen && <section className="expense-composer">
+          <header><div><p className="eyebrow">Manual entry</p><h3 className="font-display">Build the expense</h3></div><button type="button" onClick={() => setManualOpen(false)} disabled={busy}>Cancel</button></header>
+          <label className="expense-title-field"><span>Expense name</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Groceries, movie tickets…" /></label>
+          <div className="expense-item-list">
+            {items.map((item, itemIndex) => {
+              const selectedCount = Object.values(item.allocations).filter((multiplier) => multiplier > 0).length;
+              return <article key={item.id} className="expense-item-editor">
+                <div className="expense-item-fields">
+                  <label><span>Item {itemIndex + 1}</span><input value={item.name} onChange={(event) => updateItem(item.id, (current) => ({ ...current, name: event.target.value }))} placeholder="Item name" /></label>
+                  <label><span>Price</span><div className="money-input"><DollarSign size={14} /><input inputMode="decimal" value={item.amount} onChange={(event) => updateItem(item.id, (current) => ({ ...current, amount: event.target.value }))} placeholder="0.00" /></div></label>
+                  <button type="button" className="expense-split-toggle" onClick={() => setExpandedItemId((current) => current === item.id ? '' : item.id)}>
+                    <UsersRound size={15} /><span>Split between {selectedCount} guest{selectedCount === 1 ? '' : 's'}</span>{expandedItemId === item.id ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                  </button>
+                  <button type="button" className="expense-remove-item" onClick={() => setItems((current) => current.filter((entry) => entry.id !== item.id))} disabled={items.length === 1} aria-label={`Remove item ${itemIndex + 1}`}><Trash2 size={15} /></button>
+                </div>
+                {expandedItemId === item.id && <div className="expense-split-editor">
+                  <div className="expense-split-tools">
+                    <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(eligibleParticipants.map((participant) => [participant.id, 1])) }))}><Check size={14} /> Select all</button>
+                    <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(Object.keys(current.allocations).filter((participantUid) => current.allocations[participantUid] > 0).map((participantUid) => [participantUid, 1])) }))}><Calculator size={14} /> Share equally</button>
+                  </div>
+                  <div className="expense-participant-options">
+                    {eligibleParticipants.map((participant) => {
+                      const multiplier = item.allocations[participant.id] || 0;
+                      return <div key={participant.id} className={multiplier ? 'selected' : ''}>
+                        <label><input type="checkbox" aria-label={`Include ${participant.name} in this item`} checked={multiplier > 0} onChange={(event) => updateItem(item.id, (current) => {
+                          const allocations = { ...current.allocations };
+                          if (event.target.checked) allocations[participant.id] = 1;
+                          else delete allocations[participant.id];
+                          return { ...current, allocations };
+                        })} /><span><strong>{participant.name}</strong><small>{participant.role === 'host' ? 'Host' : participant.role === 'companion' ? 'Additional guest' : 'Guest'}</small></span></label>
+                        {multiplier > 0 && <div className="share-multiplier" aria-label={`${participant.name} shares`}><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.max(1, multiplier - 1) } }))} disabled={multiplier <= 1}><Minus size={13} /></button><b>{multiplier}×</b><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.min(99, multiplier + 1) } }))}><Plus size={13} /></button></div>}
+                      </div>;
+                    })}
+                  </div>
+                </div>}
+              </article>;
+            })}
+          </div>
+          <button type="button" className="expense-add-item" onClick={() => {
+            const item = newDraftItem();
+            setItems((current) => [...current, item]);
+            setExpandedItemId(item.id);
+          }}><Plus size={15} /> Add another item</button>
+          <div className="expense-extras">
+            <label><span>Tax</span><div className="money-input"><DollarSign size={14} /><input inputMode="decimal" value={tax} onChange={(event) => setTax(event.target.value)} placeholder="0.00" /></div></label>
+            <label><span>Fees</span><div className="money-input"><DollarSign size={14} /><input inputMode="decimal" value={fees} onChange={(event) => setFees(event.target.value)} placeholder="0.00" /></div></label>
+            <div><span>Expense total</span><strong>{formatCents(items.reduce((sum, item) => sum + parseMoneyCents(item.amount), 0) + parseMoneyCents(tax) + parseMoneyCents(fees))}</strong><small>Tax and fees follow each guest’s item share.</small></div>
+          </div>
+          <button type="button" className="primary-button expense-save" onClick={() => void saveManualExpense()} disabled={busy}>{busy ? 'Saving…' : 'Save expense & split'}</button>
+        </section>}
+
+        <section className="expense-history">
+          <header><div><p className="eyebrow">Shared ledger</p><h3 className="font-display">Event expenses</h3></div><span>{expenses.length}</span></header>
+          {expenses.length === 0 ? <div className="expense-empty"><FileText size={25} /><strong>No expenses yet</strong><span>Add a manual expense or upload the first receipt.</span></div> : expenses.map((expense) => {
+            const shares = expenseShares(expense);
+            return <article key={expense.id} className="expense-history-card">
+              <div className="expense-history-title">
+                <span>{expense.kind === 'receipt' ? <FileText size={18} /> : <DollarSign size={18} />}</span>
+                <div><strong>{expense.title}</strong><small>Added by {expense.submittedByName} · {new Date(expense.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></div>
+                <b>{expense.kind === 'receipt' ? 'Pending' : formatCents(expenseTotal(expense))}</b>
+                {(canManage || expense.submittedByAccountUid === actor.accountUid) && <button type="button" onClick={() => void deleteExpense(expense)} disabled={busy} aria-label={`Delete ${expense.title}`}><Trash2 size={15} /></button>}
+              </div>
+              {expense.kind === 'receipt' ? <div className="receipt-awaiting"><span>Awaiting itemization</span>{expense.receiptUrl && <a href={expense.receiptUrl} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}</div> : <>
+                <ul className="expense-line-summary">{expense.items.map((item) => <li key={item.id}><span>{item.name}</span><b>{formatCents(item.amountCents)}</b></li>)}{expense.taxCents > 0 && <li><span>Tax</span><b>{formatCents(expense.taxCents)}</b></li>}{expense.feesCents > 0 && <li><span>Fees</span><b>{formatCents(expense.feesCents)}</b></li>}</ul>
+                <div className="expense-share-chips">{Object.entries(shares).map(([participantUid, cents]) => <span key={participantUid}><b>{eligibleParticipants.find((participant) => participant.id === participantUid)?.name || 'Guest'}</b>{formatCents(cents)}</span>)}</div>
+              </>}
+            </article>;
+          })}
+        </section>
+      </dialog>
+    </div>
+  );
+}
+
 function EventChat({
   menu,
   actor,
@@ -7042,13 +7783,14 @@ function HostWorkspace({
                 <div className="host-invitation-list-scroll">
                   {eventInvitations.map((invitation) => {
                     const label = invitation.recipientEmail || formatPhone(invitation.recipientPhone);
+                    const isHostMembership = invitation.recipientUid === menu.ownerUid;
                     return (
                       <div key={`${invitation.recipientUid}:${invitation.eventId}`} className="host-invitation-row">
                         <span><strong>{label}</strong><small>{formatPhone(invitation.recipientPhone)}</small></span>
-                        <button type="button" className="danger-link" disabled={Boolean(revokeBusy)} onClick={() => {
+                        {isHostMembership ? <b className="host-membership-label">Host</b> : <button type="button" className="danger-link" disabled={Boolean(revokeBusy)} onClick={() => {
                           setRevokeBusy(invitation.recipientUid);
                           void revokeInvitation(menu, invitation).finally(() => setRevokeBusy(''));
-                        }}>{revokeBusy === invitation.recipientUid ? 'Revoking…' : 'Revoke'}</button>
+                        }}>{revokeBusy === invitation.recipientUid ? 'Revoking…' : 'Revoke'}</button>}
                       </div>
                     );
                   })}
