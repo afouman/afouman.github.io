@@ -560,7 +560,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'id', 'kind', 'title', 'items', 'taxCents', 'feesCents',
           'submittedByAccountUid', 'submittedByUid', 'submittedByName',
-          'submittedByRole', 'receiptUrl', 'receiptPath', 'receiptName',
+          'submittedByRole', 'participants', 'receiptUrl', 'receiptPath', 'receiptName',
           'createdAt', 'updatedAt'
         ])
         && request.resource.data.id == expenseId
@@ -580,6 +580,8 @@ service cloud.firestore {
         && request.resource.data.submittedByName.size() > 0
         && request.resource.data.submittedByName.size() <= 80
         && request.resource.data.submittedByRole in ['host', 'guest']
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() <= 100
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && (

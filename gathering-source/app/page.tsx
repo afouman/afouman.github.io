@@ -198,6 +198,11 @@ type ExpenseParticipant = {
   updatedAt?: number;
 };
 type ExpenseAllocation = { participantUid: string; multiplier: number };
+type ExpenseSplitParticipant = {
+  id: string;
+  name: string;
+  role: 'host' | 'guest' | 'companion' | 'external';
+};
 type ExpenseLineItem = {
   id: string;
   name: string;
@@ -215,6 +220,7 @@ type EventExpense = {
   submittedByUid: string;
   submittedByName: string;
   submittedByRole: 'host' | 'guest';
+  participants?: ExpenseSplitParticipant[];
   receiptUrl?: string;
   receiptPath?: string;
   receiptName?: string;
@@ -6402,6 +6408,8 @@ function ExpensePanel({
   const [fees, setFees] = useState('');
   const [items, setItems] = useState<DraftItem[]>([]);
   const [expandedItemId, setExpandedItemId] = useState('');
+  const [outsideParticipants, setOutsideParticipants] = useState<ExpenseSplitParticipant[]>([]);
+  const [outsideParticipantName, setOutsideParticipantName] = useState('');
   const [busy, setBusy] = useState(false);
   const [mobileDevice, setMobileDevice] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
@@ -6509,24 +6517,60 @@ function ExpensePanel({
     return filtered.sort((left, right) =>
       Number(right.role === 'host') - Number(left.role === 'host') || left.name.localeCompare(right.name));
   }, [actor, participants]);
+  const draftParticipants = useMemo<ExpenseSplitParticipant[]>(() => [
+    ...eligibleParticipants.map(({ id, name, role }) => ({ id, name, role })),
+    ...outsideParticipants,
+  ], [eligibleParticipants, outsideParticipants]);
 
-  const newDraftItem = (): DraftItem => ({
+  const newDraftItem = (people: ExpenseSplitParticipant[] = eligibleParticipants): DraftItem => ({
     id: crypto.randomUUID(),
     name: '',
     amount: '',
-    allocations: Object.fromEntries(eligibleParticipants.map((participant) => [participant.id, 1])),
+    allocations: Object.fromEntries(people.map((participant) => [participant.id, 1])),
   });
   const beginManualExpense = () => {
-    const item = newDraftItem();
+    const item = newDraftItem(eligibleParticipants);
     setTitle('');
     setTax('');
     setFees('');
+    setOutsideParticipants([]);
+    setOutsideParticipantName('');
     setItems([item]);
     setExpandedItemId(item.id);
     setManualOpen(true);
   };
   const updateItem = (itemId: string, build: (item: DraftItem) => DraftItem) =>
     setItems((current) => current.map((item) => item.id === itemId ? build(item) : item));
+  const addOutsideParticipant = (itemId: string) => {
+    const name = outsideParticipantName.trim().replace(/\s+/g, ' ');
+    if (!name) {
+      notify('Enter the person’s name');
+      return;
+    }
+    const existing = draftParticipants.find((participant) => participant.name.localeCompare(name, undefined, { sensitivity: 'accent' }) === 0);
+    if (existing) {
+      updateItem(itemId, (current) => ({ ...current, allocations: { ...current.allocations, [existing.id]: current.allocations[existing.id] || 1 } }));
+      setOutsideParticipantName('');
+      notify(`${existing.name} is included in this item`);
+      return;
+    }
+    const participant: ExpenseSplitParticipant = {
+      id: `external-${crypto.randomUUID()}`,
+      name,
+      role: 'external',
+    };
+    setOutsideParticipants((current) => [...current, participant]);
+    updateItem(itemId, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: 1 } }));
+    setOutsideParticipantName('');
+  };
+  const removeOutsideParticipant = (participantUid: string) => {
+    setOutsideParticipants((current) => current.filter((participant) => participant.id !== participantUid));
+    setItems((current) => current.map((item) => {
+      const allocations = { ...item.allocations };
+      delete allocations[participantUid];
+      return { ...item, allocations };
+    }));
+  };
 
   const persistExpense = async (expense: EventExpense) => {
     if (firebaseConfigured) {
@@ -6569,6 +6613,7 @@ function ExpensePanel({
     setBusy(true);
     try {
       const now = Date.now();
+      const usedParticipantIds = new Set(preparedItems.flatMap((item) => item.allocations.map((allocation) => allocation.participantUid)));
       await persistExpense({
         id: crypto.randomUUID(),
         kind: 'manual',
@@ -6580,6 +6625,7 @@ function ExpensePanel({
         submittedByUid: actor.participantUid,
         submittedByName: actor.name,
         submittedByRole: actor.role,
+        participants: draftParticipants.filter((participant) => usedParticipantIds.has(participant.id)),
         createdAt: now,
         updatedAt: now,
       });
@@ -6617,6 +6663,7 @@ function ExpensePanel({
         submittedByUid: actor.participantUid,
         submittedByName: actor.name,
         submittedByRole: actor.role,
+        participants: [],
         receiptUrl,
         receiptPath: '',
         receiptName: file.name,
@@ -6662,6 +6709,12 @@ function ExpensePanel({
     }));
     return result;
   }, [expenses]);
+  const ledgerParticipants = useMemo<ExpenseSplitParticipant[]>(() => {
+    const directory = new Map<string, ExpenseSplitParticipant>();
+    eligibleParticipants.forEach(({ id, name, role }) => directory.set(id, { id, name, role }));
+    expenses.forEach((expense) => expense.participants?.forEach((participant) => directory.set(participant.id, participant)));
+    return [...directory.values()].filter((participant) => (balances[participant.id] || 0) > 0 || participant.id === actor.participantUid);
+  }, [actor.participantUid, balances, eligibleParticipants, expenses]);
   const total = expenses.reduce((sum, expense) => sum + expenseTotal(expense), 0);
 
   return (
@@ -6677,7 +6730,7 @@ function ExpensePanel({
         <section className="expense-summary">
           <div className="expense-total"><span>Total recorded</span><strong>{formatCents(total)}</strong><small>{expenses.length} entr{expenses.length === 1 ? 'y' : 'ies'}</small></div>
           <div className="expense-guest-shares" aria-label="Guest expense shares">
-            {eligibleParticipants.map((participant) => (
+            {ledgerParticipants.map((participant) => (
               <article key={participant.id} className={participant.id === actor.participantUid ? 'current' : ''}>
                 <span>{participant.name.slice(0, 1).toUpperCase()}</span>
                 <div><strong>{participant.name}{participant.role === 'host' ? ' · Host' : ''}</strong><small>{participant.id === actor.participantUid ? 'Your share' : 'Share'}</small></div>
@@ -6714,11 +6767,20 @@ function ExpensePanel({
                 </div>
                 {expandedItemId === item.id && <div className="expense-split-editor">
                   <div className="expense-split-tools">
-                    <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(eligibleParticipants.map((participant) => [participant.id, 1])) }))}><Check size={14} /> Select all</button>
+                    <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(draftParticipants.map((participant) => [participant.id, 1])) }))}><Check size={14} /> Select all</button>
                     <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(Object.keys(current.allocations).filter((participantUid) => current.allocations[participantUid] > 0).map((participantUid) => [participantUid, 1])) }))}><Calculator size={14} /> Share equally</button>
                   </div>
+                  <div className="expense-add-outsider">
+                    <label><span>Add someone not on the guest list</span><input value={outsideParticipantName} onChange={(event) => setOutsideParticipantName(event.target.value)} placeholder="Their name" maxLength={80} onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault();
+                        addOutsideParticipant(item.id);
+                      }
+                    }} /></label>
+                    <button type="button" onClick={() => addOutsideParticipant(item.id)} disabled={!outsideParticipantName.trim()}><Plus size={15} /> Add person</button>
+                  </div>
                   <div className="expense-participant-options">
-                    {eligibleParticipants.map((participant) => {
+                    {draftParticipants.map((participant) => {
                       const multiplier = item.allocations[participant.id] || 0;
                       return <div key={participant.id} className={multiplier ? 'selected' : ''}>
                         <label><input type="checkbox" aria-label={`Include ${participant.name} in this item`} checked={multiplier > 0} onChange={(event) => updateItem(item.id, (current) => {
@@ -6726,8 +6788,11 @@ function ExpensePanel({
                           if (event.target.checked) allocations[participant.id] = 1;
                           else delete allocations[participant.id];
                           return { ...current, allocations };
-                        })} /><span><strong>{participant.name}</strong><small>{participant.role === 'host' ? 'Host' : participant.role === 'companion' ? 'Additional guest' : 'Guest'}</small></span></label>
-                        {multiplier > 0 && <div className="share-multiplier" aria-label={`${participant.name} shares`}><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.max(1, multiplier - 1) } }))} disabled={multiplier <= 1}><Minus size={13} /></button><b>{multiplier}×</b><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.min(99, multiplier + 1) } }))}><Plus size={13} /></button></div>}
+                        })} /><span><strong>{participant.name}</strong><small>{participant.role === 'host' ? 'Host' : participant.role === 'companion' ? 'Additional guest' : participant.role === 'external' ? 'Not on guest list' : 'Guest'}</small></span></label>
+                        <div className="expense-person-actions">
+                          {multiplier > 0 && <div className="share-multiplier" aria-label={`${participant.name} shares`}><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.max(1, multiplier - 1) } }))} disabled={multiplier <= 1}><Minus size={13} /></button><b>{multiplier}×</b><button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: { ...current.allocations, [participant.id]: Math.min(99, multiplier + 1) } }))}><Plus size={13} /></button></div>}
+                          {participant.role === 'external' && <button type="button" className="expense-remove-person" onClick={() => removeOutsideParticipant(participant.id)} aria-label={`Remove ${participant.name}`}><Trash2 size={13} /></button>}
+                        </div>
                       </div>;
                     })}
                   </div>
@@ -6736,7 +6801,7 @@ function ExpensePanel({
             })}
           </div>
           <button type="button" className="expense-add-item" onClick={() => {
-            const item = newDraftItem();
+            const item = newDraftItem(draftParticipants);
             setItems((current) => [...current, item]);
             setExpandedItemId(item.id);
           }}><Plus size={15} /> Add another item</button>
@@ -6752,6 +6817,10 @@ function ExpensePanel({
           <header><div><p className="eyebrow">Shared ledger</p><h3 className="font-display">Event expenses</h3></div><span>{expenses.length}</span></header>
           {expenses.length === 0 ? <div className="expense-empty"><FileText size={25} /><strong>No expenses yet</strong><span>Add a manual expense or upload the first receipt.</span></div> : expenses.map((expense) => {
             const shares = expenseShares(expense);
+            const expenseParticipantNames = new Map([
+              ...eligibleParticipants.map((participant) => [participant.id, participant.name] as const),
+              ...(expense.participants || []).map((participant) => [participant.id, participant.name] as const),
+            ]);
             return <article key={expense.id} className="expense-history-card">
               <div className="expense-history-title">
                 <span>{expense.kind === 'receipt' ? <FileText size={18} /> : <DollarSign size={18} />}</span>
@@ -6761,7 +6830,7 @@ function ExpensePanel({
               </div>
               {expense.kind === 'receipt' ? <div className="receipt-awaiting"><span>Awaiting itemization</span>{expense.receiptUrl && <a href={expense.receiptUrl} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}</div> : <>
                 <ul className="expense-line-summary">{expense.items.map((item) => <li key={item.id}><span>{item.name}</span><b>{formatCents(item.amountCents)}</b></li>)}{expense.taxCents > 0 && <li><span>Tax</span><b>{formatCents(expense.taxCents)}</b></li>}{expense.feesCents > 0 && <li><span>Fees</span><b>{formatCents(expense.feesCents)}</b></li>}</ul>
-                <div className="expense-share-chips">{Object.entries(shares).map(([participantUid, cents]) => <span key={participantUid}><b>{eligibleParticipants.find((participant) => participant.id === participantUid)?.name || 'Guest'}</b>{formatCents(cents)}</span>)}</div>
+                <div className="expense-share-chips">{Object.entries(shares).map(([participantUid, cents]) => <span key={participantUid}><b>{expenseParticipantNames.get(participantUid) || 'Guest'}</b>{formatCents(cents)}</span>)}</div>
               </>}
             </article>;
           })}

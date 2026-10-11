@@ -5216,6 +5216,11 @@ button:disabled {
 .expense-split-editor { border-top: 1px solid rgb(18 59 66 / 0.09); background: #f1eee6; padding: 0.8rem; }
 .expense-split-tools { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 0.65rem; }
 .expense-split-tools button { display: inline-flex; min-height: 34px; align-items: center; gap: 0.35rem; border: 1px solid rgb(18 59 66 / 0.11); border-radius: 999px; background: #fffdf8; padding: 0.45rem 0.65rem; color: #176d64; font-size: 0.62rem; font-weight: 850; }
+.expense-add-outsider { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.55rem; margin-bottom: 0.7rem; border: 1px dashed rgb(23 109 100 / 0.28); border-radius: 0.9rem; background: rgb(220 239 233 / 0.45); padding: 0.65rem; }
+.expense-add-outsider label { min-width: 0; }
+.expense-add-outsider input { min-height: 40px; background: #fffdf8; padding-block: 0.5rem; }
+.expense-add-outsider > button { display: inline-flex; min-height: 40px; align-items: center; gap: 0.35rem; border-radius: 0.75rem; background: #176d64; padding: 0.55rem 0.75rem; color: #fff; font-size: 0.65rem; font-weight: 900; white-space: nowrap; }
+.expense-add-outsider > button:disabled { opacity: 0.38; }
 .expense-participant-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45rem; }
 .expense-participant-options > div { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 0.6rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.8rem; background: #fffdf8; padding: 0.45rem 0.55rem; }
 .expense-participant-options > div.selected { border-color: rgb(39 152 135 / 0.32); }
@@ -5224,6 +5229,8 @@ button:disabled {
 .expense-participant-options label > span { display: grid; min-width: 0; gap: 0.05rem; margin: 0; letter-spacing: 0; text-transform: none; }
 .expense-participant-options strong { overflow: hidden; font-size: 0.67rem; text-overflow: ellipsis; white-space: nowrap; }
 .expense-participant-options small { color: rgb(23 54 59 / 0.45); font-size: 0.55rem; }
+.expense-person-actions { display: flex; flex: none; align-items: center; gap: 0.3rem; }
+.expense-remove-person { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 50%; background: #f7e5df; color: #9b3f42; }
 .share-multiplier { display: flex; flex: none; align-items: center; gap: 0.22rem; }
 .share-multiplier button { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 50%; background: #e5efeb; color: #176d64; }
 .share-multiplier button:disabled { opacity: 0.3; }
@@ -5271,6 +5278,8 @@ button:disabled {
   .expense-split-toggle { grid-column: 1 / -1; grid-row: 2; }
   .expense-remove-item { grid-column: 3; grid-row: 1; }
   .expense-participant-options { grid-template-columns: 1fr; }
+  .expense-add-outsider { grid-template-columns: 1fr; }
+  .expense-add-outsider > button { justify-content: center; }
   .expense-extras { grid-template-columns: 1fr 1fr; }
   .expense-extras > div { grid-column: 1 / -1; justify-items: start; }
   .expense-history { padding: 0 1rem 1rem; }
