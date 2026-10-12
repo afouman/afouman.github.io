@@ -5,8 +5,12 @@ service firebase.storage {
       return request.auth != null
         && request.auth.token.firebase.sign_in_provider != 'anonymous'
         && (
-          request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com'
-          || firestore.get(/databases/(default)/documents/events/$(eventId)).data.ownerUid == request.auth.uid
+          firestore.get(/databases/(default)/documents/events/$(eventId)).data.ownerUid == request.auth.uid
+          || (
+            request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com'
+            && firestore.get(/databases/(default)/documents/events/$(eventId)).data.ownerUid
+              == 'W2T8SwFA1pdg8wxm23E5kQqbEHv2'
+          )
         );
     }
     match /events/{eventId}/items/{fileName} {

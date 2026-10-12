@@ -209,6 +209,119 @@ async function listAccountSubscriptions(env, actorUid) {
   return [...new Map(records.map((record) => [record.subscription?.endpoint, record])).values()];
 }
 
+function allocatedExpenseParticipantIds(expense) {
+  return [...new Set((Array.isArray(expense?.items) ? expense.items : [])
+    .flatMap(item => Array.isArray(item?.allocations) ? item.allocations : [])
+    .filter(allocation => Number(allocation?.multiplier) > 0 && safeSegment(allocation?.participantUid))
+    .map(allocation => allocation.participantUid))];
+}
+
+function eligibleExpenseGuestIds(participants, rsvps, submitterUid) {
+  const rsvpByGuest = new Map(rsvps.filter(Boolean).map(rsvp => [rsvp.guestUid, rsvp]));
+  return [...new Set(participants.filter(Boolean).flatMap(participant => {
+    const guestUid = participant.primaryGuestUid;
+    const rsvp = rsvpByGuest.get(guestUid);
+    const registered = typeof participant.accountUid === 'string' && participant.accountUid.length > 1;
+    const approved = rsvp && rsvp.status === 'yes' && !['declined', 'pending'].includes(rsvp.approvalStatus);
+    const isGuest = participant.role === 'guest' || participant.role === 'companion';
+    return registered && approved && isGuest && guestUid !== submitterUid ? [guestUid] : [];
+  }))];
+}
+
+function eventExpenseUrl(event, eventId) {
+  const publicPath = typeof event?.publicPath === 'string'
+    && /^[a-z0-9-]+(?:\/[a-z0-9-]+)*$/i.test(event.publicPath)
+    ? event.publicPath
+    : '';
+  const url = new URL(publicPath ? `https://gaemaj.tech/${publicPath}` : 'https://gaemaj.tech/');
+  if (!publicPath) url.searchParams.set('event', eventId);
+  url.searchParams.set('expenses', '1');
+  return url.toString();
+}
+
+async function sendExpensePush(request, env, context) {
+  try {
+    const { token, claims } = await verifyFirebaseToken(request);
+    const body = await request.json().catch(() => null);
+    if (!body || !safeSegment(body.eventId) || !safeSegment(body.expenseId))
+      return json(request, { error: 'Invalid expense.' }, 400);
+
+    const [expense, event] = await Promise.all([
+      firestoreDocument(
+        `events/${encodeURIComponent(body.eventId)}/expenses/${encodeURIComponent(body.expenseId)}`,
+        token,
+      ),
+      firestoreDocument(`events/${encodeURIComponent(body.eventId)}`, token),
+    ]);
+    if (!expense || expense.kind !== 'manual')
+      return json(request, { error: 'Expense not found.' }, 404);
+    if (expense.submittedByAccountUid !== claims.sub)
+      return json(request, { error: 'Only the person who added this expense can notify its guests.' }, 403);
+
+    const sentKey = `expense-sent:${body.eventId}:${body.expenseId}`;
+    if (await env.PUSH_SUBSCRIPTIONS.get(sentKey))
+      return json(request, { ok: true, duplicate: true, recipients: 0 });
+
+    const participantIds = allocatedExpenseParticipantIds(expense);
+    const participants = await Promise.all(participantIds.map(participantId => firestoreDocument(
+      `events/${encodeURIComponent(body.eventId)}/expense-participants/${encodeURIComponent(participantId)}`,
+      token,
+    )));
+    const primaryGuestIds = [...new Set(participants.filter(Boolean)
+      .map(participant => participant.primaryGuestUid)
+      .filter(safeSegment))];
+    const rsvps = await Promise.all(primaryGuestIds.map(guestUid => firestoreDocument(
+      `events/${encodeURIComponent(body.eventId)}/rsvps/${encodeURIComponent(guestUid)}`,
+      token,
+    )));
+    const recipientGuestIds = eligibleExpenseGuestIds(participants, rsvps, expense.submittedByUid);
+    const subscriptions = (await listEventSubscriptions(env, body.eventId))
+      .filter(record => recipientGuestIds.includes(record.actorUid));
+
+    await env.PUSH_SUBSCRIPTIONS.put(sentKey, '1', { expirationTtl: 60 * 60 * 24 * 7 });
+    const vapid = {
+      subject: 'mailto:alaki.dolaki.holholaki@gmail.com',
+      publicKey: VAPID_PUBLIC_KEY,
+      privateKey: env.VAPID_PRIVATE_KEY,
+    };
+    const url = eventExpenseUrl(event, body.eventId);
+    const amount = expense.items.reduce((total, item) => total + Math.max(0, Number(item?.amountCents) || 0), 0)
+      + Math.max(0, Number(expense.taxCents) || 0)
+      + Math.max(0, Number(expense.feesCents) || 0);
+    const bodyText = `${expense.submittedByName || 'A guest'} added “${String(expense.title || 'New expense').slice(0, 100)}”${amount ? ` (${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount / 100)})` : ''}.`;
+    context.waitUntil(Promise.all(subscriptions.map(async record => {
+      try {
+        const payload = await buildPushPayload(
+          {
+            data: JSON.stringify({
+              title: `New expense · ${event?.title || 'Nights'}`,
+              body: bodyText,
+              tag: `nights-expense-${body.eventId}-${body.expenseId}`,
+              url,
+              eventId: body.eventId,
+            }),
+            options: { ttl: 86400, urgency: 'normal' },
+          },
+          record.subscription,
+          vapid,
+        );
+        const response = await fetch(record.subscription.endpoint, payload);
+        if (response.status === 404 || response.status === 410)
+          await env.PUSH_SUBSCRIPTIONS.delete(`subscription:${body.eventId}:${record.subscriptionId}`);
+      } catch (error) {
+        console.error('Expense push delivery failed', error);
+      }
+    })));
+    return json(request, {
+      ok: true,
+      recipients: recipientGuestIds.length,
+      deliveries: subscriptions.length,
+    });
+  } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : 'Expense notification failed.' }, 401);
+  }
+}
+
 async function sendInvitationPush(request, env, context) {
   try {
     const { token, claims } = await verifyFirebaseToken(request);
@@ -317,7 +430,7 @@ async function sendPush(request, env, context) {
   return json(request, { ok: true, recipients: subscriptions.length });
 }
 
-export { upstreamPath };
+export { allocatedExpenseParticipantIds, eligibleExpenseGuestIds, eventExpenseUrl, upstreamPath };
 
 export default {
   async fetch(request, env, context) {
@@ -330,6 +443,7 @@ export default {
       if (incomingUrl.pathname === '/api/push/subscribe' && request.method === 'DELETE') return unsubscribe(request, env);
       if (incomingUrl.pathname === '/api/push/send' && request.method === 'POST') return sendPush(request, env, context);
       if (incomingUrl.pathname === '/api/push/invite' && request.method === 'POST') return sendInvitationPush(request, env, context);
+      if (incomingUrl.pathname === '/api/push/expense' && request.method === 'POST') return sendExpensePush(request, env, context);
       if (incomingUrl.pathname === '/api/push/account' && request.method === 'DELETE') return deleteAccountPushData(request, env);
       return json(request, { error: 'Not found.' }, 404);
     }

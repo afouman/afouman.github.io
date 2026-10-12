@@ -9,6 +9,8 @@ hosted at `https://afouman.github.io/gathering/`.
 - The Worker also stores expiring browser push subscriptions in Cloudflare KV
   and sends encrypted Web Push notifications. Its VAPID private key is stored as
   a Worker secret and is never shipped to the browser.
+- New manual expenses use an authenticated Worker endpoint to notify only
+  registered, approved Going guests who have a share in the saved expense.
 
 Attach `gaemaj.tech` and `www.gaemaj.tech` as Worker custom domains after the
 domain is active in the same Cloudflare account.

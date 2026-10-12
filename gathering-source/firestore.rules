@@ -2,7 +2,7 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isApprovedHost() {
+    function isLegacyHostAccount() {
       return signedIn()
         && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com';
     }
@@ -11,7 +11,17 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
     }
     function canManageEvent(eventId) {
-      return isApprovedHost() || isHost(eventId);
+      return isHost(eventId) || (
+        isLegacyHostAccount()
+        && get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid
+          == 'W2T8SwFA1pdg8wxm23E5kQqbEHv2'
+      );
+    }
+    function canClaimEventOwner(ownerUid) {
+      return signedIn() && (
+        ownerUid == request.auth.uid
+        || (isLegacyHostAccount() && ownerUid == 'W2T8SwFA1pdg8wxm23E5kQqbEHv2')
+      );
     }
     function accountProfile() {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
@@ -244,8 +254,8 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if signedIn() && (request.auth.uid == userId || isApprovedHost());
-      allow list: if isApprovedHost();
+      allow get: if signedIn() && request.auth.uid == userId;
+      allow list: if false;
       allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
@@ -373,7 +383,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'eventId', 'ownerUid', 'publicPath', 'createdAt'
         ])
-        && (request.resource.data.ownerUid == request.auth.uid || isApprovedHost())
+        && canClaimEventOwner(request.resource.data.ownerUid)
         && request.resource.data.eventId is string
         && request.resource.data.publicPath is string
         && request.resource.data.createdAt == request.time
@@ -401,7 +411,7 @@ service cloud.firestore {
             && request.resource.data.ownerUid == resource.data.ownerUid)
           ||
           (!resource.data.keys().hasAny(['ownerUid'])
-            && isApprovedHost()
+            && isLegacyHostAccount()
             && request.resource.data.ownerUid == request.auth.uid)
         )
         && (
@@ -714,7 +724,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if canManageEvent(eventId);
         allow create: if ownsGuestIdentity(guestUid)
-          && (rsvpIsOpen(eventId) || isHost(eventId) || isApprovedHost())
+          && (rsvpIsOpen(eventId) || canManageEvent(eventId))
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
             'approvalStatus', 'companions', 'createdAt', 'updatedAt'
@@ -723,7 +733,7 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
           && request.resource.data.approvalStatus == (
-            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId) && !isHost(eventId) && !isApprovedHost()
+            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId) && !canManageEvent(eventId)
               ? 'pending'
               : 'approved'
           )

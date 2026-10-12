@@ -459,6 +459,7 @@ type GuestEventAccess = {
   profile: GuestProfile;
   rsvp: Rsvp | null;
   invitation?: EventInvitation;
+  hosted?: boolean;
 };
 type Receipt = {
   eventId: string;
@@ -664,7 +665,7 @@ const PUSH_NOTIFICATIONS_ENABLED =
   process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
 const PUSH_API_URL = 'https://gaemaj.tech/api/push';
 const callPushApi = async (
-  path: 'subscribe' | 'send' | 'invite' | 'account',
+  path: 'subscribe' | 'send' | 'invite' | 'expense' | 'account',
   method: 'POST' | 'DELETE',
   body: Record<string, unknown>,
   authToken = '',
@@ -680,8 +681,11 @@ const callPushApi = async (
     const result = await response.json().catch(() => null) as { error?: string } | null;
     throw new Error(result?.error || 'Notification service is unavailable.');
   }
+  return response.json().catch(() => ({ ok: true })) as Promise<Record<string, unknown>>;
 };
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
+const LEGACY_HOST_UID = process.env.NEXT_PUBLIC_LEGACY_HOST_UID?.trim()
+  || 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
 const guestIdentityKey = (eventId: string) => `gather-guest-identity:${eventId}`;
 const GUEST_SESSION_KEY = 'nights-guest-session-v1';
 const GUEST_EVENTS_CACHE_KEY = 'nights-guest-events-v1';
@@ -853,6 +857,10 @@ const eventRoute = (
 };
 const hostHomeRoute = () => usesCleanEventUrls() ? '/nights-host/' : '?view=host';
 const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1';
+const newEventHostRoute = () => {
+  const route = hostHomeRoute();
+  return `${route}${route.includes('?') ? '&' : '?'}create=1`;
+};
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
@@ -868,11 +876,17 @@ const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
 const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
 const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
   `${profile.firstName} ${profile.lastName}`.trim();
-const sessionCanManageEvent = (event: EventMenu, session: Pick<GuestSession, 'authUid' | 'email'>) =>
-  Boolean(session.authUid) && (
-    event.ownerUid === session.authUid
-    || Boolean(HOST_EMAIL && session.email?.trim().toLowerCase() === HOST_EMAIL)
+const accountCanManageEvent = (event: EventMenu, authUid?: string, email?: string) =>
+  Boolean(authUid) && (
+    event.ownerUid === authUid
+    || Boolean(
+      HOST_EMAIL
+      && email?.trim().toLowerCase() === HOST_EMAIL
+      && event.ownerUid === LEGACY_HOST_UID
+    )
   );
+const sessionCanManageEvent = (event: EventMenu, session: Pick<GuestSession, 'authUid' | 'email'>) =>
+  accountCanManageEvent(event, session.authUid, session.email);
 const ensureOwnedEventGuestAccess = async (event: EventMenu, session: GuestSession) => {
   if (!firebaseConfigured || !session.authUid || !sessionCanManageEvent(event, session)) return;
   const [{ getApp }, store] = await Promise.all([
@@ -1504,6 +1518,15 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (mode !== 'host' || !hostUser || !accountProfile) return;
+    const url = new URL(window.location.href);
+    if (url.searchParams.get('create') !== '1') return;
+    url.searchParams.delete('create');
+    history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    queueMicrotask(() => setCreatingEvent(true));
+  }, [accountProfile, hostUser, mode]);
+
   const loadGuestEvents = useCallback(async (session: GuestSession) => {
     setGuestEventsBusy(true);
     try {
@@ -1567,6 +1590,7 @@ export default function Home() {
           const rsvpData = rsvpDocument.data();
           return {
             event,
+            hosted: isOwner,
             profile: profileData ? {
               ...profileData,
               guestUid: session.guestUid,
@@ -1598,7 +1622,7 @@ export default function Home() {
             ...(invitation ? { invitation } : {}),
           } satisfies GuestEventAccess;
         }));
-        matches = candidates.filter((entry): entry is GuestEventAccess => Boolean(entry));
+        matches = candidates.filter(Boolean) as GuestEventAccess[];
       } else {
         const previewEvents = JSON.parse(localStorage.getItem(DEMO_EVENTS_KEY) || '[]') as EventMenu[];
         matches = previewEvents.flatMap((event) => {
@@ -1616,6 +1640,7 @@ export default function Home() {
           ) as Rsvp[];
           return [{
             event,
+            hosted: false,
             profile,
             rsvp: eventRsvps.find((entry) => entry.guestUid === session.guestUid) || null,
           }];
@@ -1734,6 +1759,7 @@ export default function Home() {
         const rsvpData = rsvpDocument.data();
         const access: GuestEventAccess = {
           event,
+          hosted: sessionCanManageEvent(event, session),
           profile: {
             ...profileData,
             guestUid: session.guestUid,
@@ -1764,7 +1790,7 @@ export default function Home() {
         updatedAt: Date.now(),
       };
       localStorage.setItem(`gather-demo-profile:${event.id}`, JSON.stringify(profile));
-      const access: GuestEventAccess = { event, profile, rsvp: null };
+      const access: GuestEventAccess = { event, hosted: false, profile, rsvp: null };
       const nextEvents = [...knownEvents.filter((entry) => entry.event.id !== event.id), access];
       setGuestEvents(nextEvents);
       writeGuestEventCache(session, nextEvents);
@@ -1871,10 +1897,8 @@ export default function Home() {
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile || mode !== 'host') return;
-    const approvedHost = Boolean(
-      HOST_EMAIL && normalizedAccountEmail(accountProfile.email) === HOST_EMAIL,
-    );
-    const ownedEvents = events.filter((event) => event.ownerUid === accountUser.uid || approvedHost);
+    const ownedEvents = events.filter((event) =>
+      accountCanManageEvent(event, accountUser.uid, accountProfile.email));
     ownedEvents.forEach((event) => {
       if (ensuredHostMembershipsRef.current.has(event.id)) return;
       ensuredHostMembershipsRef.current.add(event.id);
@@ -2363,13 +2387,53 @@ export default function Home() {
         eventId = aliasedEvent.id;
         localStorage.setItem(LAST_EVENT_KEY, eventId);
       }
-      const unsubMenu = store.onSnapshot(
-        store.doc(db, 'events', eventId),
-        (snap) => {
-          if (snap.exists()) setMenu({ id: snap.id, ...snap.data() } as EventMenu);
-          setEventReady(true);
-        },
+      const eventCollection = store.collection(db, 'events');
+      const managesLegacyEvents = Boolean(
+        mode === 'host'
+        && hostAuthUser
+        && HOST_EMAIL
+        && hostAuthUser.email?.trim().toLowerCase() === HOST_EMAIL
+        && hostAuthUser.uid !== LEGACY_HOST_UID,
       );
+      const ownedEventSource = mode === 'host' && hostAuthUser
+        ? managesLegacyEvents
+          ? store.query(
+              eventCollection,
+              store.where('ownerUid', 'in', [hostAuthUser.uid, LEGACY_HOST_UID]),
+            )
+          : store.query(eventCollection, store.where('ownerUid', '==', hostAuthUser.uid))
+        : null;
+      if (mode === 'host' && hostAuthUser && hostUser && ownedEventSource) {
+        const initialOwnedSnapshot = await store.getDocs(ownedEventSource);
+        const initialOwnedEvents = initialOwnedSnapshot.docs.map(
+          (document) => ({ id: document.id, ...document.data() }) as EventMenu,
+        );
+        const selectedEvent = initialOwnedEvents.find((event) => event.id === eventId);
+        if (!selectedEvent) {
+          const fallbackEvent = initialOwnedEvents[0];
+          eventId = fallbackEvent?.id || EMPTY_EVENT_ID;
+          if (fallbackEvent) {
+            localStorage.setItem(LAST_EVENT_KEY, fallbackEvent.id);
+            history.replaceState(
+              {},
+              '',
+              eventRoute(fallbackEvent.id, 'host', automaticPublicEventPath(fallbackEvent)),
+            );
+          } else {
+            setMenu(emptyEventMenu);
+          }
+        }
+      }
+      const unsubMenu = eventId === EMPTY_EVENT_ID
+        ? () => {}
+        : store.onSnapshot(
+            store.doc(db, 'events', eventId),
+            (snap) => {
+              if (snap.exists()) setMenu({ id: snap.id, ...snap.data() } as EventMenu);
+              setEventReady(true);
+            },
+          );
+      if (eventId === EMPTY_EVENT_ID) setEventReady(true);
       let unsubOrders = () => {};
       let unsubRsvps = () => {};
       let unsubMyRsvp = () => {};
@@ -2377,11 +2441,7 @@ export default function Home() {
       let unsubEvents = () => {};
       let unsubEventOrderCounts: (() => void)[] = [];
       const unsubRememberedOrders: (() => void)[] = [];
-      if (mode === 'host' && hostAuthUser && hostUser) {
-        const eventCollection = store.collection(db, 'events');
-        const ownedEventSource = HOST_EMAIL && hostAuthUser.email?.toLowerCase() === HOST_EMAIL
-          ? eventCollection
-          : store.query(eventCollection, store.where('ownerUid', '==', hostAuthUser.uid));
+      if (mode === 'host' && hostAuthUser && hostUser && ownedEventSource) {
         unsubEvents = store.onSnapshot(
           ownedEventSource,
           (snap) => {
@@ -2429,7 +2489,7 @@ export default function Home() {
             }
           },
         );
-        unsubOrders = store.onSnapshot(
+        if (eventId !== EMPTY_EVENT_ID) unsubOrders = store.onSnapshot(
           store.collection(db, 'events', eventId, 'orders'),
           (snap) =>
             setOrders(
@@ -2446,7 +2506,7 @@ export default function Home() {
               ).sort((left, right) => right.createdAt - left.createdAt),
             ),
         );
-        unsubRsvps = store.onSnapshot(
+        if (eventId !== EMPTY_EVENT_ID) unsubRsvps = store.onSnapshot(
           store.query(
             store.collection(db, 'events', eventId, 'rsvps'),
             store.orderBy('createdAt', 'desc'),
@@ -2616,14 +2676,18 @@ export default function Home() {
         ? 'RSVP: Not approved'
         : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
+  const canManageCurrentEvent = mode === 'host' && (
+    !firebaseConfigured
+    || accountCanManageEvent(menu, accountUser?.uid, accountUser?.email)
+  );
   const chatActor: ChatActor | null = useMemo(() => mode === 'host'
-    ? (hostUser || !firebaseConfigured)
-      ? { uid: menu.ownerUid || 'host', name: 'Host', role: 'host' }
+    ? ((hostUser && canManageCurrentEvent) || !firebaseConfigured)
+      ? { uid: hostUser || 'host', name: 'Host', role: 'host' }
       : null
     : myRsvp?.status === 'yes' && guestHasEventAccess && effectiveGuestProfile
       ? { uid: effectiveGuestProfile.guestUid, name: effectiveGuestProfile.guestName, role: 'guest' }
       : null,
-  [effectiveGuestProfile, guestHasEventAccess, hostUser, menu.ownerUid, mode, myRsvp?.status]);
+  [canManageCurrentEvent, effectiveGuestProfile, guestHasEventAccess, hostUser, mode, myRsvp?.status]);
   const expenseActor: ExpenseActor | null = useMemo(() => {
     if (!firebaseConfigured && mode === 'host' && menu.id !== EMPTY_EVENT_ID) return {
       accountUid: 'preview-host',
@@ -2632,12 +2696,12 @@ export default function Home() {
       role: 'host',
     };
     if (!accountUser || !accountProfile || menu.id === EMPTY_EVENT_ID) return null;
-    if (mode === 'host') return {
-      accountUid: accountUser.uid,
-      participantUid: accountProfile.guestUid,
-      name: accountDisplayName(accountProfile),
-      role: 'host',
-    };
+    if (mode === 'host') return canManageCurrentEvent ? {
+        accountUid: accountUser.uid,
+        participantUid: accountProfile.guestUid,
+        name: accountDisplayName(accountProfile),
+        role: 'host',
+      } : null;
     if (myRsvp?.status !== 'yes' || !guestHasEventAccess || !effectiveGuestProfile) return null;
     return {
       accountUid: accountUser.uid,
@@ -2645,7 +2709,7 @@ export default function Home() {
       name: effectiveGuestProfile.guestName,
       role: 'guest',
     };
-  }, [accountProfile, accountUser, effectiveGuestProfile, guestHasEventAccess, menu.id, mode, myRsvp?.status]);
+  }, [accountProfile, accountUser, canManageCurrentEvent, effectiveGuestProfile, guestHasEventAccess, menu.id, mode, myRsvp?.status]);
   const chatActorUid = chatActor?.uid;
   useEffect(() => {
     if (!chatActorUid) return;
@@ -2654,6 +2718,11 @@ export default function Home() {
       if (new URLSearchParams(window.location.search).get('chat') === '1') setChatOpen(true);
     });
   }, [chatActorUid]);
+  useEffect(() => {
+    if (!expenseActor) return;
+    if (new URLSearchParams(window.location.search).get('expenses') === '1')
+      queueMicrotask(() => setExpensesOpen(true));
+  }, [expenseActor]);
   const openRsvpPanel = () => {
     setGuestName(effectiveGuestProfile?.guestName || '');
     setPhoneNumber(formatPhone(effectiveGuestProfile?.guestPhone || ''));
@@ -2719,7 +2788,7 @@ export default function Home() {
       });
     });
     events.forEach((event) => {
-      if (event.ownerUid === accountUser.uid)
+      if (accountCanManageEvent(event, accountUser.uid, accountUser.email))
         targets.set(event.id, {
           event,
           actor: { uid: accountUser.uid, name: 'Host', role: 'host' },
@@ -3326,7 +3395,7 @@ export default function Home() {
 
       for (const eventDocument of eventSnapshot.docs) {
         const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
-        const legacyOwned = !event.ownerUid
+        const legacyOwned = event.ownerUid === LEGACY_HOST_UID
           && normalizedAccountEmail(accountProfile.email) === normalizedAccountEmail(HOST_EMAIL || '');
         if (event.ownerUid === accountUser.uid || legacyOwned) {
           const collections = await Promise.all([
@@ -3665,6 +3734,18 @@ export default function Home() {
   };
   const selectGuestEvent = (access: GuestEventAccess) => {
     if (!guestSession) return;
+    const hosted = access.hosted
+      || accountCanManageEvent(access.event, accountUser?.uid, accountUser?.email);
+    if (hosted) {
+      localStorage.setItem(LAST_EVENT_KEY, access.event.id);
+      setGuestEventPickerOpen(false);
+      window.location.assign(eventRoute(
+        access.event.id,
+        'host',
+        automaticPublicEventPath(access.event),
+      ));
+      return;
+    }
     localStorage.setItem(guestIdentityKey(access.event.id), guestSession.guestUid);
     localStorage.setItem(LAST_EVENT_KEY, access.event.id);
     const nextRoute = eventRoute(access.event.id, 'guest', automaticPublicEventPath(access.event));
@@ -3779,7 +3860,7 @@ export default function Home() {
         ]);
         const user = authModule.getAuth(getApp()).currentUser;
         if (!user || user.isAnonymous) {
-          notify('Sign in with the approved host account before creating an event');
+          notify('Sign in to your Nights account before creating an event');
           return;
         }
         event.ownerUid = user.uid;
@@ -4629,7 +4710,7 @@ export default function Home() {
       ]);
       const user = authModule.getAuth(getApp()).currentUser;
       if (!user || user.isAnonymous) {
-        notify('Sign in with the approved host account before saving');
+        notify('Sign in to your Nights account before saving');
         return;
       }
       const db = store.getFirestore(getApp());
@@ -5015,6 +5096,17 @@ export default function Home() {
                 <span>Home</span>
               </button>
             )}
+            {mode === 'guest' && accountProfile && (
+              <button
+                type="button"
+                className="guest-new-event-button"
+                onClick={() => window.location.assign(newEventHostRoute())}
+                aria-label="Create a new event"
+              >
+                <CalendarPlus size={15} />
+                <span>New Event</span>
+              </button>
+            )}
             {!isStandalone && (
               <button
                 onClick={openInstallGuide}
@@ -5288,7 +5380,7 @@ export default function Home() {
             key={menu.id}
             menu={menu}
             actor={expenseActor}
-            canManage={mode === 'host'}
+            canManage={canManageCurrentEvent}
             fallbackRsvps={rsvps}
             editRequest={expenseEditRequest}
             onClose={() => setExpensesOpen(false)}
@@ -6156,7 +6248,7 @@ function GuestAccessPortal({
         <span className="guest-access-mark"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={62} height={62} /></span>
         <p className="eyebrow">Your nights, in one place</p>
         <h1 className="font-display">Your events</h1>
-        <p>Use one secure account for every invitation, RSVP, order, and event chat.</p>
+        <p>Use one secure account for every event you host, invitation, RSVP, order, and event chat.</p>
       </div>
       {!profile ? (
         <div className="guest-access-auth-shell">
@@ -6171,7 +6263,13 @@ function GuestAccessPortal({
           {events.length ? (
             <div className="guest-event-card-grid">
               {events.map((access) => (
-                <GuestEventCard key={access.event.id} access={access} invited={Boolean(access.invitation || (pendingEvent && guestEventMatchesPending(access, pendingEvent)))} onSelect={() => selectEvent(access)} />
+                <GuestEventCard
+                  key={access.event.id}
+                  access={access}
+                  hosted={Boolean(access.hosted || accountCanManageEvent(access.event, user?.uid, user?.email))}
+                  invited={Boolean(access.invitation || (pendingEvent && guestEventMatchesPending(access, pendingEvent)))}
+                  onSelect={() => selectEvent(access)}
+                />
               ))}
             </div>
           ) : <p className="guest-access-loading">{busy ? 'Loading your events…' : 'No invitations or RSVPs were found for this guest profile.'}</p>}
@@ -6186,21 +6284,26 @@ function GuestEventCard({
   access,
   current = false,
   invited = false,
+  hosted = false,
   onSelect,
 }: {
   access: GuestEventAccess;
   current?: boolean;
   invited?: boolean;
+  hosted?: boolean;
   onSelect: () => void;
 }) {
-  const response = access.rsvp
+  const response = hosted
+    ? 'Open host view'
+    : access.rsvp
     ? access.rsvp.status === 'yes' ? 'Going' : access.rsvp.status === 'maybe' ? 'Maybe' : 'Not going'
     : invited ? 'New invitation' : 'Invited · RSVP not sent';
   return (
-    <button type="button" className={`guest-event-card ${current ? 'current' : ''}`} onClick={onSelect}>
+    <button type="button" className={`guest-event-card ${current ? 'current' : ''} ${hosted ? 'hosted' : ''}`} onClick={onSelect}>
       <span className="guest-event-card-art" style={{ backgroundImage: `linear-gradient(145deg, rgb(32 157 139 / 0.82), rgb(31 88 163 / 0.82)), url(${eventBackground(access.event)})` }} />
       <span className="guest-event-card-copy">
         <small>{eventTypeLabel(access.event)}{current ? ' · Current event' : ''}</small>
+        {hosted && <em className="guest-event-hosting-mark font-display">Your event</em>}
         <strong className="font-display">{access.event.title}</strong>
         <span><Clock3 size={13} /> {access.event.date}</span>
         {access.event.address && <span><MapPin size={13} /> {access.event.address}</span>}
@@ -6237,7 +6340,7 @@ function GuestEventPicker({
         {busy ? <p className="guest-access-loading">Refreshing your invitations…</p> : events.length ? (
           <div className="guest-event-picker-list">
             {events.map((access) => (
-              <GuestEventCard key={access.event.id} access={access} current={access.event.id === currentEventId} invited={Boolean(access.invitation)} onSelect={() => onSelect(access)} />
+              <GuestEventCard key={access.event.id} access={access} hosted={Boolean(access.hosted)} current={access.event.id === currentEventId} invited={Boolean(access.invitation)} onSelect={() => onSelect(access)} />
             ))}
           </div>
         ) : <p className="guest-access-loading">No invitations or RSVPs were found.</p>}
@@ -6751,6 +6854,20 @@ function ExpensePanel({
     localStorage.setItem(expensePreviewKey(menu.id), JSON.stringify(next));
   };
 
+  const notifyExpenseParticipants = async (expenseId: string) => {
+    if (!firebaseConfigured) return;
+    const [{ getApp }, { getAuth }] = await Promise.all([
+      import('firebase/app'), import('firebase/auth'),
+    ]);
+    const user = getAuth(getApp()).currentUser;
+    if (!user) throw new Error('Sign in again to notify guests.');
+    const result = await callPushApi('expense', 'POST', {
+      eventId: menu.id,
+      expenseId,
+    }, await user.getIdToken());
+    return typeof result.deliveries === 'number' ? result.deliveries : 0;
+  };
+
   const saveManualExpense = async () => {
     const preparedItems: ExpenseLineItem[] = items.map((item) => ({
       id: item.id,
@@ -6777,7 +6894,7 @@ function ExpensePanel({
       const now = Date.now();
       const existingExpense = expenses.find((expense) => expense.id === editingExpenseId);
       const usedParticipantIds = new Set(preparedItems.flatMap((item) => item.allocations.map((allocation) => allocation.participantUid)));
-      await persistExpense({
+      const savedExpense: EventExpense = {
         id: existingExpense?.id || crypto.randomUUID(),
         kind: 'manual',
         title: title.trim(),
@@ -6791,9 +6908,25 @@ function ExpensePanel({
         participants: draftParticipants.filter((participant) => usedParticipantIds.has(participant.id)),
         createdAt: existingExpense?.createdAt || now,
         updatedAt: now,
-      });
+      };
+      await persistExpense(savedExpense);
+      let notificationFailed = false;
+      let notificationDeliveries = 0;
+      if (!existingExpense) {
+        try {
+          notificationDeliveries = await notifyExpenseParticipants(savedExpense.id) || 0;
+        } catch {
+          notificationFailed = true;
+        }
+      }
       closeExpenseComposer();
-      notify(existingExpense ? 'Expense updated' : 'Expense added and split');
+      notify(existingExpense
+        ? 'Expense updated'
+        : notificationFailed
+          ? 'Expense added, but guest notifications could not be sent'
+          : notificationDeliveries > 0
+            ? `Expense added · sent to ${notificationDeliveries} notification-enabled device${notificationDeliveries === 1 ? '' : 's'}`
+            : 'Expense added · no involved guests have notifications enabled');
     } catch {
       notify('The expense could not be saved.');
     } finally {
@@ -6914,7 +7047,7 @@ function ExpensePanel({
 
         <section className="expense-actions" aria-label="Add an expense">
           <button type="button" onClick={beginManualExpense} disabled={busy}><Calculator size={18} /><span><strong>Add manually</strong><small>Items, tax, fees and weighted shares</small></span></button>
-          <button type="button" onClick={() => receiptInputRef.current?.click()} disabled={busy}><Upload size={18} /><span><strong>Upload receipt</strong><small>JPEG, PNG, WebP or HEIC</small></span></button>
+          <button type="button" disabled className="camera-coming-soon receipt-upload-disabled" title="Receipt processing is coming next"><Upload size={18} /><span><strong>Upload receipt</strong><small>Coming soon</small></span></button>
           {mobileDevice && <button type="button" disabled className="camera-coming-soon"><Camera size={18} /><span><strong>Take a picture</strong><small>Camera capture coming next</small></span></button>}
           <input ref={receiptInputRef} type="file" hidden accept="image/*,.heic,.heif" onChange={(event) => {
             const file = event.target.files?.[0];
@@ -6940,6 +7073,7 @@ function ExpensePanel({
                 {expandedItemId === item.id && <div className="expense-split-editor">
                   <div className="expense-split-tools">
                     <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(draftParticipants.map((participant) => [participant.id, 1])) }))}><Check size={14} /> Select all</button>
+                    <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: {} }))}><XCircle size={14} /> Deselect all</button>
                     <button type="button" onClick={() => updateItem(item.id, (current) => ({ ...current, allocations: Object.fromEntries(Object.keys(current.allocations).filter((participantUid) => current.allocations[participantUid] > 0).map((participantUid) => [participantUid, 1])) }))}><Calculator size={14} /> Share equally</button>
                   </div>
                   <div className="expense-add-outsider">
