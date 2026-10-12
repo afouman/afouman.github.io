@@ -594,7 +594,34 @@ service cloud.firestore {
             && request.resource.data.receiptName is string
           )
         );
-        allow update: if canManageEvent(eventId);
+        allow update: if canManageEvent(eventId) || (
+          signedIn()
+          && resource.data.kind == 'manual'
+          && resource.data.submittedByAccountUid == request.auth.uid
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.kind == resource.data.kind
+          && request.resource.data.submittedByAccountUid == resource.data.submittedByAccountUid
+          && request.resource.data.submittedByUid == resource.data.submittedByUid
+          && request.resource.data.submittedByName == resource.data.submittedByName
+          && request.resource.data.submittedByRole == resource.data.submittedByRole
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 120
+          && request.resource.data.items is list
+          && request.resource.data.items.size() > 0
+          && request.resource.data.items.size() <= 50
+          && request.resource.data.taxCents is int
+          && request.resource.data.taxCents >= 0
+          && request.resource.data.feesCents is int
+          && request.resource.data.feesCents >= 0
+          && request.resource.data.participants is list
+          && request.resource.data.participants.size() <= 100
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'items', 'taxCents', 'feesCents', 'participants', 'updatedAt'
+          ])
+        );
         allow delete: if canManageEvent(eventId) || (
           signedIn() && resource.data.submittedByAccountUid == request.auth.uid
         );
@@ -687,7 +714,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if canManageEvent(eventId);
         allow create: if ownsGuestIdentity(guestUid)
-          && rsvpIsOpen(eventId)
+          && (rsvpIsOpen(eventId) || isHost(eventId))
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
             'approvalStatus', 'companions', 'createdAt', 'updatedAt'
@@ -696,7 +723,7 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
           && request.resource.data.approvalStatus == (
-            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId)
+            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId) && !isHost(eventId)
               ? 'pending'
               : 'approved'
           )

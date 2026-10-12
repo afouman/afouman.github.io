@@ -1,4 +1,5 @@
 'use client';
+/* oxlint-disable jsx-a11y/prefer-tag-over-role -- Safari handles controls inside this fixed overlay reliably only with a non-native dialog wrapper. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
@@ -855,8 +856,8 @@ const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=41', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=41', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=42', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=42', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -867,6 +868,66 @@ const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
 const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
 const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
   `${profile.firstName} ${profile.lastName}`.trim();
+const ensureOwnedEventGuestAccess = async (event: EventMenu, session: GuestSession) => {
+  if (!firebaseConfigured || !session.authUid || event.ownerUid !== session.authUid) return;
+  const [{ getApp }, store] = await Promise.all([
+    import('firebase/app'), import('firebase/firestore'),
+  ]);
+  const db = store.getFirestore(getApp());
+  const invitationRef = store.doc(db, 'users', session.authUid, 'invitations', event.id);
+  const profileRef = store.doc(db, 'events', event.id, 'guests', session.guestUid);
+  const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', session.guestUid);
+  const participantRef = store.doc(db, 'events', event.id, 'expense-participants', session.guestUid);
+  await store.runTransaction(db, async (transaction) => {
+    const [invitation, profile, rsvp, participant] = await Promise.all([
+      transaction.get(invitationRef), transaction.get(profileRef),
+      transaction.get(rsvpRef), transaction.get(participantRef),
+    ]);
+    if (invitation.exists() && profile.exists() && rsvp.exists() && participant.exists()) return;
+    const guestName = profile.data()?.guestName || session.guestName;
+    if (!invitation.exists()) transaction.set(invitationRef, {
+      eventId: event.id,
+      eventTitle: event.title,
+      hostUid: session.authUid,
+      recipientUid: session.authUid,
+      recipientGuestUid: session.guestUid,
+      recipientEmail: '',
+      recipientPhone: session.guestPhone,
+      createdAt: store.serverTimestamp(),
+      updatedAt: store.serverTimestamp(),
+    });
+    if (!profile.exists()) transaction.set(profileRef, {
+      guestUid: session.guestUid,
+      accountUid: session.authUid,
+      guestName,
+      guestPhone: session.guestPhone,
+      createdAt: store.serverTimestamp(),
+      updatedAt: store.serverTimestamp(),
+    });
+    if (!rsvp.exists()) transaction.set(rsvpRef, {
+      guestUid: session.guestUid,
+      guestName,
+      guestPhone: session.guestPhone,
+      status: 'yes',
+      companions: [],
+      activeOrderCount: 0,
+      approvalStatus: 'approved',
+      createdAt: store.serverTimestamp(),
+      updatedAt: store.serverTimestamp(),
+    });
+    transaction.set(participantRef, {
+      id: session.guestUid,
+      accountUid: session.authUid,
+      primaryGuestUid: session.guestUid,
+      name: guestName,
+      role: 'host',
+      status: 'host',
+      approvalStatus: 'approved',
+      createdAt: participant.data()?.createdAt || store.serverTimestamp(),
+      updatedAt: store.serverTimestamp(),
+    });
+  });
+};
 const normalizedAccountEmail = (value: string) => value.trim().toLowerCase();
 const DEMO_EVENTS_KEY = 'gather-demo-events-v2';
 const demoOrdersKey = (eventId: string) => `gather-demo-orders-v2:${eventId}`;
@@ -1475,14 +1536,25 @@ export default function Home() {
         );
         const candidates = await Promise.all(eventSnapshot.docs.map(async (eventDocument) => {
           const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
-          const invitation = invitations.get(event.id);
+          const isOwner = Boolean(session.authUid && event.ownerUid === session.authUid);
+          if (isOwner) await ensureOwnedEventGuestAccess(event, session).catch(() => undefined);
+          const invitation = invitations.get(event.id) || (isOwner ? {
+            eventId: event.id,
+            eventTitle: event.title,
+            hostUid: session.authUid,
+            recipientUid: session.authUid,
+            recipientGuestUid: session.guestUid,
+            recipientEmail: '',
+            recipientPhone: session.guestPhone,
+            createdAt: Date.now(),
+          } as EventInvitation : undefined);
           const [profileDocument, rsvpDocument] = await Promise.all([
             store.getDoc(store.doc(db, 'events', event.id, 'guests', session.guestUid)),
             store.getDoc(store.doc(db, 'events', event.id, 'rsvps', session.guestUid)),
           ]);
           const profileData = profileDocument.data();
           if (
-            (!profileData && !invitation)
+            (!profileData && !invitation && !isOwner)
             || (!session.authUid && profileData?.pinHash !== session.pinHash)
             || (profileData?.accountUid && session.authUid && profileData.accountUid !== session.authUid)
           ) return null;
@@ -1507,7 +1579,16 @@ export default function Home() {
               activeOrderCount: rsvpData.activeOrderCount || 0,
               createdAt: rsvpData.createdAt?.toMillis?.() ?? Date.now(),
               updatedAt: rsvpData.updatedAt?.toMillis?.(),
-            } as Rsvp : null,
+            } as Rsvp : isOwner ? {
+              guestUid: session.guestUid,
+              guestName: session.guestName,
+              guestPhone: session.guestPhone,
+              status: 'yes',
+              companions: [],
+              activeOrderCount: 0,
+              approvalStatus: 'approved',
+              createdAt: Date.now(),
+            } : null,
             ...(invitation ? { invitation } : {}),
           } satisfies GuestEventAccess;
         }));
@@ -2535,6 +2616,12 @@ export default function Home() {
       : null,
   [effectiveGuestProfile, guestHasEventAccess, hostUser, menu.ownerUid, mode, myRsvp?.status]);
   const expenseActor: ExpenseActor | null = useMemo(() => {
+    if (!firebaseConfigured && mode === 'host' && menu.id !== EMPTY_EVENT_ID) return {
+      accountUid: 'preview-host',
+      participantUid: 'preview-host',
+      name: 'Host',
+      role: 'host',
+    };
     if (!accountUser || !accountProfile || menu.id === EMPTY_EVENT_ID) return null;
     if (mode === 'host') return {
       accountUid: accountUser.uid,
@@ -6403,6 +6490,7 @@ function ExpensePanel({
   const [expenses, setExpenses] = useState<EventExpense[]>([]);
   const [participants, setParticipants] = useState<ExpenseParticipant[]>([]);
   const [manualOpen, setManualOpen] = useState(false);
+  const [editingExpenseId, setEditingExpenseId] = useState('');
   const [title, setTitle] = useState('');
   const [tax, setTax] = useState('');
   const [fees, setFees] = useState('');
@@ -6413,6 +6501,7 @@ function ExpensePanel({
   const [busy, setBusy] = useState(false);
   const [mobileDevice, setMobileDevice] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
+  const expenseComposerRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     queueMicrotask(() => setMobileDevice(
@@ -6535,6 +6624,7 @@ function ExpensePanel({
     setFees('');
     setOutsideParticipants([]);
     setOutsideParticipantName('');
+    setEditingExpenseId('');
     setItems([item]);
     setExpandedItemId(item.id);
     setManualOpen(true);
@@ -6571,17 +6661,51 @@ function ExpensePanel({
       return { ...item, allocations };
     }));
   };
+  const closeExpenseComposer = () => {
+    setManualOpen(false);
+    setEditingExpenseId('');
+    setOutsideParticipants([]);
+    setOutsideParticipantName('');
+  };
+  const beginEditExpense = (expense: EventExpense) => {
+    if (expense.kind !== 'manual') return;
+    const savedParticipants = expense.participants || [];
+    setTitle(expense.title);
+    setTax(expense.taxCents ? (expense.taxCents / 100).toFixed(2) : '');
+    setFees(expense.feesCents ? (expense.feesCents / 100).toFixed(2) : '');
+    const currentParticipantIds = new Set(eligibleParticipants.map((participant) => participant.id));
+    setOutsideParticipants(savedParticipants.filter((participant) =>
+      participant.role === 'external' || !currentParticipantIds.has(participant.id)));
+    setOutsideParticipantName('');
+    setItems(expense.items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      amount: (item.amountCents / 100).toFixed(2),
+      allocations: Object.fromEntries(item.allocations.map((allocation) => [allocation.participantUid, allocation.multiplier])),
+    })));
+    setExpandedItemId(expense.items[0]?.id || '');
+    setEditingExpenseId(expense.id);
+    setManualOpen(true);
+    requestAnimationFrame(() => expenseComposerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
 
   const persistExpense = async (expense: EventExpense) => {
     if (firebaseConfigured) {
       const [{ getApp }, store] = await Promise.all([
         import('firebase/app'), import('firebase/firestore'),
       ]);
-      await store.setDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'expenses', expense.id), {
-        ...expense,
-        createdAt: store.serverTimestamp(),
-        updatedAt: store.serverTimestamp(),
-      });
+      const expenseRef = store.doc(store.getFirestore(getApp()), 'events', menu.id, 'expenses', expense.id);
+      const existing = expenses.some((entry) => entry.id === expense.id);
+      if (existing) {
+        const { createdAt: _createdAt, updatedAt: _updatedAt, ...editableExpense } = expense;
+        await store.updateDoc(expenseRef, { ...editableExpense, updatedAt: store.serverTimestamp() });
+      } else {
+        await store.setDoc(expenseRef, {
+          ...expense,
+          createdAt: store.serverTimestamp(),
+          updatedAt: store.serverTimestamp(),
+        });
+      }
       return;
     }
     const next = [expense, ...expenses.filter((entry) => entry.id !== expense.id)];
@@ -6613,9 +6737,10 @@ function ExpensePanel({
     setBusy(true);
     try {
       const now = Date.now();
+      const existingExpense = expenses.find((expense) => expense.id === editingExpenseId);
       const usedParticipantIds = new Set(preparedItems.flatMap((item) => item.allocations.map((allocation) => allocation.participantUid)));
       await persistExpense({
-        id: crypto.randomUUID(),
+        id: existingExpense?.id || crypto.randomUUID(),
         kind: 'manual',
         title: title.trim(),
         items: preparedItems,
@@ -6626,11 +6751,11 @@ function ExpensePanel({
         submittedByName: actor.name,
         submittedByRole: actor.role,
         participants: draftParticipants.filter((participant) => usedParticipantIds.has(participant.id)),
-        createdAt: now,
+        createdAt: existingExpense?.createdAt || now,
         updatedAt: now,
       });
-      setManualOpen(false);
-      notify('Expense added and split');
+      closeExpenseComposer();
+      notify(existingExpense ? 'Expense updated' : 'Expense added and split');
     } catch {
       notify('The expense could not be saved.');
     } finally {
@@ -6719,12 +6844,20 @@ function ExpensePanel({
 
   return (
     <div className="expense-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !busy) onClose();
+      if (event.target === event.currentTarget) onClose();
     }}>
-      <dialog open className="expense-panel" aria-labelledby="expense-panel-title">
+      <div className="expense-panel" role="dialog" aria-modal="true" aria-labelledby="expense-panel-title">
         <header className="expense-panel-header">
           <div><p className="eyebrow">{menu.title}</p><h2 id="expense-panel-title" className="font-display">Expenses</h2><span>Receipts, shared items and a clear total for every guest.</span></div>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="Close expenses"><XCircle size={22} /></button>
+          <button
+            type="button"
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
+            onClick={onClose}
+            aria-label="Close expenses"
+          ><XCircle size={22} /></button>
         </header>
 
         <section className="expense-summary">
@@ -6750,8 +6883,8 @@ function ExpensePanel({
           }} />
         </section>
 
-        {manualOpen && <section className="expense-composer">
-          <header><div><p className="eyebrow">Manual entry</p><h3 className="font-display">Build the expense</h3></div><button type="button" onClick={() => setManualOpen(false)} disabled={busy}>Cancel</button></header>
+        {manualOpen && <section ref={expenseComposerRef} className="expense-composer">
+          <header><div><p className="eyebrow">{editingExpenseId ? 'Edit expense' : 'Manual entry'}</p><h3 className="font-display">{editingExpenseId ? 'Update the split' : 'Build the expense'}</h3></div><button type="button" onClick={closeExpenseComposer} disabled={busy}>Cancel</button></header>
           <label className="expense-title-field"><span>Expense name</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Groceries, movie tickets…" /></label>
           <div className="expense-item-list">
             {items.map((item, itemIndex) => {
@@ -6810,7 +6943,7 @@ function ExpensePanel({
             <label><span>Fees</span><div className="money-input"><DollarSign size={14} /><input inputMode="decimal" value={fees} onChange={(event) => setFees(event.target.value)} placeholder="0.00" /></div></label>
             <div><span>Expense total</span><strong>{formatCents(items.reduce((sum, item) => sum + parseMoneyCents(item.amount), 0) + parseMoneyCents(tax) + parseMoneyCents(fees))}</strong><small>Tax and fees follow each guest’s item share.</small></div>
           </div>
-          <button type="button" className="primary-button expense-save" onClick={() => void saveManualExpense()} disabled={busy}>{busy ? 'Saving…' : 'Save expense & split'}</button>
+          <button type="button" className="primary-button expense-save" onClick={() => void saveManualExpense()} disabled={busy}>{busy ? 'Saving…' : editingExpenseId ? 'Update expense & split' : 'Save expense & split'}</button>
         </section>}
 
         <section className="expense-history">
@@ -6826,7 +6959,10 @@ function ExpensePanel({
                 <span>{expense.kind === 'receipt' ? <FileText size={18} /> : <DollarSign size={18} />}</span>
                 <div><strong>{expense.title}</strong><small>Added by {expense.submittedByName} · {new Date(expense.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></div>
                 <b>{expense.kind === 'receipt' ? 'Pending' : formatCents(expenseTotal(expense))}</b>
-                {(canManage || expense.submittedByAccountUid === actor.accountUid) && <button type="button" onClick={() => void deleteExpense(expense)} disabled={busy} aria-label={`Delete ${expense.title}`}><Trash2 size={15} /></button>}
+                {(canManage || expense.submittedByAccountUid === actor.accountUid) && <div className="expense-history-actions">
+                  {expense.kind === 'manual' && <button type="button" onClick={() => beginEditExpense(expense)} disabled={busy} aria-label={`Edit ${expense.title}`}><Pencil size={15} /></button>}
+                  <button type="button" className="delete" onClick={() => void deleteExpense(expense)} disabled={busy} aria-label={`Delete ${expense.title}`}><Trash2 size={15} /></button>
+                </div>}
               </div>
               {expense.kind === 'receipt' ? <div className="receipt-awaiting"><span>Awaiting itemization</span>{expense.receiptUrl && <a href={expense.receiptUrl} target="_blank" rel="noreferrer">View receipt <ExternalLink size={13} /></a>}</div> : <>
                 <ul className="expense-line-summary">{expense.items.map((item) => <li key={item.id}><span>{item.name}</span><b>{formatCents(item.amountCents)}</b></li>)}{expense.taxCents > 0 && <li><span>Tax</span><b>{formatCents(expense.taxCents)}</b></li>}{expense.feesCents > 0 && <li><span>Fees</span><b>{formatCents(expense.feesCents)}</b></li>}</ul>
@@ -6835,7 +6971,7 @@ function ExpensePanel({
             </article>;
           })}
         </section>
-      </dialog>
+      </div>
     </div>
   );
 }
