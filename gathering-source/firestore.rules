@@ -714,7 +714,7 @@ service cloud.firestore {
         allow get: if true;
         allow list: if canManageEvent(eventId);
         allow create: if ownsGuestIdentity(guestUid)
-          && (rsvpIsOpen(eventId) || isHost(eventId))
+          && (rsvpIsOpen(eventId) || isHost(eventId) || isApprovedHost())
           && request.resource.data.keys().hasOnly([
             'guestUid', 'guestName', 'guestPhone', 'status', 'activeOrderCount',
             'approvalStatus', 'companions', 'createdAt', 'updatedAt'
@@ -723,7 +723,7 @@ service cloud.firestore {
           && request.resource.data.status in ['yes', 'maybe', 'no']
           && request.resource.data.activeOrderCount == 0
           && request.resource.data.approvalStatus == (
-            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId) && !isHost(eventId)
+            eventRequiresApproval(eventId) && request.resource.data.status == 'yes' && !hasHostInvitation(eventId) && !isHost(eventId) && !isApprovedHost()
               ? 'pending'
               : 'approved'
           )

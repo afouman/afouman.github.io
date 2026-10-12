@@ -856,8 +856,8 @@ const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=42', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=42', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=43', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=43', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -868,8 +868,13 @@ const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
 const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
 const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
   `${profile.firstName} ${profile.lastName}`.trim();
+const sessionCanManageEvent = (event: EventMenu, session: Pick<GuestSession, 'authUid' | 'email'>) =>
+  Boolean(session.authUid) && (
+    event.ownerUid === session.authUid
+    || Boolean(HOST_EMAIL && session.email?.trim().toLowerCase() === HOST_EMAIL)
+  );
 const ensureOwnedEventGuestAccess = async (event: EventMenu, session: GuestSession) => {
-  if (!firebaseConfigured || !session.authUid || event.ownerUid !== session.authUid) return;
+  if (!firebaseConfigured || !session.authUid || !sessionCanManageEvent(event, session)) return;
   const [{ getApp }, store] = await Promise.all([
     import('firebase/app'), import('firebase/firestore'),
   ]);
@@ -891,7 +896,7 @@ const ensureOwnedEventGuestAccess = async (event: EventMenu, session: GuestSessi
       hostUid: session.authUid,
       recipientUid: session.authUid,
       recipientGuestUid: session.guestUid,
-      recipientEmail: '',
+      recipientEmail: session.email || '',
       recipientPhone: session.guestPhone,
       createdAt: store.serverTimestamp(),
       updatedAt: store.serverTimestamp(),
@@ -1331,6 +1336,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
+  const [expenseEditRequest, setExpenseEditRequest] = useState<{ id: string; nonce: number } | null>(null);
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
   const [notificationsDefaultEnabled, setNotificationsDefaultEnabled] = useState(false);
   const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
@@ -1536,7 +1542,7 @@ export default function Home() {
         );
         const candidates = await Promise.all(eventSnapshot.docs.map(async (eventDocument) => {
           const event = { id: eventDocument.id, ...eventDocument.data() } as EventMenu;
-          const isOwner = Boolean(session.authUid && event.ownerUid === session.authUid);
+          const isOwner = sessionCanManageEvent(event, session);
           if (isOwner) await ensureOwnedEventGuestAccess(event, session).catch(() => undefined);
           const invitation = invitations.get(event.id) || (isOwner ? {
             eventId: event.id,
@@ -1865,7 +1871,10 @@ export default function Home() {
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile || mode !== 'host') return;
-    const ownedEvents = events.filter((event) => event.ownerUid === accountUser.uid);
+    const approvedHost = Boolean(
+      HOST_EMAIL && normalizedAccountEmail(accountProfile.email) === HOST_EMAIL,
+    );
+    const ownedEvents = events.filter((event) => event.ownerUid === accountUser.uid || approvedHost);
     ownedEvents.forEach((event) => {
       if (ensuredHostMembershipsRef.current.has(event.id)) return;
       ensuredHostMembershipsRef.current.add(event.id);
@@ -5259,15 +5268,33 @@ export default function Home() {
       )}
 
       {expensesOpen && expenseActor && (
-        <ExpensePanel
-          key={menu.id}
-          menu={menu}
-          actor={expenseActor}
-          canManage={mode === 'host'}
-          fallbackRsvps={rsvps}
-          onClose={() => setExpensesOpen(false)}
-          notify={notify}
-        />
+        <div onPointerDownCapture={(event) => {
+          const control = (event.target as Element).closest<HTMLElement>('[data-expense-action]');
+          if (!control) return;
+          const action = control.dataset.expenseAction;
+          if (action === 'close') {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpensesOpen(false);
+            return;
+          }
+          if (action === 'edit' && control.dataset.expenseId) {
+            event.preventDefault();
+            event.stopPropagation();
+            setExpenseEditRequest({ id: control.dataset.expenseId, nonce: Date.now() });
+          }
+        }}>
+          <ExpensePanel
+            key={menu.id}
+            menu={menu}
+            actor={expenseActor}
+            canManage={mode === 'host'}
+            fallbackRsvps={rsvps}
+            editRequest={expenseEditRequest}
+            onClose={() => setExpensesOpen(false)}
+            notify={notify}
+          />
+        </div>
       )}
 
       {deleteAccountOpen && accountUser && (
@@ -6476,6 +6503,7 @@ function ExpensePanel({
   actor,
   canManage,
   fallbackRsvps,
+  editRequest,
   onClose,
   notify,
 }: {
@@ -6483,6 +6511,7 @@ function ExpensePanel({
   actor: ExpenseActor;
   canManage: boolean;
   fallbackRsvps: Rsvp[];
+  editRequest: { id: string; nonce: number } | null;
   onClose: () => void;
   notify: (message: string) => void;
 }) {
@@ -6689,6 +6718,15 @@ function ExpensePanel({
     requestAnimationFrame(() => expenseComposerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
 
+  useEffect(() => {
+    if (!editRequest) return;
+    const expense = expenses.find((entry) => entry.id === editRequest.id);
+    if (expense) queueMicrotask(() => beginEditExpense(expense));
+    // The request nonce intentionally makes each tap distinct. The expense list
+    // is already populated before an edit control can be rendered.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRequest]);
+
   const persistExpense = async (expense: EventExpense) => {
     if (firebaseConfigured) {
       const [{ getApp }, store] = await Promise.all([
@@ -6851,6 +6889,7 @@ function ExpensePanel({
           <div><p className="eyebrow">{menu.title}</p><h2 id="expense-panel-title" className="font-display">Expenses</h2><span>Receipts, shared items and a clear total for every guest.</span></div>
           <button
             type="button"
+            data-expense-action="close"
             onPointerDown={(event) => {
               event.stopPropagation();
               onClose();
@@ -6960,7 +6999,7 @@ function ExpensePanel({
                 <div><strong>{expense.title}</strong><small>Added by {expense.submittedByName} · {new Date(expense.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</small></div>
                 <b>{expense.kind === 'receipt' ? 'Pending' : formatCents(expenseTotal(expense))}</b>
                 {(canManage || expense.submittedByAccountUid === actor.accountUid) && <div className="expense-history-actions">
-                  {expense.kind === 'manual' && <button type="button" onClick={() => beginEditExpense(expense)} disabled={busy} aria-label={`Edit ${expense.title}`}><Pencil size={15} /></button>}
+                  {expense.kind === 'manual' && <button type="button" data-expense-action="edit" data-expense-id={expense.id} onClick={() => beginEditExpense(expense)} disabled={busy} aria-label={`Edit ${expense.title}`}><Pencil size={15} /></button>}
                   <button type="button" className="delete" onClick={() => void deleteExpense(expense)} disabled={busy} aria-label={`Delete ${expense.title}`}><Trash2 size={15} /></button>
                 </div>}
               </div>
