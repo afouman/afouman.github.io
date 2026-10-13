@@ -2,12 +2,16 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function isLegacyHostAccount() {
+    function verifiedEmail() {
       return signedIn()
+        && request.auth.token.email_verified == true;
+    }
+    function isLegacyHostAccount() {
+      return verifiedEmail()
         && request.auth.token.email == 'alaki.dolaki.holholaki@gmail.com';
     }
     function isHost(eventId) {
-      return signedIn()
+      return verifiedEmail()
         && get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid == request.auth.uid;
     }
     function canManageEvent(eventId) {
@@ -18,7 +22,7 @@ service cloud.firestore {
       );
     }
     function canClaimEventOwner(ownerUid) {
-      return signedIn() && (
+      return verifiedEmail() && (
         ownerUid == request.auth.uid
         || (isLegacyHostAccount() && ownerUid == 'W2T8SwFA1pdg8wxm23E5kQqbEHv2')
       );
@@ -27,7 +31,7 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid));
     }
     function hasCompleteAccount() {
-      return signedIn()
+      return verifiedEmail()
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && accountProfile().data.uid == request.auth.uid
         && accountProfile().data.email == request.auth.token.email

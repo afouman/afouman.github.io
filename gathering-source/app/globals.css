@@ -1711,6 +1711,17 @@ button:disabled {
 .account-auth-links button { color: #16766e; font-weight: 850; }
 .account-auth-terms { display: block; max-width: 390px; margin: 1rem auto 0; color: rgb(19 40 44 / 0.38); font-size: 0.62rem; line-height: 1.45; text-align: center; }
 .account-auth-loading { display: grid; min-height: 260px; place-items: center; align-content: center; gap: 0.6rem; text-align: center; }
+.account-verification-card { text-align: center; }
+.account-verification-icon { display: grid; width: 58px; height: 58px; margin: 0 auto 0.8rem; place-items: center; border-radius: 50%; background: #dcefe9; color: #176d64; }
+.account-verification-card h2 { margin-top: 0.4rem; font-size: clamp(2rem, 5vw, 3rem); line-height: 1; }
+.account-verification-card > p:not(.eyebrow) { max-width: 390px; margin: 0.8rem auto 0; color: rgb(19 40 44 / 0.62); font-size: 0.82rem; line-height: 1.55; }
+.account-verification-card > p strong { color: #17363b; overflow-wrap: anywhere; }
+.account-verification-help { display: block; margin-top: 1rem; color: rgb(19 40 44 / 0.45); font-size: 0.65rem; line-height: 1.45; }
+.account-recovery-actions { display: grid; }
+.account-recovery-sent { display: flex; align-items: flex-start; gap: 0.6rem; margin-top: 0.9rem; border-radius: 0.9rem; background: #dcefe9; padding: 0.8rem; color: #176d64; text-align: left; }
+.account-recovery-sent > span { display: grid; gap: 0.15rem; }
+.account-recovery-sent strong { font-size: 0.75rem; }
+.account-recovery-sent small { color: rgb(23 109 100 / 0.72); font-size: 0.63rem; line-height: 1.4; }
 .account-header-button {
   display: inline-flex;
   align-items: center;

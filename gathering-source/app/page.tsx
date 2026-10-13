@@ -175,7 +175,7 @@ type AccountUser = {
   emailVerified: boolean;
   providerIds: string[];
 };
-type AccountAuthMode = 'signin' | 'signup' | 'profile';
+type AccountAuthMode = 'signin' | 'signup' | 'profile' | 'recovery';
 type EventInvitation = {
   eventId: string;
   eventTitle?: string;
@@ -894,6 +894,9 @@ const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
 const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
 const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
   `${profile.firstName} ${profile.lastName}`.trim();
+const accountNeedsEmailVerification = (user: AccountUser | null) => Boolean(
+  user && user.providerIds.includes('password') && !user.emailVerified,
+);
 const accountCanManageEvent = (event: EventMenu, authUid?: string, email?: string) =>
   Boolean(authUid) && (
     event.ownerUid === authUid
@@ -1358,6 +1361,7 @@ export default function Home() {
   const [accountAuthReady, setAccountAuthReady] = useState(!firebaseConfigured);
   const [accountAuthBusy, setAccountAuthBusy] = useState(false);
   const [accountAuthMode, setAccountAuthMode] = useState<AccountAuthMode>('signin');
+  const [accountRecoverySentTo, setAccountRecoverySentTo] = useState('');
   const [accountEmail, setAccountEmail] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
   const [accountFirstName, setAccountFirstName] = useState('');
@@ -1489,7 +1493,9 @@ export default function Home() {
             updatedAt: data.updatedAt?.toMillis?.(),
           } as AccountProfile : null;
           setAccountProfile(profile);
-          setHostUser(profile ? user.uid : null);
+          const verificationRequired = user.providerData.some((provider) => provider.providerId === 'password')
+            && !user.emailVerified;
+          setHostUser(profile && !verificationRequired ? user.uid : null);
           if (profile) void (async () => {
             const email = normalizedAccountEmail(profile.email || user.email || '');
             if (!email) return;
@@ -3211,7 +3217,15 @@ export default function Home() {
       displayName: `${fields.firstName} ${fields.lastName}`,
     });
     setAccountAuthMode('signin');
-    notify('Your Nights account is ready.');
+    if (!accountNeedsEmailVerification(currentAccount))
+      notify('Your Nights account is ready.');
+  };
+
+  const accountActionUrl = (action: 'verify' | 'reset') => {
+    const route = mode === 'host' ? hostHomeRoute() : guestHomeRoute();
+    const url = new URL(route, window.location.origin);
+    url.searchParams.set(action, '1');
+    return url.toString();
   };
 
   const signUpWithEmail = async () => {
@@ -3241,15 +3255,18 @@ export default function Home() {
       await authModule.updateProfile(credential.user, {
         displayName: `${accountFirstName.trim()} ${accountLastName.trim()}`,
       });
-      await authModule.sendEmailVerification(credential.user).catch(() => undefined);
       await saveAccountProfile({
         uid: credential.user.uid,
         email,
         emailVerified: credential.user.emailVerified,
         providerIds: credential.user.providerData.map((provider) => provider.providerId),
       });
+      await authModule.sendEmailVerification(credential.user, {
+        url: accountActionUrl('verify'),
+        handleCodeInApp: false,
+      });
       setAccountPassword('');
-      notify('Account created. Check your email for the verification link.');
+      notify(`Verification email sent to ${email}.`);
     } catch (error) {
       const code = (error as { code?: string }).code;
       notify(code === 'auth/email-already-in-use'
@@ -3331,10 +3348,76 @@ export default function Home() {
       const [{ getApp }, authModule] = await Promise.all([
         import('firebase/app'), import('firebase/auth'),
       ]);
-      await authModule.sendPasswordResetEmail(authModule.getAuth(getApp()), email);
-      notify('Password reset email sent.');
-    } catch {
-      notify('Could not send the reset email. Check the address and try again.');
+      await authModule.sendPasswordResetEmail(authModule.getAuth(getApp()), email, {
+        url: accountActionUrl('reset'),
+        handleCodeInApp: false,
+      });
+      setAccountRecoverySentTo(email);
+      notify('If that email has a password account, a recovery link is on its way.');
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      notify(code === 'auth/invalid-email'
+        ? 'Enter a valid email address.'
+        : code === 'auth/too-many-requests'
+          ? 'Too many recovery attempts. Wait a few minutes and try again.'
+          : 'Could not send the recovery email. Try again.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const resendAccountVerification = async () => {
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      const user = authModule.getAuth(getApp()).currentUser;
+      if (!user) throw new Error('Sign in again to verify your email.');
+      await authModule.sendEmailVerification(user, {
+        url: accountActionUrl('verify'),
+        handleCodeInApp: false,
+      });
+      notify(`A new verification email was sent to ${user.email || accountEmail}.`);
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      notify(code === 'auth/too-many-requests'
+        ? 'Too many verification emails were requested. Wait a few minutes and try again.'
+        : error instanceof Error ? error.message : 'Could not resend the verification email.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const checkAccountVerification = async () => {
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      const auth = authModule.getAuth(getApp());
+      if (!auth.currentUser) throw new Error('Sign in again to verify your email.');
+      await authModule.reload(auth.currentUser);
+      const user = auth.currentUser;
+      if (!user.emailVerified) {
+        notify('Email is not verified yet. Open the link in your email, then check again.');
+        return;
+      }
+      await user.getIdToken(true);
+      const verifiedAccount: AccountUser = {
+        uid: user.uid,
+        email: user.email || '',
+        emailVerified: true,
+        providerIds: user.providerData.map((provider) => provider.providerId),
+      };
+      setAccountUser(verifiedAccount);
+      if (accountProfile) setHostUser(user.uid);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('verify');
+      history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      notify('Email verified. Welcome to Nights.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Could not confirm email verification.');
     } finally {
       setAccountAuthBusy(false);
     }
@@ -5371,6 +5454,7 @@ export default function Home() {
             firstName={accountFirstName}
             lastName={accountLastName}
             phone={accountPhone}
+            recoverySentTo={accountRecoverySentTo}
             events={guestEvents}
             pendingEvent={pendingGuestEvent}
             busy={accountAuthBusy || guestEventsBusy}
@@ -5385,6 +5469,9 @@ export default function Home() {
             signInGoogle={() => void signInWithProvider('google')}
             signInApple={() => void signInWithProvider('apple')}
             resetPassword={() => void resetAccountPassword()}
+            resendVerification={() => void resendAccountVerification()}
+            checkVerification={() => void checkAccountVerification()}
+            signOut={() => void signOutAccount()}
             completeProfile={() => void completeProviderProfile()}
             selectEvent={selectGuestEvent}
           />
@@ -5606,6 +5693,7 @@ export default function Home() {
             firstName={accountFirstName}
             lastName={accountLastName}
             phone={accountPhone}
+            recoverySentTo={accountRecoverySentTo}
             busy={accountAuthBusy}
             setAuthMode={setAccountAuthMode}
             setEmail={setAccountEmail}
@@ -5618,6 +5706,42 @@ export default function Home() {
             signInGoogle={() => void signInWithProvider('google')}
             signInApple={() => void signInWithProvider('apple')}
             resetPassword={() => void resetAccountPassword()}
+            resendVerification={() => void resendAccountVerification()}
+            checkVerification={() => void checkAccountVerification()}
+            signOut={() => void signOutAccount()}
+            completeProfile={() => void completeProviderProfile()}
+          />
+        </div>
+      )}
+      {mode === 'guest' && firebaseConfigured && menu.id !== EMPTY_EVENT_ID && accountNeedsEmailVerification(accountUser) && (
+        <div className="fixed inset-0 z-[80] grid place-items-center overflow-y-auto bg-[var(--cream)]/96 p-6 backdrop-blur">
+          <AccountAuthCard
+            context="guest"
+            authReady={accountAuthReady}
+            user={accountUser}
+            profile={accountProfile}
+            authMode={accountAuthMode}
+            email={accountEmail}
+            password={accountPassword}
+            firstName={accountFirstName}
+            lastName={accountLastName}
+            phone={accountPhone}
+            recoverySentTo={accountRecoverySentTo}
+            busy={accountAuthBusy}
+            setAuthMode={setAccountAuthMode}
+            setEmail={setAccountEmail}
+            setPassword={setAccountPassword}
+            setFirstName={setAccountFirstName}
+            setLastName={setAccountLastName}
+            setPhone={(value) => setAccountPhone(formatPhoneInput(value))}
+            signInEmail={() => void signInWithEmail()}
+            signUpEmail={() => void signUpWithEmail()}
+            signInGoogle={() => void signInWithProvider('google')}
+            signInApple={() => void signInWithProvider('apple')}
+            resetPassword={() => void resetAccountPassword()}
+            resendVerification={() => void resendAccountVerification()}
+            checkVerification={() => void checkAccountVerification()}
+            signOut={() => void signOutAccount()}
             completeProfile={() => void completeProviderProfile()}
           />
         </div>
@@ -6294,6 +6418,7 @@ type AccountAuthCardProps = {
   firstName: string;
   lastName: string;
   phone: string;
+  recoverySentTo: string;
   busy: boolean;
   setAuthMode: (mode: AccountAuthMode) => void;
   setEmail: (value: string) => void;
@@ -6306,10 +6431,14 @@ type AccountAuthCardProps = {
   signInGoogle: () => void;
   signInApple: () => void;
   resetPassword: () => void;
+  resendVerification: () => void;
+  checkVerification: () => void;
+  signOut: () => void;
   completeProfile: () => void;
 };
 
 function AccountAuthCard(props: AccountAuthCardProps) {
+  const verificationRequired = accountNeedsEmailVerification(props.user);
   const profileRequired = Boolean(props.user && !props.profile);
   const mode = profileRequired ? 'profile' : props.authMode;
   if (!props.authReady) {
@@ -6320,25 +6449,43 @@ function AccountAuthCard(props: AccountAuthCardProps) {
       </section>
     );
   }
+  if (verificationRequired) {
+    return (
+      <section className="account-auth-card account-verification-card" aria-live="polite">
+        <div className="account-verification-icon"><Send size={25} /></div>
+        <p className="eyebrow">One last step</p>
+        <h2 className="font-display">Verify your email</h2>
+        <p>We sent a verification link to <strong>{props.user?.email}</strong>. Open it, then return here and confirm.</p>
+        <button type="button" className="primary-button account-auth-submit" disabled={props.busy} onClick={props.checkVerification}>{props.busy ? 'Checking…' : 'I verified my email'}</button>
+        <div className="account-auth-links">
+          <button type="button" disabled={props.busy} onClick={props.resendVerification}>Resend email</button>
+          <button type="button" disabled={props.busy} onClick={props.signOut}>Use another account</button>
+        </div>
+        <small className="account-verification-help">Check spam or junk if it does not arrive. Verification links can only be used once.</small>
+      </section>
+    );
+  }
   return (
     <section className="account-auth-card">
       <div className="account-auth-heading">
         <span className="account-auth-logo"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={58} height={58} /></span>
         <p className="eyebrow">{props.context === 'host' ? 'Nights Host' : 'Your nights, in one place'}</p>
         <h2 className="font-display">
-          {mode === 'signup' ? 'Create your account' : mode === 'profile' ? 'Complete your profile' : 'Welcome back'}
+          {mode === 'signup' ? 'Create your account' : mode === 'profile' ? 'Complete your profile' : mode === 'recovery' ? 'Recover your account' : 'Welcome back'}
         </h2>
         <p>
           {mode === 'signup'
             ? 'One account keeps your invitations, RSVPs, orders, and chats together.'
             : mode === 'profile'
               ? 'Add the details other guests and hosts will recognize.'
+              : mode === 'recovery'
+                ? 'Enter your account email and we’ll send a secure password-reset link.'
               : props.context === 'host'
                 ? 'Sign in to create and manage your own events.'
                 : 'Sign in to see every event you are invited to.'}
         </p>
       </div>
-      {mode !== 'profile' && (
+      {mode !== 'profile' && mode !== 'recovery' && (
         <>
           <div className="account-provider-buttons">
             <button type="button" onClick={props.signInGoogle} disabled={props.busy} className="account-provider-button"><b>G</b> Continue with Google</button>
@@ -6348,26 +6495,32 @@ function AccountAuthCard(props: AccountAuthCardProps) {
         </>
       )}
       <div className="account-auth-fields">
-        {mode !== 'signin' && (
+        {mode !== 'signin' && mode !== 'recovery' && (
           <div className="account-name-row">
             <label className="field-label">First name<input value={props.firstName} onChange={(event) => props.setFirstName(event.target.value)} className="field-input" autoComplete="name" /></label>
             <label className="field-label">Last name<input value={props.lastName} onChange={(event) => props.setLastName(event.target.value)} className="field-input" autoComplete="name" /></label>
           </div>
         )}
         {mode !== 'profile' && <label className="field-label">Email<input type="email" value={props.email} onChange={(event) => props.setEmail(event.target.value)} className="field-input" autoComplete="email" inputMode="email" placeholder="you@example.com" /></label>}
-        {mode !== 'profile' && <label className="field-label">Password<input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} className="field-input" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} onKeyDown={(event) => { if (event.key === 'Enter') (mode === 'signup' ? props.signUpEmail : props.signInEmail)(); }} /></label>}
-        {mode !== 'signin' && <label className="field-label">Phone number<input value={props.phone} onChange={(event) => props.setPhone(event.target.value)} className="field-input" autoComplete="tel" inputMode="tel" placeholder="555-555-5555" maxLength={12} /></label>}
+        {mode !== 'profile' && mode !== 'recovery' && <label className="field-label">Password<input type="password" value={props.password} onChange={(event) => props.setPassword(event.target.value)} className="field-input" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} minLength={8} placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'} onKeyDown={(event) => { if (event.key === 'Enter') (mode === 'signup' ? props.signUpEmail : props.signInEmail)(); }} /></label>}
+        {mode !== 'signin' && mode !== 'recovery' && <label className="field-label">Phone number<input value={props.phone} onChange={(event) => props.setPhone(event.target.value)} className="field-input" autoComplete="tel" inputMode="tel" placeholder="555-555-5555" maxLength={12} /></label>}
       </div>
       {mode === 'signin' ? (
         <>
           <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.email || !props.password} onClick={props.signInEmail}>{props.busy ? 'Signing in…' : 'Sign in'}</button>
-          <div className="account-auth-links"><button type="button" onClick={props.resetPassword}>Forgot password?</button><button type="button" onClick={() => props.setAuthMode('signup')}>Create account</button></div>
+          <div className="account-auth-links"><button type="button" onClick={() => props.setAuthMode('recovery')}>Forgot password?</button><button type="button" onClick={() => props.setAuthMode('signup')}>Create account</button></div>
         </>
       ) : mode === 'signup' ? (
         <>
           <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.email || props.password.length < 8 || !props.firstName || !props.lastName || !props.phone} onClick={props.signUpEmail}>{props.busy ? 'Creating account…' : 'Create account'}</button>
           <div className="account-auth-links"><span>Already have an account?</span><button type="button" onClick={() => props.setAuthMode('signin')}>Sign in</button></div>
         </>
+      ) : mode === 'recovery' ? (
+        <div className="account-recovery-actions">
+          {props.recoverySentTo && <div className="account-recovery-sent"><Check size={17} /><span><strong>Check your inbox</strong><small>If a password account exists for {props.recoverySentTo}, the email contains the reset link.</small></span></div>}
+          <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.email} onClick={props.resetPassword}>{props.busy ? 'Sending…' : props.recoverySentTo ? 'Send another link' : 'Send recovery link'}</button>
+          <div className="account-auth-links"><button type="button" onClick={() => props.setAuthMode('signin')}>Back to sign in</button></div>
+        </div>
       ) : (
         <button type="button" className="primary-button account-auth-submit" disabled={props.busy || !props.firstName || !props.lastName || !props.phone} onClick={props.completeProfile}>{props.busy ? 'Saving profile…' : 'Continue to Nights'}</button>
       )}
@@ -6386,6 +6539,7 @@ function GuestAccessPortal({
   firstName,
   lastName,
   phone,
+  recoverySentTo,
   events,
   pendingEvent,
   busy,
@@ -6400,6 +6554,9 @@ function GuestAccessPortal({
   signInGoogle,
   signInApple,
   resetPassword,
+  resendVerification,
+  checkVerification,
+  signOut,
   completeProfile,
   selectEvent,
 }: Omit<AccountAuthCardProps, 'context'> & {
@@ -6415,10 +6572,10 @@ function GuestAccessPortal({
         <h1 className="font-display">Your events</h1>
         <p>Use one secure account for every event you host, invitation, RSVP, order, and event chat.</p>
       </div>
-      {!profile ? (
+      {!profile || accountNeedsEmailVerification(user) ? (
         <div className="guest-access-auth-shell">
           {pendingEvent && <div className="guest-invitation-cached"><Check size={17} /><span><strong>Invitation saved</strong><small>Sign in and this event will be added to your event list.</small></span></div>}
-          <AccountAuthCard context="guest" authReady={authReady} user={user} profile={profile} authMode={authMode} email={email} password={password} firstName={firstName} lastName={lastName} phone={phone} busy={busy} setAuthMode={setAuthMode} setEmail={setEmail} setPassword={setPassword} setFirstName={setFirstName} setLastName={setLastName} setPhone={setPhone} signInEmail={signInEmail} signUpEmail={signUpEmail} signInGoogle={signInGoogle} signInApple={signInApple} resetPassword={resetPassword} completeProfile={completeProfile} />
+          <AccountAuthCard context="guest" authReady={authReady} user={user} profile={profile} authMode={authMode} email={email} password={password} firstName={firstName} lastName={lastName} phone={phone} recoverySentTo={recoverySentTo} busy={busy} setAuthMode={setAuthMode} setEmail={setEmail} setPassword={setPassword} setFirstName={setFirstName} setLastName={setLastName} setPhone={setPhone} signInEmail={signInEmail} signUpEmail={signUpEmail} signInGoogle={signInGoogle} signInApple={signInApple} resetPassword={resetPassword} resendVerification={resendVerification} checkVerification={checkVerification} signOut={signOut} completeProfile={completeProfile} />
         </div>
       ) : (
         <div className="guest-access-events">
