@@ -4359,15 +4359,9 @@ export default function Home() {
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
         const participantRef = store.doc(db, 'events', menu.id, 'expense-participants', uid);
         await store.runTransaction(db, async (transaction) => {
-          const [savedProfile, prior, participant] = await Promise.all([
-            transaction.get(profileRef), transaction.get(rsvpRef), transaction.get(participantRef),
+          const [savedProfile, prior] = await Promise.all([
+            transaction.get(profileRef), transaction.get(rsvpRef),
           ]);
-          const priorCompanionCount = Array.isArray(prior.data()?.companions) ? prior.data()!.companions.length : 0;
-          const priorCompanionRefs = Array.from({ length: priorCompanionCount }, (_, index) =>
-            store.doc(db, 'events', menu.id, 'expense-participants', companionParticipantId(uid, index)));
-          const priorCompanionDocuments = await Promise.all(
-            priorCompanionRefs.map((reference) => transaction.get(reference)),
-          );
           if (!savedProfile.exists()) transaction.set(profileRef, {
             guestUid: uid, ...(accountUser ? { accountUid: accountUser.uid } : {}), guestName: profile.guestName, guestPhone: profile.guestPhone,
             createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
@@ -4386,33 +4380,66 @@ export default function Home() {
             createdAt: prior.exists() ? prior.data().createdAt : store.serverTimestamp(),
             updatedAt: store.serverTimestamp(),
           });
-          transaction.set(participantRef, {
-            id: uid,
-            accountUid: accountUser?.uid || '',
-            primaryGuestUid: uid,
-            name: profile.guestName,
-            role: participant.data()?.role === 'host' ? 'host' : 'guest',
-            status: participant.data()?.role === 'host' ? 'host' : rsvpChoice,
-            approvalStatus: nextApprovalStatus,
-            createdAt: participant.data()?.createdAt || store.serverTimestamp(),
-            updatedAt: store.serverTimestamp(),
-          });
-          companions.forEach((companion, index) => {
-            const id = companionParticipantId(uid, index);
-            transaction.set(store.doc(db, 'events', menu.id, 'expense-participants', id), {
-              id,
-              accountUid: accountUser?.uid || '',
-              primaryGuestUid: uid,
-              name: companion.name,
-              role: 'companion',
-              status: rsvpChoice,
-              approvalStatus: nextApprovalStatus,
-              createdAt: priorCompanionDocuments[index]?.data()?.createdAt || store.serverTimestamp(),
+        });
+        // RSVP is the primary action. Expense participants are synchronized only
+        // after it succeeds so a missing ledger row can never roll back an RSVP.
+        const upsertParticipant = async (
+          reference: ReturnType<typeof store.doc>,
+          data: Omit<ExpenseParticipant, 'createdAt' | 'updatedAt'>,
+        ) => {
+          try {
+            await store.updateDoc(reference, {
+              accountUid: data.accountUid,
+              name: data.name,
+              status: data.status,
+              approvalStatus: data.approvalStatus,
               updatedAt: store.serverTimestamp(),
             });
-          });
-          priorCompanionRefs.slice(companions.length).forEach((reference) => transaction.delete(reference));
-        });
+          } catch {
+            await store.setDoc(reference, {
+              ...data,
+              createdAt: store.serverTimestamp(),
+              updatedAt: store.serverTimestamp(),
+            });
+          }
+        };
+        const accountUid = accountUser?.uid || '';
+        const primaryRole = canManageCurrentEvent ? 'host' : 'guest';
+        const priorCompanionCount = myRsvp?.companions?.length || 0;
+        await Promise.allSettled([
+          upsertParticipant(participantRef, {
+            id: uid,
+            accountUid,
+            primaryGuestUid: uid,
+            name: profile.guestName,
+            role: primaryRole,
+            status: primaryRole === 'host' ? 'host' : rsvpChoice,
+            approvalStatus: nextApprovalStatus,
+          }),
+          ...companions.map((companion, index) => {
+            const id = companionParticipantId(uid, index);
+            return upsertParticipant(
+              store.doc(db, 'events', menu.id, 'expense-participants', id),
+              {
+                id,
+                accountUid,
+                primaryGuestUid: uid,
+                name: companion.name,
+                role: 'companion',
+                status: rsvpChoice,
+                approvalStatus: nextApprovalStatus,
+              },
+            );
+          }),
+          ...Array.from({ length: Math.max(0, priorCompanionCount - companions.length) }, (_, offset) =>
+            store.deleteDoc(store.doc(
+              db,
+              'events',
+              menu.id,
+              'expense-participants',
+              companionParticipantId(uid, companions.length + offset),
+            ))),
+        ]);
       } else {
         const others = rsvps.filter((entry) => entry.guestUid !== profile.guestUid);
         const saved: Rsvp = {

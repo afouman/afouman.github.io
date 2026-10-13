@@ -554,9 +554,9 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time;
         allow update: if (canManageEvent(eventId) || (
           hasCompleteAccount()
-          && resource.data.accountUid == request.auth.uid
+          && (resource.data.accountUid == request.auth.uid || resource.data.accountUid == '')
+          && request.resource.data.accountUid == request.auth.uid
           && resource.data.primaryGuestUid == accountProfile().data.guestUid
-          && request.resource.data.accountUid == resource.data.accountUid
           && request.resource.data.primaryGuestUid == resource.data.primaryGuestUid
           && request.resource.data.role == resource.data.role
           && (
@@ -579,12 +579,12 @@ service cloud.firestore {
         && request.resource.data.name.size() > 0
         && request.resource.data.name.size() <= 80
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'status', 'approvalStatus', 'updatedAt'
+          'accountUid', 'name', 'status', 'approvalStatus', 'updatedAt'
         ]);
         allow delete: if canManageEvent(eventId) || (
           hasCompleteAccount()
-          && resource.data.accountUid == request.auth.uid
           && resource.data.primaryGuestUid == accountProfile().data.guestUid
+          && (resource.data.accountUid == request.auth.uid || resource.data.accountUid == '')
         );
       }
 
