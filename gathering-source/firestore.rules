@@ -337,6 +337,37 @@ service cloud.firestore {
         );
       }
 
+      match /phone-invitations/{inviteId} {
+        allow read: if signedIn() && request.auth.uid == userId;
+        allow create, update: if signedIn()
+          && request.auth.uid == userId
+          && request.resource.data.keys().hasOnly([
+            'eventId', 'eventTitle', 'hostUid', 'recipientUid', 'recipientGuestUid',
+            'recipientPhone', 'recipientName', 'inviteUrl', 'createdAt', 'updatedAt'
+          ])
+          && request.resource.data.eventId is string
+          && request.resource.data.eventTitle is string
+          && request.resource.data.eventTitle.size() > 0
+          && request.resource.data.eventTitle.size() <= 120
+          && request.resource.data.hostUid == request.auth.uid
+          && request.resource.data.recipientUid is string
+          && request.resource.data.recipientGuestUid is string
+          && request.resource.data.recipientGuestUid.size() == 64
+          && request.resource.data.recipientPhone is string
+          && request.resource.data.recipientPhone.size() >= 11
+          && request.resource.data.recipientPhone.size() <= 16
+          && request.resource.data.recipientName is string
+          && request.resource.data.recipientName.size() <= 80
+          && request.resource.data.inviteUrl is string
+          && request.resource.data.inviteUrl.size() <= 500
+          && request.resource.data.updatedAt == request.time
+          && (
+            (resource == null && request.resource.data.createdAt == request.time)
+            || (resource != null && request.resource.data.createdAt == resource.data.createdAt)
+          );
+        allow delete: if signedIn() && request.auth.uid == userId;
+      }
+
       match /contacts/{contactUid} {
         allow get: if signedIn()
           && (request.auth.uid == userId || resource.data.accountUid == request.auth.uid);

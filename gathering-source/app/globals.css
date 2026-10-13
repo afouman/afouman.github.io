@@ -268,6 +268,26 @@ button:disabled {
 .new-event-dialog { color: #211c18; }
 .new-event-dialog h2,
 .new-event-dialog strong { color: #211c18; }
+.new-event-dialog-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.5rem;
+}
+.new-event-home-button {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgb(33 28 24 / 0.12);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.55);
+  padding: 0.5rem 0.75rem;
+  color: #315f5b;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+.new-event-home-button:hover { background: #fff; }
 .new-event-type-picker > legend {
   margin-bottom: 0.55rem;
 }
@@ -1573,6 +1593,11 @@ button:disabled {
   background: #72e6c0;
   color: #082c39;
   font-size: 0.66rem;
+}
+.host-mode .guest-event-switch-button {
+  border-color: rgb(24 70 70 / 0.16);
+  background: #e8f3ef;
+  color: #194f4b;
 }
 .guest-access-portal {
   min-height: 100svh;
@@ -3221,6 +3246,7 @@ button:disabled {
 .invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
 .invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
 .invite-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; margin-top: 1.1rem; }
+.invite-entry-fields { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(9rem, 0.65fr); gap: 0.7rem; }
 .invite-entry-row label { display: grid; gap: 0.42rem; color: rgb(23 54 59 / 0.6); font-size: 0.68rem; font-weight: 850; }
 .invite-entry-row input {
   width: 100%;
@@ -3270,6 +3296,8 @@ button:disabled {
 .host-invitation-row small { color: rgb(23 54 59 / 0.48); font-size: 0.63rem; }
 .host-invitation-row .danger-link { flex: none; border: 0; border-radius: 999px; background: #fee8e1; padding: 0.55rem 0.72rem; color: #94383a; font-size: 0.67rem; font-weight: 900; }
 .host-invitation-row .danger-link:disabled { opacity: 0.5; }
+.host-invitation-actions { display: flex; align-items: center; gap: 0.4rem; }
+.host-invitation-row .send-link { display: inline-flex; align-items: center; gap: 0.3rem; flex: none; border: 0; border-radius: 999px; background: #dcefe9; padding: 0.55rem 0.72rem; color: #176d64; font-size: 0.67rem; font-weight: 900; }
 .order-board-heading {
   display: flex;
   align-items: end;
@@ -3577,7 +3605,7 @@ button:disabled {
     border-radius: 1.5rem 1.5rem 0 0;
     padding: 1.25rem;
   }
-  .invite-entry-row { grid-template-columns: 1fr; }
+  .invite-entry-row, .invite-entry-fields { grid-template-columns: 1fr; }
   .invite-entry-row .primary-button { width: 100%; justify-content: center; }
   .host-command-main h2 {
     font-size: 2.8rem;
@@ -5249,10 +5277,14 @@ button:disabled {
 .expense-split-tools { display: flex; flex-wrap: wrap; gap: 0.45rem; margin-bottom: 0.65rem; }
 .expense-split-tools button { display: inline-flex; min-height: 34px; align-items: center; gap: 0.35rem; border: 1px solid rgb(18 59 66 / 0.11); border-radius: 999px; background: #fffdf8; padding: 0.45rem 0.65rem; color: #176d64; font-size: 0.62rem; font-weight: 850; }
 .expense-add-outsider { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.55rem; margin-bottom: 0.7rem; border: 1px dashed rgb(23 109 100 / 0.28); border-radius: 0.9rem; background: rgb(220 239 233 / 0.45); padding: 0.65rem; }
+.expense-add-outsider-global { margin: 0.8rem 0 0; }
 .expense-add-outsider label { min-width: 0; }
 .expense-add-outsider input { min-height: 40px; background: #fffdf8; padding-block: 0.5rem; }
 .expense-add-outsider > button { display: inline-flex; min-height: 40px; align-items: center; gap: 0.35rem; border-radius: 0.75rem; background: #176d64; padding: 0.55rem 0.75rem; color: #fff; font-size: 0.65rem; font-weight: 900; white-space: nowrap; }
 .expense-add-outsider > button:disabled { opacity: 0.38; }
+.expense-outsider-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.55rem; }
+.expense-outsider-chips > span { display: inline-flex; align-items: center; gap: 0.35rem; border-radius: 999px; background: #dcefe9; padding: 0.42rem 0.55rem 0.42rem 0.7rem; color: #176d64; font-size: 0.64rem; font-weight: 850; }
+.expense-outsider-chips button { display: grid; border: 0; background: transparent; color: inherit; place-items: center; }
 .expense-participant-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45rem; }
 .expense-participant-options > div { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 0.6rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.8rem; background: #fffdf8; padding: 0.45rem 0.55rem; }
 .expense-participant-options > div.selected { border-color: rgb(39 152 135 / 0.32); }
