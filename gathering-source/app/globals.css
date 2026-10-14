@@ -18,12 +18,18 @@
   box-sizing: border-box;
 }
 html {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
   background: var(--cream);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 body {
+  width: 100%;
+  max-width: 100%;
   margin: 0;
-  padding-right: env(safe-area-inset-right);
-  padding-left: env(safe-area-inset-left);
+  overflow-x: clip;
   background:
     radial-gradient(circle at 8% 2%, rgb(255 255 255/0.9), transparent 28rem),
     linear-gradient(180deg, #faf6ee 0, var(--cream) 32rem);
@@ -678,6 +684,15 @@ button:disabled {
 }
 .app-header {
   padding-top: env(safe-area-inset-top);
+}
+.app-header > div {
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+  padding-left: max(1.25rem, env(safe-area-inset-left));
+}
+.app-root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
 }
 .install-app-button,
 .guest-new-event-button,
@@ -1757,6 +1772,47 @@ button:disabled {
   font-weight: 950;
 }
 .persistent-profile-button:hover { background: #c7e8de; }
+
+/* The WKWebView shell gets a compact app bar. Installation and browser-push
+   controls are intentionally omitted by the component in this environment. */
+.native-ios-app .app-header > div {
+  height: 4rem;
+}
+.native-ios-app .app-header > div > button:first-child {
+  min-width: 0;
+  gap: 0.65rem;
+}
+.native-ios-app .app-header > div > button:first-child span:first-child {
+  width: 2.15rem;
+  height: 2.15rem;
+  border-radius: 0.7rem;
+}
+.native-ios-app .app-header > div > button:first-child span:first-child img {
+  width: 100%;
+  height: 100%;
+}
+.native-ios-app .app-header > div > button:first-child span:last-child {
+  overflow: hidden;
+  font-size: 1.15rem;
+  text-overflow: ellipsis;
+}
+.native-ios-app .app-header-actions {
+  min-width: 0;
+  gap: 0.4rem;
+}
+.native-ios-app .guest-event-switch-button,
+.native-ios-app .guest-new-event-button,
+.native-ios-app .chat-header-button {
+  min-width: 2.25rem;
+  height: 2.25rem;
+  justify-content: center;
+}
+.native-ios-app .persistent-profile-button {
+  top: calc(env(safe-area-inset-top) + 0.8rem);
+  right: max(0.7rem, env(safe-area-inset-right));
+  width: 2.4rem;
+  height: 2.4rem;
+}
 .profile-menu-scrim { position: fixed; z-index: 96; inset: 0; border: 0; background: transparent; }
 .profile-menu {
   position: fixed;
@@ -1823,6 +1879,7 @@ button:disabled {
 .settings-notification-row strong { font-size: 0.8rem; }
 .settings-notification-row small { max-width: 330px; color: rgb(23 54 59 / 0.58); font-size: 0.67rem; line-height: 1.45; }
 .settings-notification-row > button.settings-notification-switch { display: flex; min-width: 92px; align-items: center; justify-content: flex-end; gap: 0.55rem; border: 0; background: transparent; padding: 0.35rem; color: #526360; font-size: 0.7rem; font-weight: 900; }
+.native-notification-status > span { flex: none; border-radius: 999px; background: #e5eeeb; padding: 0.5rem 0.7rem; color: #526360; font-size: 0.65rem; font-weight: 850; }
 .settings-notification-row > button.settings-notification-switch.enabled { background: transparent; color: #176d64; }
 .notification-switch-track { position: relative; display: inline-block; width: 42px; height: 24px; flex: none; border: 1px solid rgb(82 99 96 / 0.25); border-radius: 999px; background: #d9e1df; box-shadow: inset 0 1px 3px rgb(0 0 0 / 0.08); transition: background 180ms ease, border-color 180ms ease; }
 .notification-switch-track > b { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgb(0 0 0 / 0.22); transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1); }

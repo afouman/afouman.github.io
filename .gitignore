@@ -17,6 +17,8 @@ workspace
 
 ### OSX ###
 *.DS_Store
+xcuserdata/
+*.xcuserstate
 .AppleDouble
 .LSOverride
 

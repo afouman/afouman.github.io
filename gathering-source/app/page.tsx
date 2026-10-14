@@ -1422,6 +1422,7 @@ export default function Home() {
   const [backgroundEditor, setBackgroundEditor] = useState<BackgroundEditorState | null>(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
+  const [isNativeIOSApp, setIsNativeIOSApp] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [guestPin, setGuestPin] = useState('');
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
@@ -2273,12 +2274,16 @@ export default function Home() {
   }, [menu.id]);
 
   useEffect(() => {
+    const nativeIOSApp = navigator.userAgent.includes('Nights-iOS/');
     const installed =
       window.matchMedia('(display-mode: standalone)').matches ||
       Boolean((navigator as Navigator & { standalone?: boolean }).standalone) ||
-      navigator.userAgent.includes('Nights-iOS/');
-    queueMicrotask(() => setIsStandalone(installed));
-    if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
+      nativeIOSApp;
+    queueMicrotask(() => {
+      setIsStandalone(installed);
+      setIsNativeIOSApp(nativeIOSApp);
+    });
+    if (!nativeIOSApp && location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
       // GitHub Pages, rather than waiting for the browser's periodic check.
       const serviceWorker = serviceWorkerLocation();
@@ -2305,6 +2310,7 @@ export default function Home() {
   useEffect(() => {
     if (
       !isStandalone
+      || isNativeIOSApp
       || !accountUser
       || !accountProfile
       || typeof Notification === 'undefined'
@@ -2313,7 +2319,7 @@ export default function Home() {
       || localStorage.getItem(notificationPromptKey(accountUser.uid))
     ) return;
     queueMicrotask(() => setShowNotificationPrompt(true));
-  }, [accountProfile, accountUser, isStandalone]);
+  }, [accountProfile, accountUser, isNativeIOSApp, isStandalone]);
 
   useEffect(() => {
     const dialog = document.getElementById(
@@ -2972,7 +2978,9 @@ export default function Home() {
 
   const syncGlobalPushTargets = useCallback(async () => {
     if (
-      !accountUser
+      isNativeIOSApp
+      || typeof Notification === 'undefined'
+      || !accountUser
       || Notification.permission !== 'granted'
       || !localStorage.getItem(globalPushKey(accountUser.uid))
     ) return;
@@ -2984,14 +2992,18 @@ export default function Home() {
     await Promise.allSettled(notificationTargets
       .filter((target) => !muted.has(target.event.id))
       .map((target) => registerPushTarget(target, serialized, subscriptionId)));
-  }, [accountProfile?.mutedEventIds, accountUser, ensureBrowserPushSubscription, notificationTargets, registerPushTarget]);
+  }, [accountProfile?.mutedEventIds, accountUser, ensureBrowserPushSubscription, isNativeIOSApp, notificationTargets, registerPushTarget]);
 
   useEffect(() => {
-    if (!accountUser || !accountProfile || !notificationTargets.length) return;
+    if (isNativeIOSApp || !accountUser || !accountProfile || !notificationTargets.length) return;
     void syncGlobalPushTargets().catch(() => undefined);
-  }, [accountProfile, accountUser, notificationTargets, syncGlobalPushTargets]);
+  }, [accountProfile, accountUser, isNativeIOSApp, notificationTargets, syncGlobalPushTargets]);
 
   const notificationPermissionReady = () => {
+    if (isNativeIOSApp) {
+      notify('Notifications are managed by the iPhone app, not browser Web Push.');
+      return false;
+    }
     if (!firebaseConfigured || !VAPID_PUBLIC_KEY || !PUSH_NOTIFICATIONS_ENABLED) {
       notify('Push notifications are not configured for this release yet.');
       return false;
@@ -5477,7 +5489,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'} ${editing ? 'is-editing' : ''}`}
+      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'} ${editing ? 'is-editing' : ''} ${isNativeIOSApp ? 'native-ios-app' : ''}`}
       style={mode === 'guest' ? eventThemeStyle(menu) : undefined}
     >
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
@@ -5531,7 +5543,7 @@ export default function Home() {
                 <span>Install app</span>
               </button>
             )}
-            {mode === 'host' && isStandalone && (
+            {mode === 'host' && isStandalone && !isNativeIOSApp && (
               <span className="host-app-badge">
                 <Smartphone size={14} /> Nights Host
               </span>
@@ -5548,7 +5560,7 @@ export default function Home() {
                 ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase()
                 : <UsersRound size={17} />}
             </button>}
-            {menu.id !== EMPTY_EVENT_ID && <button
+            {menu.id !== EMPTY_EVENT_ID && !isNativeIOSApp && <button
               type="button"
               onClick={() => {
                 if (!chatActor) {
@@ -5754,23 +5766,30 @@ export default function Home() {
             <span className="settings-dialog-icon"><Settings2 size={24} /></span>
             <p className="eyebrow">Account preferences</p>
             <h2 id="settings-title" className="font-display">Settings</h2>
-            <section className="settings-notification-row">
-              <div><strong>Default notifications</strong><small>Automatically notify this device about messages in every eligible event. Event-level Notify Me controls can override this.</small></div>
-              <button
-                type="button"
-                className={`settings-notification-switch ${notificationsDefaultEnabled ? 'enabled' : ''}`}
-                role="switch"
-                aria-checked={notificationsDefaultEnabled}
-                aria-label="Default notifications"
-                disabled={pushNotificationBusy}
-                onClick={() => void (notificationsDefaultEnabled
-                  ? disableDefaultNotifications()
-                  : enableDefaultNotifications())}
-              >
-                <span>{pushNotificationBusy ? 'Updating…' : notificationsDefaultEnabled ? 'On' : 'Off'}</span>
-                <i className="notification-switch-track" aria-hidden="true"><b /></i>
-              </button>
-            </section>
+            {isNativeIOSApp ? (
+              <section className="settings-notification-row native-notification-status">
+                <div><strong>iPhone notifications</strong><small>Native notifications will appear here after the App Store notification service is connected. Browser Web Push is disabled inside the app.</small></div>
+                <span>App managed</span>
+              </section>
+            ) : (
+              <section className="settings-notification-row">
+                <div><strong>Default notifications</strong><small>Automatically notify this device about messages in every eligible event. Event-level Notify Me controls can override this.</small></div>
+                <button
+                  type="button"
+                  className={`settings-notification-switch ${notificationsDefaultEnabled ? 'enabled' : ''}`}
+                  role="switch"
+                  aria-checked={notificationsDefaultEnabled}
+                  aria-label="Default notifications"
+                  disabled={pushNotificationBusy}
+                  onClick={() => void (notificationsDefaultEnabled
+                    ? disableDefaultNotifications()
+                    : enableDefaultNotifications())}
+                >
+                  <span>{pushNotificationBusy ? 'Updating…' : notificationsDefaultEnabled ? 'On' : 'Off'}</span>
+                  <i className="notification-switch-track" aria-hidden="true"><b /></i>
+                </button>
+              </section>
+            )}
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
             </div>
@@ -5849,6 +5868,7 @@ export default function Home() {
           pushNotificationState={pushNotificationState}
           eventMuted={currentEventMuted}
           pushNotificationBusy={pushNotificationBusy}
+          pushAvailable={!isNativeIOSApp}
           onTogglePush={() => void (pushNotificationState === 'enabled'
             ? disableChatNotifications()
             : enableChatNotifications())}
@@ -6195,7 +6215,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {showNotificationPrompt && (
+      {showNotificationPrompt && !isNativeIOSApp && (
         <div className="fixed inset-0 z-[85] grid place-items-end bg-black/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-5">
           <section className="notification-onboarding-card">
             <span className="notification-onboarding-icon"><BellRing size={25} /></span>
@@ -7697,6 +7717,7 @@ function EventChat({
   pushNotificationState,
   eventMuted,
   pushNotificationBusy,
+  pushAvailable,
   onTogglePush,
   notify,
 }: {
@@ -7708,6 +7729,7 @@ function EventChat({
   pushNotificationState: PushNotificationState;
   eventMuted: boolean;
   pushNotificationBusy: boolean;
+  pushAvailable: boolean;
   onTogglePush: () => void;
   notify: (message: string) => void;
 }) {
@@ -8199,7 +8221,7 @@ function EventChat({
               <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
             </div>
             <div className="chat-header-actions">
-              {PUSH_NOTIFICATIONS_ENABLED && (
+              {PUSH_NOTIFICATIONS_ENABLED && pushAvailable && (
                 <button
                   type="button"
                   className={pushNotificationState === 'enabled' ? 'enabled' : ''}
