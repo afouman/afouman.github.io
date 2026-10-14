@@ -156,6 +156,21 @@ type ChatActor = {
   role: 'host' | 'guest';
 };
 type PushNotificationState = 'unsupported' | 'disabled' | 'blocked' | 'enabled';
+type NightsNativeAuthBridge = {
+  completeGoogle: (idToken: string, accessToken: string) => void;
+  completeApple: (idToken: string, rawNonce: string) => void;
+  fail: (message: string) => void;
+};
+type NightsNativeWindow = Window & {
+  __nightsNativeAuth?: NightsNativeAuthBridge;
+  webkit?: {
+    messageHandlers?: {
+      nightsAuth?: {
+        postMessage: (message: { provider: 'google' | 'apple' }) => void;
+      };
+    };
+  };
+};
 type AccountProfile = {
   uid: string;
   email: string;
@@ -166,6 +181,8 @@ type AccountProfile = {
   membershipTier: 'free' | 'plus' | 'pro';
   membershipStatus: 'active' | 'trialing' | 'past_due' | 'cancelled';
   mutedEventIds: string[];
+  emailVerified?: boolean;
+  verificationExpiresAt?: number | null;
   createdAt: number;
   updatedAt?: number;
 };
@@ -1489,6 +1506,8 @@ export default function Home() {
             mutedEventIds: Array.isArray(data.mutedEventIds) ? data.mutedEventIds : [],
             membershipTier: data.membershipTier || 'free',
             membershipStatus: data.membershipStatus || 'active',
+            emailVerified: data.emailVerified,
+            verificationExpiresAt: data.verificationExpiresAt?.toMillis?.() ?? null,
             createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
             updatedAt: data.updatedAt?.toMillis?.(),
           } as AccountProfile : null;
@@ -2256,7 +2275,8 @@ export default function Home() {
   useEffect(() => {
     const installed =
       window.matchMedia('(display-mode: standalone)').matches ||
-      Boolean((navigator as Navigator & { standalone?: boolean }).standalone);
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone) ||
+      navigator.userAgent.includes('Nights-iOS/');
     queueMicrotask(() => setIsStandalone(installed));
     if (location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
@@ -3167,6 +3187,9 @@ export default function Home() {
     const identityRef = store.doc(db, 'guest-identities', guestUid);
     const emailRef = store.doc(db, 'account-emails', await guestNameIndexId(email));
     const directoryRef = store.doc(db, 'account-directory', currentAccount.uid);
+    const verificationExpiresAt = currentAccount.emailVerified
+      ? null
+      : store.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
     try {
       await store.runTransaction(db, async (transaction) => {
         const [existing, identity] = await Promise.all([
@@ -3190,6 +3213,8 @@ export default function Home() {
           mutedEventIds: existing.exists() && Array.isArray(existing.data().mutedEventIds)
             ? existing.data().mutedEventIds
             : [],
+          emailVerified: currentAccount.emailVerified,
+          verificationExpiresAt,
           createdAt: existing.exists() ? existing.data().createdAt : store.serverTimestamp(),
           updatedAt: store.serverTimestamp(),
         });
@@ -3230,6 +3255,7 @@ export default function Home() {
 
   const signUpWithEmail = async () => {
     const email = accountEmail.trim().toLowerCase();
+    let verificationSent = false;
     if (!/^\S+@\S+\.\S+$/.test(email)) {
       notify('Enter a valid email address.');
       return;
@@ -3255,24 +3281,27 @@ export default function Home() {
       await authModule.updateProfile(credential.user, {
         displayName: `${accountFirstName.trim()} ${accountLastName.trim()}`,
       });
+      await authModule.sendEmailVerification(credential.user);
+      verificationSent = true;
       await saveAccountProfile({
         uid: credential.user.uid,
         email,
         emailVerified: credential.user.emailVerified,
         providerIds: credential.user.providerData.map((provider) => provider.providerId),
       });
-      await authModule.sendEmailVerification(credential.user, {
-        url: accountActionUrl('verify'),
-        handleCodeInApp: false,
-      });
       setAccountPassword('');
       notify(`Verification email sent to ${email}.`);
     } catch (error) {
-      const code = (error as { code?: string }).code;
-      notify(code === 'auth/email-already-in-use'
+      const code = (error as { code?: string }).code || '';
+      if (verificationSent) {
+        setAccountPassword('');
+        notify(`Verification email sent to ${email}. Finish verification, then complete your profile.`);
+      } else notify(code === 'auth/email-already-in-use'
         ? 'That email already has an account. Sign in instead.'
         : code === 'auth/operation-not-allowed'
           ? 'Email sign-up still needs to be enabled in Firebase Authentication.'
+          : code === 'auth/too-many-requests'
+            ? 'Too many verification attempts. Wait a few minutes and try again.'
           : error instanceof Error ? error.message : 'Could not create your account.');
     } finally {
       setAccountAuthBusy(false);
@@ -3306,6 +3335,19 @@ export default function Home() {
 
   const signInWithProvider = async (providerName: 'google' | 'apple') => {
     setAccountAuthBusy(true);
+    const nativeAuth = providerName === 'google' && typeof window !== 'undefined'
+      && navigator.userAgent.includes('Nights-iOS/')
+      ? (window as NightsNativeWindow).webkit?.messageHandlers?.nightsAuth
+      : undefined;
+    if (nativeAuth) {
+      try {
+        nativeAuth.postMessage({ provider: providerName });
+      } catch {
+        setAccountAuthBusy(false);
+        notify(`${providerName === 'apple' ? 'Apple' : 'Google'} sign-in could not be opened.`);
+      }
+      return;
+    }
     try {
       const [{ getApp }, authModule] = await Promise.all([
         import('firebase/app'), import('firebase/auth'),
@@ -3336,6 +3378,58 @@ export default function Home() {
       setAccountAuthBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !navigator.userAgent.includes('Nights-iOS/')) return;
+    const nativeWindow = window as NightsNativeWindow;
+    nativeWindow.__nightsNativeAuth = {
+      completeGoogle: (idToken, accessToken) => {
+        void (async () => {
+          try {
+            const [{ getApp }, authModule] = await Promise.all([
+              import('firebase/app'), import('firebase/auth'),
+            ]);
+            const credential = authModule.GoogleAuthProvider.credential(idToken, accessToken);
+            await authModule.signInWithCredential(authModule.getAuth(getApp()), credential);
+          } catch (error) {
+            const code = (error as { code?: string }).code || '';
+            notify(code === 'auth/account-exists-with-different-credential'
+              ? 'An account already exists for that email. Sign in with its original method first.'
+              : 'Google sign-in could not be completed.');
+          } finally {
+            setAccountAuthBusy(false);
+          }
+        })();
+      },
+      completeApple: (idToken, rawNonce) => {
+        void (async () => {
+          try {
+            const [{ getApp }, authModule] = await Promise.all([
+              import('firebase/app'), import('firebase/auth'),
+            ]);
+            const provider = new authModule.OAuthProvider('apple.com');
+            const credential = provider.credential({ idToken, rawNonce });
+            const result = await authModule.signInWithCredential(authModule.getAuth(getApp()), credential);
+            if (!result.user.email) notify('Add an email to your Apple account before continuing.');
+          } catch (error) {
+            const code = (error as { code?: string }).code || '';
+            notify(code === 'auth/account-exists-with-different-credential'
+              ? 'An account already exists for that email. Sign in with its original method first.'
+              : 'Apple sign-in could not be completed.');
+          } finally {
+            setAccountAuthBusy(false);
+          }
+        })();
+      },
+      fail: message => {
+        setAccountAuthBusy(false);
+        notify(message || 'Sign-in could not be completed.');
+      },
+    };
+    return () => {
+      delete nativeWindow.__nightsNativeAuth;
+    };
+  }, []);
 
   const resetAccountPassword = async () => {
     const email = accountEmail.trim().toLowerCase();
@@ -3374,16 +3468,49 @@ export default function Home() {
       ]);
       const user = authModule.getAuth(getApp()).currentUser;
       if (!user) throw new Error('Sign in again to verify your email.');
-      await authModule.sendEmailVerification(user, {
-        url: accountActionUrl('verify'),
-        handleCodeInApp: false,
-      });
+      await authModule.sendEmailVerification(user);
       notify(`A new verification email was sent to ${user.email || accountEmail}.`);
     } catch (error) {
       const code = (error as { code?: string }).code || '';
       notify(code === 'auth/too-many-requests'
         ? 'Too many verification emails were requested. Wait a few minutes and try again.'
         : error instanceof Error ? error.message : 'Could not resend the verification email.');
+    } finally {
+      setAccountAuthBusy(false);
+    }
+  };
+
+  const changeUnverifiedAccountEmail = async (replacementEmail: string) => {
+    const email = normalizedAccountEmail(replacementEmail);
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      notify('Enter a valid email address.');
+      return;
+    }
+    setAccountAuthBusy(true);
+    try {
+      const [{ getApp }, authModule] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'),
+      ]);
+      const user = authModule.getAuth(getApp()).currentUser;
+      if (!user || user.uid !== accountUser?.uid) throw new Error('Sign in again before changing your email.');
+      if (!user.providerData.some((provider) => provider.providerId === 'password'))
+        throw new Error('This option is only needed for email and password accounts.');
+      if (email === normalizedAccountEmail(user.email || ''))
+        throw new Error('Enter a different email address.');
+      await authModule.verifyBeforeUpdateEmail(user, email, {
+        url: accountActionUrl('verify'),
+        handleCodeInApp: false,
+      });
+      notify(`Verification sent to ${email}. Open that email to finish the change.`);
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      notify(code === 'auth/email-already-in-use'
+        ? 'That email already belongs to another account.'
+        : code === 'auth/requires-recent-login'
+          ? 'Sign out, sign back in with your current email and password, then change the email.'
+          : code === 'auth/invalid-new-email'
+            ? 'Enter a valid email address.'
+            : error instanceof Error ? error.message : 'Could not send the replacement verification email.');
     } finally {
       setAccountAuthBusy(false);
     }
@@ -3404,6 +3531,54 @@ export default function Home() {
         return;
       }
       await user.getIdToken(true);
+      const verifiedEmail = normalizedAccountEmail(user.email || '');
+      if (accountProfile && verifiedEmail && normalizedAccountEmail(accountProfile.email) !== verifiedEmail) {
+        const store = await import('firebase/firestore');
+        const db = store.getFirestore(getApp());
+        const oldEmail = normalizedAccountEmail(accountProfile.email);
+        const oldEmailRef = store.doc(db, 'account-emails', await guestNameIndexId(oldEmail));
+        const newEmailRef = store.doc(db, 'account-emails', await guestNameIndexId(verifiedEmail));
+        const userRef = store.doc(db, 'users', user.uid);
+        const directoryRef = store.doc(db, 'account-directory', user.uid);
+        await store.runTransaction(db, async (transaction) => {
+          const [oldEmailDocument, newEmailDocument] = await Promise.all([
+            transaction.get(oldEmailRef), transaction.get(newEmailRef),
+          ]);
+          if (newEmailDocument.exists() && newEmailDocument.data().accountUid !== user.uid)
+            throw new Error('That email is already connected to another Nights account.');
+          transaction.update(userRef, {
+            email: verifiedEmail,
+            emailVerified: true,
+            verificationExpiresAt: null,
+            updatedAt: store.serverTimestamp(),
+          });
+          transaction.set(directoryRef, {
+            uid: user.uid,
+            email: verifiedEmail,
+            firstName: accountProfile.firstName,
+            lastName: accountProfile.lastName,
+            phone: accountProfile.phone,
+            guestUid: accountProfile.guestUid,
+            updatedAt: store.serverTimestamp(),
+          });
+          transaction.set(newEmailRef, {
+            accountUid: user.uid,
+            email: verifiedEmail,
+            guestUid: accountProfile.guestUid,
+            updatedAt: store.serverTimestamp(),
+          });
+          if (oldEmailDocument.exists() && oldEmailDocument.data().accountUid === user.uid)
+            transaction.delete(oldEmailRef);
+        });
+        setAccountEmail(verifiedEmail);
+      } else if (accountProfile) {
+        const store = await import('firebase/firestore');
+        await store.updateDoc(store.doc(store.getFirestore(getApp()), 'users', user.uid), {
+          emailVerified: true,
+          verificationExpiresAt: null,
+          updatedAt: store.serverTimestamp(),
+        });
+      }
       const verifiedAccount: AccountUser = {
         uid: user.uid,
         email: user.email || '',
@@ -5302,7 +5477,7 @@ export default function Home() {
 
   return (
     <main
-      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'}`}
+      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'} ${editing ? 'is-editing' : ''}`}
       style={mode === 'guest' ? eventThemeStyle(menu) : undefined}
     >
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
@@ -5313,9 +5488,9 @@ export default function Home() {
             aria-label={mode === 'host' ? 'Nights Host home' : 'Open guest events'}
           >
             <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
-              <Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={36} height={36} />
+              <Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={36} height={36} />
             </span>
-            <span className="font-display text-xl font-semibold tracking-tight">
+            <span className="whitespace-nowrap font-display text-xl font-semibold tracking-tight">
               {mode === 'host' ? 'Nights Host' : 'Nights'}
             </span>
           </button>
@@ -5471,6 +5646,7 @@ export default function Home() {
             resetPassword={() => void resetAccountPassword()}
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
+            changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
             signOut={() => void signOutAccount()}
             completeProfile={() => void completeProviderProfile()}
             selectEvent={selectGuestEvent}
@@ -5708,6 +5884,7 @@ export default function Home() {
             resetPassword={() => void resetAccountPassword()}
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
+            changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
             signOut={() => void signOutAccount()}
             completeProfile={() => void completeProviderProfile()}
           />
@@ -5741,6 +5918,7 @@ export default function Home() {
             resetPassword={() => void resetAccountPassword()}
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
+            changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
             signOut={() => void signOutAccount()}
             completeProfile={() => void completeProviderProfile()}
           />
@@ -6433,18 +6611,21 @@ type AccountAuthCardProps = {
   resetPassword: () => void;
   resendVerification: () => void;
   checkVerification: () => void;
+  changeEmail: (email: string) => void;
   signOut: () => void;
   completeProfile: () => void;
 };
 
 function AccountAuthCard(props: AccountAuthCardProps) {
+  const [changingEmail, setChangingEmail] = useState(false);
+  const [replacementEmail, setReplacementEmail] = useState('');
   const verificationRequired = accountNeedsEmailVerification(props.user);
   const profileRequired = Boolean(props.user && !props.profile);
   const mode = profileRequired ? 'profile' : props.authMode;
   if (!props.authReady) {
     return (
       <section className="account-auth-card account-auth-loading" aria-live="polite">
-        <span className="account-auth-logo"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={58} height={58} /></span>
+        <span className="account-auth-logo"><Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={58} height={58} /></span>
         <h2 className="font-display">Opening Nights…</h2>
       </section>
     );
@@ -6457,18 +6638,44 @@ function AccountAuthCard(props: AccountAuthCardProps) {
         <h2 className="font-display">Verify your email</h2>
         <p>We sent a verification link to <strong>{props.user?.email}</strong>. Open it, then return here and confirm.</p>
         <button type="button" className="primary-button account-auth-submit" disabled={props.busy} onClick={props.checkVerification}>{props.busy ? 'Checking…' : 'I verified my email'}</button>
+        {changingEmail && (
+          <div className="account-change-email">
+            <label className="field-label">New email address
+              <input
+                type="email"
+                value={replacementEmail}
+                onChange={(event) => setReplacementEmail(event.target.value)}
+                className="field-input"
+                autoComplete="email"
+                inputMode="email"
+                placeholder="you@example.com"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && replacementEmail.trim()) props.changeEmail(replacementEmail);
+                  if (event.key === 'Escape') { setChangingEmail(false); setReplacementEmail(''); }
+                }}
+              />
+            </label>
+            <div className="account-change-email-actions">
+              <button type="button" disabled={props.busy} onClick={() => { setChangingEmail(false); setReplacementEmail(''); }}>Cancel</button>
+              <button type="button" className="primary-button" disabled={props.busy || !replacementEmail.trim()} onClick={() => props.changeEmail(replacementEmail)}>
+                {props.busy ? 'Sending…' : 'Verify new email'}
+              </button>
+            </div>
+          </div>
+        )}
         <div className="account-auth-links">
           <button type="button" disabled={props.busy} onClick={props.resendVerification}>Resend email</button>
+          <button type="button" disabled={props.busy} onClick={() => { setChangingEmail(true); setReplacementEmail(''); }}>Use a different email</button>
           <button type="button" disabled={props.busy} onClick={props.signOut}>Use another account</button>
         </div>
-        <small className="account-verification-help">Check spam or junk if it does not arrive. Verification links can only be used once.</small>
+        <small className="account-verification-help">Check spam or junk if it does not arrive. Verification links can only be used once. Unverified accounts are automatically removed after 90 days.</small>
       </section>
     );
   }
   return (
     <section className="account-auth-card">
       <div className="account-auth-heading">
-        <span className="account-auth-logo"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={58} height={58} /></span>
+        <span className="account-auth-logo"><Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={58} height={58} /></span>
         <p className="eyebrow">{props.context === 'host' ? 'Nights Host' : 'Your nights, in one place'}</p>
         <h2 className="font-display">
           {mode === 'signup' ? 'Create your account' : mode === 'profile' ? 'Complete your profile' : mode === 'recovery' ? 'Recover your account' : 'Welcome back'}
@@ -6556,6 +6763,7 @@ function GuestAccessPortal({
   resetPassword,
   resendVerification,
   checkVerification,
+  changeEmail,
   signOut,
   completeProfile,
   selectEvent,
@@ -6567,7 +6775,7 @@ function GuestAccessPortal({
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
-        <span className="guest-access-mark"><Image src="/gathering/icons/gather-app-icon-180.png" alt="" width={62} height={62} /></span>
+        <span className="guest-access-mark"><Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={62} height={62} /></span>
         <p className="eyebrow">Your nights, in one place</p>
         <h1 className="font-display">Your events</h1>
         <p>Use one secure account for every event you host, invitation, RSVP, order, and event chat.</p>
@@ -6575,7 +6783,7 @@ function GuestAccessPortal({
       {!profile || accountNeedsEmailVerification(user) ? (
         <div className="guest-access-auth-shell">
           {pendingEvent && <div className="guest-invitation-cached"><Check size={17} /><span><strong>Invitation saved</strong><small>Sign in and this event will be added to your event list.</small></span></div>}
-          <AccountAuthCard context="guest" authReady={authReady} user={user} profile={profile} authMode={authMode} email={email} password={password} firstName={firstName} lastName={lastName} phone={phone} recoverySentTo={recoverySentTo} busy={busy} setAuthMode={setAuthMode} setEmail={setEmail} setPassword={setPassword} setFirstName={setFirstName} setLastName={setLastName} setPhone={setPhone} signInEmail={signInEmail} signUpEmail={signUpEmail} signInGoogle={signInGoogle} signInApple={signInApple} resetPassword={resetPassword} resendVerification={resendVerification} checkVerification={checkVerification} signOut={signOut} completeProfile={completeProfile} />
+          <AccountAuthCard context="guest" authReady={authReady} user={user} profile={profile} authMode={authMode} email={email} password={password} firstName={firstName} lastName={lastName} phone={phone} recoverySentTo={recoverySentTo} busy={busy} setAuthMode={setAuthMode} setEmail={setEmail} setPassword={setPassword} setFirstName={setFirstName} setLastName={setLastName} setPhone={setPhone} signInEmail={signInEmail} signUpEmail={signUpEmail} signInGoogle={signInGoogle} signInApple={signInApple} resetPassword={resetPassword} resendVerification={resendVerification} checkVerification={checkVerification} changeEmail={changeEmail} signOut={signOut} completeProfile={completeProfile} />
         </div>
       ) : (
         <div className="guest-access-events">

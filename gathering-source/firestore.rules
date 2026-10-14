@@ -39,6 +39,10 @@ service cloud.firestore {
         && accountProfile().data.lastName is string
         && accountProfile().data.phone is string
         && accountProfile().data.guestUid is string
+        && (
+          !accountProfile().data.keys().hasAny(['emailVerified'])
+          || accountProfile().data.emailVerified == true
+        )
         && exists(/databases/$(database)/documents/guest-identities/$(accountProfile().data.guestUid))
         && get(/databases/$(database)/documents/guest-identities/$(accountProfile().data.guestUid)).data.accountUid == request.auth.uid;
     }
@@ -265,6 +269,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'uid', 'email', 'firstName', 'lastName', 'phone', 'guestUid',
           'membershipTier', 'membershipStatus', 'mutedEventIds',
+          'emailVerified', 'verificationExpiresAt',
           'createdAt', 'updatedAt'
         ])
         && request.resource.data.uid == request.auth.uid
@@ -286,12 +291,30 @@ service cloud.firestore {
         && request.resource.data.membershipTier == 'free'
         && request.resource.data.membershipStatus == 'active'
         && request.resource.data.mutedEventIds is list
+        && request.resource.data.emailVerified == request.auth.token.email_verified
+        && (
+          (request.resource.data.emailVerified == true
+            && request.resource.data.verificationExpiresAt == null)
+          || (request.resource.data.emailVerified == false
+            && request.resource.data.verificationExpiresAt is timestamp
+            && request.resource.data.verificationExpiresAt > request.time + duration.value(89, 'd')
+            && request.resource.data.verificationExpiresAt < request.time + duration.value(91, 'd'))
+        )
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time;
       allow update: if signedIn()
         && request.auth.uid == userId
+        && (
+          !resource.data.keys().hasAny(['emailVerified', 'verificationExpiresAt'])
+          || resource.data.emailVerified == true
+          || resource.data.verificationExpiresAt > request.time
+        )
         && request.resource.data.uid == resource.data.uid
-        && request.resource.data.email == resource.data.email
+        && (
+          request.resource.data.email == resource.data.email
+          || (request.auth.token.email_verified == true
+            && request.resource.data.email == request.auth.token.email)
+        )
         && request.resource.data.phone == resource.data.phone
         && request.resource.data.guestUid == resource.data.guestUid
         && request.resource.data.membershipTier == resource.data.membershipTier
@@ -304,9 +327,26 @@ service cloud.firestore {
         && request.resource.data.lastName.size() >= 1
         && request.resource.data.lastName.size() <= 60
         && request.resource.data.mutedEventIds is list
+        && (
+          !resource.data.keys().hasAny(['emailVerified', 'verificationExpiresAt'])
+          || request.resource.data.keys().hasAll(['emailVerified', 'verificationExpiresAt'])
+        )
+        && (
+          !request.resource.data.keys().hasAny(['emailVerified', 'verificationExpiresAt'])
+          || (
+            request.resource.data.emailVerified == request.auth.token.email_verified
+            && (
+              (request.resource.data.emailVerified == true
+                && request.resource.data.verificationExpiresAt == null)
+              || (request.resource.data.emailVerified == false
+                && request.resource.data.verificationExpiresAt == resource.data.verificationExpiresAt)
+            )
+          )
+        )
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'firstName', 'lastName', 'mutedEventIds', 'updatedAt'
+          'email', 'firstName', 'lastName', 'mutedEventIds',
+          'emailVerified', 'verificationExpiresAt', 'updatedAt'
         ]);
       allow delete: if signedIn() && request.auth.uid == userId;
 
