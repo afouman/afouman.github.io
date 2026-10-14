@@ -5481,11 +5481,17 @@ export default function Home() {
             <button
               type="button"
               className="app-back-button"
-              onClick={() => window.location.assign(
-                hostPreview
-                  ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
-                  : mode === 'host' ? hostHomeRoute() : guestHomeRoute(),
-              )}
+              onClick={() => {
+                if (hostPreview) {
+                  window.location.assign(eventRoute(menu.id, 'host', automaticPublicEventPath(menu)));
+                  return;
+                }
+                if (window.history.length > 1) {
+                  window.history.back();
+                  return;
+                }
+                window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute());
+              }}
               aria-label={hostPreview ? 'Back to event editor' : 'Back to events'}
               title={hostPreview ? 'Back to event editor' : 'Back to events'}
             >
