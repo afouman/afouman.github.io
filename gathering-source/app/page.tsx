@@ -876,6 +876,10 @@ const eventRoute = (
     ? `?view=host&event=${encodedEventId}`
     : `?event=${encodedEventId}`;
 };
+const hostPreviewRoute = (eventId: string, publicPath?: string) => {
+  const route = eventRoute(eventId, 'guest', publicPath);
+  return `${route}${route.includes('?') ? '&' : '?'}preview=host`;
+};
 const hostHomeRoute = () => usesCleanEventUrls() ? '/nights-host/' : '?view=host';
 const guestHomeRoute = () => usesCleanEventUrls() ? '/nights-guest/' : '?guest=1';
 const newEventHostRoute = () => {
@@ -885,8 +889,8 @@ const newEventHostRoute = () => {
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=43', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=43', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=44', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=44', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -1423,6 +1427,8 @@ export default function Home() {
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [isNativeIOSApp, setIsNativeIOSApp] = useState(false);
+  const [appEnvironmentReady, setAppEnvironmentReady] = useState(false);
+  const [hostPreview, setHostPreview] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [guestPin, setGuestPin] = useState('');
   const [guestSession, setGuestSession] = useState<GuestSession | null>(null);
@@ -2107,6 +2113,8 @@ export default function Home() {
     const legacyHostView = parameters.get('view') === 'host';
     const hostView = isHostPortalUrl(currentUrl);
     const guestPortal = isGuestPortalUrl(currentUrl);
+    const hostPreviewRequested = !hostView && parameters.get('preview') === 'host';
+    queueMicrotask(() => setHostPreview(hostPreviewRequested));
     if (usesCleanEventUrls()) {
       const role = hostView ? 'host' : 'guest';
       document.querySelector<HTMLLinkElement>('link[rel="manifest"]')
@@ -2163,7 +2171,7 @@ export default function Home() {
       });
       return;
     }
-    if (!hostView && (linkedEventId || linkedPublicPath)) {
+    if (!hostView && !hostPreviewRequested && (linkedEventId || linkedPublicPath)) {
       const trustedGuestUid = linkedEventId
         ? localStorage.getItem(guestIdentityKey(linkedEventId))
         : null;
@@ -2282,6 +2290,8 @@ export default function Home() {
     queueMicrotask(() => {
       setIsStandalone(installed);
       setIsNativeIOSApp(nativeIOSApp);
+      setAppEnvironmentReady(true);
+      if (nativeIOSApp) setShowInstallGuide(false);
     });
     if (!nativeIOSApp && location.protocol === 'https:' && 'serviceWorker' in navigator) {
       // Changing this release marker causes a prompt service-worker update on
@@ -2412,6 +2422,38 @@ export default function Home() {
       channel?.close();
     };
   }, [menu.id]);
+
+  useEffect(() => {
+    const modalSelector = [
+      'dialog[open]',
+      '[aria-modal="true"]',
+      '.background-crop-backdrop',
+      '.delete-account-backdrop',
+      '.guest-event-picker-backdrop',
+      '.invite-dialog-backdrop',
+      '.guest-list-backdrop',
+      '.guest-rsvp-backdrop',
+      '.expense-backdrop',
+    ].join(',');
+    const syncScrollLock = () => {
+      const overlayOpen = Boolean(document.querySelector(modalSelector));
+      document.documentElement.classList.toggle('app-overlay-open', overlayOpen);
+      document.body.classList.toggle('app-overlay-open', overlayOpen);
+    };
+    const observer = new MutationObserver(syncScrollLock);
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['open', 'aria-modal'],
+    });
+    syncScrollLock();
+    return () => {
+      observer.disconnect();
+      document.documentElement.classList.remove('app-overlay-open');
+      document.body.classList.remove('app-overlay-open');
+    };
+  }, []);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -2752,7 +2794,10 @@ export default function Home() {
     updatedAt: myRsvp.updatedAt,
   } : null), [guestProfile, myRsvp]);
   const currentInvitation = guestEvents.find((access) => access.event.id === menu.id)?.invitation;
-  const guestHasEventAccess = guestIsApproved(menu, myRsvp);
+  const accountManagesCurrentEvent = !firebaseConfigured
+    || accountCanManageEvent(menu, accountUser?.uid, accountUser?.email);
+  const guestHasEventAccess = guestIsApproved(menu, myRsvp)
+    || (hostPreview && accountManagesCurrentEvent);
   const rsvpButtonLabel = myRsvp
     ? menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) === 'pending'
       ? 'RSVP: Pending approval'
@@ -2760,10 +2805,7 @@ export default function Home() {
         ? 'RSVP: Not approved'
         : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
-  const canManageCurrentEvent = mode === 'host' && (
-    !firebaseConfigured
-    || accountCanManageEvent(menu, accountUser?.uid, accountUser?.email)
-  );
+  const canManageCurrentEvent = mode === 'host' && accountManagesCurrentEvent;
   const chatActor: ChatActor | null = useMemo(() => mode === 'host'
     ? ((hostUser && canManageCurrentEvent) || !firebaseConfigured)
       ? { uid: hostUser || 'host', name: 'Host', role: 'host' }
@@ -3932,7 +3974,6 @@ export default function Home() {
         guestUid: string;
       };
       const displayName = `${directory.firstName || ''} ${directory.lastName || ''}`.trim();
-      const fallbackName = `${displayName || 'Guest'} · ${phoneDigits(directory.phone).slice(-4)}`;
       const invitationRef = store.doc(db, 'users', targetUid, 'invitations', event.id);
       const contactRef = store.doc(db, 'users', accountUser.uid, 'contacts', targetUid);
       const pendingInvitationRef = store.doc(
@@ -3949,94 +3990,36 @@ export default function Home() {
         'contacts',
         `phone-${directory.guestUid}`,
       );
-      const profileRef = store.doc(db, 'events', event.id, 'guests', directory.guestUid);
-      const participantRef = store.doc(db, 'events', event.id, 'expense-participants', directory.guestUid);
-      const primaryNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(displayName));
-      const fallbackNameRef = store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(fallbackName));
-      const phoneRef = store.doc(
-        db,
-        'events',
-        event.id,
-        'guest-phones',
-        await guestNameIndexId(directory.phone),
-      );
-      await store.runTransaction(db, async (transaction) => {
-        const [invitation, contact, profile, participant, primaryName, fallbackNameClaim, phoneClaim] = await Promise.all([
-          transaction.get(invitationRef),
-          transaction.get(contactRef),
-          transaction.get(profileRef),
-          transaction.get(participantRef),
-          transaction.get(primaryNameRef),
-          transaction.get(fallbackNameRef),
-          transaction.get(phoneRef),
-        ]);
-        const guestName = profile.exists()
-          ? profile.data().guestName
-          : !primaryName.exists() || primaryName.data().guestUid === directory.guestUid
-            ? displayName
-            : fallbackName;
-        const nameRef = guestName === displayName ? primaryNameRef : fallbackNameRef;
-        const selectedNameClaim = guestName === displayName ? primaryName : fallbackNameClaim;
-        if (selectedNameClaim.exists() && selectedNameClaim.data().guestUid !== directory.guestUid)
-          throw new Error('name-conflict');
-        if (phoneClaim.exists() && phoneClaim.data().guestUid !== directory.guestUid)
-          throw new Error('phone-conflict');
-        transaction.set(invitationRef, {
-          eventId: event.id,
-          eventTitle: event.title,
-          hostUid: accountUser.uid,
-          recipientUid: targetUid,
-          recipientGuestUid: directory.guestUid,
-          recipientEmail: directory.email,
-          recipientPhone: directory.phone,
-          createdAt: invitation.exists() ? invitation.data().createdAt : store.serverTimestamp(),
-          updatedAt: store.serverTimestamp(),
-        });
-        transaction.set(contactRef, {
-          accountUid: targetUid,
-          guestUid: directory.guestUid,
-          email: directory.email,
-          phone: directory.phone,
-          firstName: directory.firstName,
-          lastName: directory.lastName,
-          inviteCount: (contact.data()?.inviteCount || 0) + 1,
-          eventIds: [...new Set([...(contact.data()?.eventIds || []), event.id])],
-          lastInvitedAt: store.serverTimestamp(),
-        });
-        transaction.delete(pendingInvitationRef);
-        transaction.delete(pendingContactRef);
-        if (!profile.exists()) {
-          if (!selectedNameClaim.exists()) transaction.set(nameRef, {
-            guestUid: directory.guestUid,
-            guestName,
-            createdAt: store.serverTimestamp(),
-          });
-          if (!phoneClaim.exists()) transaction.set(phoneRef, {
-            guestUid: directory.guestUid,
-            guestPhone: directory.phone,
-            createdAt: store.serverTimestamp(),
-          });
-          transaction.set(profileRef, {
-            guestUid: directory.guestUid,
-            accountUid: targetUid,
-            guestName,
-            guestPhone: directory.phone,
-            createdAt: store.serverTimestamp(),
-            updatedAt: store.serverTimestamp(),
-          });
-        }
-        transaction.set(participantRef, {
-          id: directory.guestUid,
-          accountUid: targetUid,
-          primaryGuestUid: directory.guestUid,
-          name: guestName,
-          role: 'guest',
-          status: participant.data()?.status || 'invited',
-          approvalStatus: participant.data()?.approvalStatus || 'approved',
-          createdAt: participant.data()?.createdAt || store.serverTimestamp(),
-          updatedAt: store.serverTimestamp(),
-        });
+      const [invitation, contact] = await Promise.all([
+        store.getDoc(invitationRef),
+        store.getDoc(contactRef),
+      ]);
+      const batch = store.writeBatch(db);
+      batch.set(invitationRef, {
+        eventId: event.id,
+        eventTitle: event.title,
+        hostUid: accountUser.uid,
+        recipientUid: targetUid,
+        recipientGuestUid: directory.guestUid,
+        recipientEmail: directory.email,
+        recipientPhone: directory.phone,
+        createdAt: invitation.exists() ? invitation.data().createdAt : store.serverTimestamp(),
+        updatedAt: store.serverTimestamp(),
       });
+      batch.set(contactRef, {
+        accountUid: targetUid,
+        guestUid: directory.guestUid,
+        email: directory.email,
+        phone: directory.phone,
+        firstName: directory.firstName,
+        lastName: directory.lastName,
+        inviteCount: (contact.data()?.inviteCount || 0) + 1,
+        eventIds: [...new Set([...(contact.data()?.eventIds || []), event.id])],
+        lastInvitedAt: store.serverTimestamp(),
+      });
+      batch.delete(pendingInvitationRef);
+      batch.delete(pendingContactRef);
+      await batch.commit();
       const currentUser = authModule.getAuth(getApp()).currentUser;
       if (currentUser) {
         const idToken = await currentUser.getIdToken();
@@ -5494,32 +5477,53 @@ export default function Home() {
     >
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
-          <button
-            onClick={() => window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute())}
-            className="flex items-center gap-3"
-            aria-label={mode === 'host' ? 'Nights Host home' : 'Open guest events'}
-          >
-            <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
-              <Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={36} height={36} />
-            </span>
-            <span className="whitespace-nowrap font-display text-xl font-semibold tracking-tight">
-              {mode === 'host' ? 'Nights Host' : 'Nights'}
-            </span>
-          </button>
+          <div className="app-header-brand">
+            <button
+              type="button"
+              className="app-back-button"
+              onClick={() => window.location.assign(
+                hostPreview
+                  ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
+                  : mode === 'host' ? hostHomeRoute() : guestHomeRoute(),
+              )}
+              aria-label={hostPreview ? 'Back to event editor' : 'Back to events'}
+              title={hostPreview ? 'Back to event editor' : 'Back to events'}
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <button
+              onClick={() => window.location.assign(
+                hostPreview
+                  ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
+                  : mode === 'host' ? hostHomeRoute() : guestHomeRoute(),
+              )}
+              className="app-brand-button flex items-center gap-3"
+              aria-label={hostPreview ? 'Return to this event in Nights Host' : mode === 'host' ? 'Nights Host home' : 'Open guest events'}
+            >
+              <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
+                <Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={36} height={36} />
+              </span>
+              <span className="whitespace-nowrap font-display text-xl font-semibold tracking-tight">
+                {mode === 'host' ? 'Nights Host' : 'Nights'}
+              </span>
+            </button>
+          </div>
           <div className="app-header-actions flex items-center gap-2">
             <button
               type="button"
               className="guest-event-switch-button"
               onClick={() => {
                 sessionStorage.removeItem(CREATE_EVENT_INTENT_KEY);
-                window.location.assign(guestHomeRoute());
+                window.location.assign(hostPreview
+                  ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
+                  : guestHomeRoute());
               }}
-              aria-label="Open Nights home"
+              aria-label={hostPreview ? 'Return to host event' : 'Open Nights home'}
             >
               <House size={15} />
-              <span>Home</span>
+              <span>{hostPreview ? 'Back to host' : 'Home'}</span>
             </button>
-            {mode === 'guest' && accountProfile && (
+            {mode === 'guest' && !hostPreview && accountProfile && (
               <button
                 type="button"
                 className="guest-new-event-button"
@@ -5533,11 +5537,11 @@ export default function Home() {
                 <span>New Event</span>
               </button>
             )}
-            {!isStandalone && (
+            {mode === 'guest' && appEnvironmentReady && !isStandalone && !isNativeIOSApp && (
               <button
                 onClick={openInstallGuide}
                 className="install-app-button"
-                aria-label={mode === 'host' ? 'Install Nights Host on iPhone' : 'Install Nights on iPhone'}
+                aria-label="Install Nights on iPhone"
               >
                 <Smartphone size={15} />
                 <span>Install app</span>
@@ -6236,7 +6240,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {showInstallGuide && (
+      {showInstallGuide && appEnvironmentReady && !isNativeIOSApp && (
         <div className="fixed inset-0 z-[80] grid place-items-end bg-black/45 p-3 backdrop-blur-sm sm:place-items-center sm:p-5">
           <section className="install-guide">
             <div className="flex items-start justify-between gap-4">
@@ -8596,7 +8600,7 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={guestEventUrl(menu.id, automaticPublicEventPath(menu))} target="_blank" rel="noreferrer">
+                <a href={hostPreviewRoute(menu.id, automaticPublicEventPath(menu))}>
                   <ExternalLink size={16} />
                   <span>Preview</span>
                 </a>

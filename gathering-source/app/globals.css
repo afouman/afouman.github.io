@@ -24,6 +24,7 @@ html {
   background: var(--cream);
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  overscroll-behavior-x: none;
 }
 body {
   width: 100%;
@@ -34,6 +35,29 @@ body {
     radial-gradient(circle at 8% 2%, rgb(255 255 255/0.9), transparent 28rem),
     linear-gradient(180deg, #faf6ee 0, var(--cream) 32rem);
   font-family: var(--font-body), Arial, sans-serif;
+  overscroll-behavior-x: none;
+}
+html.app-overlay-open,
+body.app-overlay-open {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.app-root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip;
+}
+.app-root *,
+.app-header * {
+  min-width: 0;
+}
+.app-root img,
+.app-root video,
+.app-root canvas {
+  max-width: 100%;
+}
+dialog {
+  max-width: calc(100dvw - 1rem);
 }
 button {
   cursor: pointer;
@@ -689,6 +713,25 @@ button:disabled {
   padding-right: max(1.25rem, env(safe-area-inset-right));
   padding-left: max(1.25rem, env(safe-area-inset-left));
 }
+.app-header-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.65rem;
+}
+.app-back-button {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: none;
+  place-items: center;
+  border: 1px solid rgb(24 70 70 / 0.14);
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.68);
+  color: #194f4b;
+  box-shadow: 0 4px 14px rgb(8 38 43 / 0.06);
+}
+.app-back-button:hover { transform: translateX(-2px); background: #fff; }
 .app-root {
   width: 100%;
   max-width: 100%;
@@ -1507,6 +1550,58 @@ button:disabled {
     padding-bottom: calc(1.5rem + env(safe-area-inset-bottom));
   }
 }
+
+/* App-shell invariants: no surface may widen the viewport, and every overlay
+   owns its scrolling instead of moving the page underneath it. */
+.app-header,
+.app-header > div,
+.host-shell,
+.guest-shell,
+.guest-hero,
+.host-workspace {
+  width: 100%;
+  max-width: 100%;
+}
+.background-crop-backdrop,
+.delete-account-backdrop,
+.guest-event-picker-backdrop,
+.invite-dialog-backdrop,
+.guest-list-backdrop,
+.guest-rsvp-backdrop,
+.expense-backdrop {
+  width: 100%;
+  max-width: 100dvw;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+.background-crop-dialog,
+.delete-account-dialog,
+.guest-event-picker,
+.invite-dialog,
+.guest-list-dialog,
+.guest-rsvp-dialog,
+.checkout-dialog,
+.event-chat,
+.expense-panel,
+.notification-onboarding-card,
+.install-guide {
+  max-width: calc(100dvw - 1rem);
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+}
+@media (max-width: 700px) {
+  .background-crop-dialog,
+  .delete-account-dialog,
+  .guest-event-picker,
+  .invite-dialog,
+  .guest-list-dialog,
+  .guest-rsvp-dialog,
+  .expense-panel,
+  .notification-onboarding-card,
+  .install-guide {
+    max-width: 100dvw;
+  }
+}
 .minimize-order-button {
   position: absolute;
   top: 0.9rem;
@@ -1570,12 +1665,18 @@ button:disabled {
   background: linear-gradient(180deg, rgb(var(--theme-deep-rgb)/0.72), transparent);
   color: #fff8eb;
 }
-.guest-mode .app-header > div > button:first-child {
+.guest-mode .app-brand-button {
   color: #fff8eb;
 }
-.guest-mode .app-header > div > button:first-child span:first-child {
+.guest-mode .app-brand-button span:first-child {
   background: var(--peach);
   color: var(--wine-deep);
+}
+.guest-mode .app-back-button {
+  border-color: rgb(255 255 255 / 0.3);
+  background: rgb(8 35 49 / 0.72);
+  color: #f5fffd;
+  backdrop-filter: blur(12px);
 }
 .view-switch-button {
   border: 1px solid rgb(255 255 255/0.3);
@@ -1778,23 +1879,27 @@ button:disabled {
 .native-ios-app .app-header > div {
   height: 4rem;
 }
-.native-ios-app .app-header > div > button:first-child {
+.native-ios-app .app-brand-button {
   min-width: 0;
   gap: 0.65rem;
 }
-.native-ios-app .app-header > div > button:first-child span:first-child {
+.native-ios-app .app-brand-button span:first-child {
   width: 2.15rem;
   height: 2.15rem;
   border-radius: 0.7rem;
 }
-.native-ios-app .app-header > div > button:first-child span:first-child img {
+.native-ios-app .app-brand-button span:first-child img {
   width: 100%;
   height: 100%;
 }
-.native-ios-app .app-header > div > button:first-child span:last-child {
+.native-ios-app .app-brand-button span:last-child {
   overflow: hidden;
   font-size: 1.15rem;
   text-overflow: ellipsis;
+}
+.native-ios-app .app-back-button {
+  width: 2.25rem;
+  height: 2.25rem;
 }
 .native-ios-app .app-header-actions {
   min-width: 0;
@@ -3546,28 +3651,17 @@ button:disabled {
     background: var(--wine-deep);
   }
   .guest-hero-photo::before {
-    inset: -2rem;
+    inset: -1.5rem;
     background-position: inherit;
-    filter: blur(18px) saturate(0.82);
-    opacity: 0.64;
-    animation: none;
-    transform: scale(var(--background-backdrop-zoom, 1.12));
+    background-size: cover;
+    filter: none;
+    opacity: 1;
+    animation: hero-breathe 16s ease-in-out infinite alternate;
+    transform: scale(var(--background-zoom, 1));
     transform-origin: var(--background-origin-x, 50%) var(--background-origin-y, 50%);
   }
   .guest-hero-photo::after {
-    display: block;
-    top: clamp(4.5rem, 11svh, 6.5rem);
-    right: 0;
-    left: 0;
-    height: 56.28vw;
-    background-image: inherit;
-    background-position: inherit;
-    background-repeat: no-repeat;
-    background-size: contain;
-    transform: scale(var(--background-zoom, 1));
-    transform-origin: var(--background-origin-x, 50%) var(--background-origin-y, 50%);
-    -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 0%, #000 76%, transparent 100%);
+    display: none;
   }
   .guest-hero-shade {
     background:
@@ -4329,6 +4423,13 @@ button:disabled {
 .rsvp-approval-note.pending { background: #f1e4c7; color: #694b19; }
 .rsvp-approval-note.declined { background: #f1d8d1; color: #723e3d; }
 @media (max-width: 700px) {
+  .app-header > div {
+    padding-right: max(3.5rem, env(safe-area-inset-right));
+    padding-left: max(0.65rem, env(safe-area-inset-left));
+  }
+  .app-header-brand { gap: 0.4rem; }
+  .app-brand-button { gap: 0; }
+  .app-brand-button > span:last-child { display: none; }
   .guest-event-switch-button span { display: none; }
   .guest-access-portal {
     grid-template-columns: minmax(0, 1fr);
