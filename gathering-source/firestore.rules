@@ -222,7 +222,30 @@ service cloud.firestore {
         && request.resource.data.phone.size() >= 11
         && request.resource.data.phone.size() <= 16
         && request.resource.data.createdAt == request.time;
-      allow update: if false;
+      allow update: if signedIn()
+        && resource.data.accountUid == request.auth.uid
+        && request.resource.data.accountUid == resource.data.accountUid
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 11
+        && request.resource.data.phone.size() <= 16
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['phone']);
+      allow delete: if signedIn() && resource.data.accountUid == request.auth.uid;
+    }
+
+    match /account-phones/{phoneHash} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly(['accountUid', 'guestUid', 'phone', 'updatedAt'])
+        && request.resource.data.accountUid == request.auth.uid
+        && request.resource.data.guestUid is string
+        && request.resource.data.guestUid.size() == 64
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 11
+        && request.resource.data.phone.size() <= 16
+        && request.resource.data.updatedAt == request.time
+        && (resource == null || resource.data.accountUid == request.auth.uid);
       allow delete: if signedIn() && resource.data.accountUid == request.auth.uid;
     }
 
@@ -248,12 +271,15 @@ service cloud.firestore {
       allow create, update: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
-          'uid', 'email', 'firstName', 'lastName', 'phone', 'guestUid', 'updatedAt'
+          'uid', 'email', 'firstName', 'lastName', 'displayName', 'phone', 'guestUid', 'updatedAt'
         ])
         && request.resource.data.uid == userId
         && request.resource.data.email == request.auth.token.email
         && request.resource.data.firstName is string
         && request.resource.data.lastName is string
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 80
         && request.resource.data.phone is string
         && request.resource.data.guestUid is string
         && request.resource.data.guestUid.size() == 64
@@ -267,7 +293,7 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == userId
         && request.resource.data.keys().hasOnly([
-          'uid', 'email', 'firstName', 'lastName', 'phone', 'guestUid',
+          'uid', 'email', 'firstName', 'lastName', 'displayName', 'phone', 'guestUid',
           'membershipTier', 'membershipStatus', 'mutedEventIds',
           'emailVerified', 'verificationExpiresAt',
           'createdAt', 'updatedAt'
@@ -280,6 +306,9 @@ service cloud.firestore {
         && request.resource.data.lastName is string
         && request.resource.data.lastName.size() >= 1
         && request.resource.data.lastName.size() <= 60
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 80
         && request.resource.data.phone is string
         && request.resource.data.phone.size() >= 11
         && request.resource.data.phone.size() <= 16
@@ -315,7 +344,6 @@ service cloud.firestore {
           || (request.auth.token.email_verified == true
             && request.resource.data.email == request.auth.token.email)
         )
-        && request.resource.data.phone == resource.data.phone
         && request.resource.data.guestUid == resource.data.guestUid
         && request.resource.data.membershipTier == resource.data.membershipTier
         && request.resource.data.membershipStatus == resource.data.membershipStatus
@@ -326,6 +354,17 @@ service cloud.firestore {
         && request.resource.data.lastName is string
         && request.resource.data.lastName.size() >= 1
         && request.resource.data.lastName.size() <= 60
+        && (
+          (!resource.data.keys().hasAny(['displayName'])
+            && !request.resource.data.keys().hasAny(['displayName']))
+          || (request.resource.data.displayName is string
+            && request.resource.data.displayName.size() >= 2
+            && request.resource.data.displayName.size() <= 80)
+        )
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 11
+        && request.resource.data.phone.size() <= 16
+        && getAfter(/databases/$(database)/documents/guest-identities/$(request.resource.data.guestUid)).data.phone == request.resource.data.phone
         && request.resource.data.mutedEventIds is list
         && (
           !resource.data.keys().hasAny(['emailVerified', 'verificationExpiresAt'])
@@ -345,7 +384,7 @@ service cloud.firestore {
         )
         && request.resource.data.updatedAt == request.time
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'email', 'firstName', 'lastName', 'mutedEventIds',
+          'email', 'firstName', 'lastName', 'displayName', 'phone', 'mutedEventIds',
           'emailVerified', 'verificationExpiresAt', 'updatedAt'
         ]);
       allow delete: if signedIn() && request.auth.uid == userId;
@@ -776,7 +815,7 @@ service cloud.firestore {
         allow update: if ownsGuestIdentity(guestUid)
           && request.resource.data.guestUid == resource.data.guestUid
           && request.resource.data.accountUid == request.auth.uid
-          && request.resource.data.guestPhone == resource.data.guestPhone
+          && request.resource.data.guestPhone == accountProfile().data.phone
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.guestName is string
           && request.resource.data.guestName.size() >= 2
@@ -790,7 +829,7 @@ service cloud.firestore {
           )
           && request.resource.data.updatedAt == request.time
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'accountUid', 'guestName', 'pinHash', 'updatedAt'
+            'accountUid', 'guestName', 'guestPhone', 'pinHash', 'updatedAt'
           ]);
         allow delete: if canManageEvent(eventId) || ownsGuestIdentity(guestUid);
       }

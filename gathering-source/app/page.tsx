@@ -176,6 +176,7 @@ type AccountProfile = {
   email: string;
   firstName: string;
   lastName: string;
+  displayName?: string;
   phone: string;
   guestUid: string;
   membershipTier: 'free' | 'plus' | 'pro';
@@ -345,6 +346,13 @@ const EVENT_BACKGROUNDS: Record<EventType, string> = {
   game: '/gathering/gather-game-night-hero.jpg',
   birthday: '/gathering/gather-birthday-party-hero.jpg',
   custom: '/gathering/gather-custom-event-hero.jpg',
+};
+const EVENT_MOBILE_BACKGROUND_FOCUS: Record<EventType, BackgroundFocus> = {
+  meal: { x: 52, y: 50 },
+  movie: { x: 50, y: 48 },
+  game: { x: 51, y: 48 },
+  birthday: { x: 51, y: 48 },
+  custom: { x: 50, y: 50 },
 };
 const EVENT_PALETTES: Array<{
   value: EventPalette;
@@ -889,8 +897,8 @@ const newEventHostRoute = () => {
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=44', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=44', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=45', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=45', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -913,8 +921,8 @@ const pushSubscriptionKey = (eventId: string, actorUid: string) =>
   `gather-chat-push-v2:${eventId}:${actorUid}`;
 const globalPushKey = (authUid: string) => `${GLOBAL_PUSH_KEY}:${authUid}`;
 const notificationPromptKey = (authUid: string) => `${NOTIFICATION_PROMPT_KEY}:${authUid}`;
-const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName'>) =>
-  `${profile.firstName} ${profile.lastName}`.trim();
+const accountDisplayName = (profile: Pick<AccountProfile, 'firstName' | 'lastName' | 'displayName'>) =>
+  profile.displayName?.trim() || `${profile.firstName} ${profile.lastName}`.trim();
 const accountNeedsEmailVerification = (user: AccountUser | null) => Boolean(
   user && user.providerIds.includes('password') && !user.emailVerified,
 );
@@ -1390,6 +1398,13 @@ export default function Home() {
   const [accountPhone, setAccountPhone] = useState('');
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [profileEditorBusy, setProfileEditorBusy] = useState(false);
+  const [profileFirstName, setProfileFirstName] = useState('');
+  const [profileLastName, setProfileLastName] = useState('');
+  const [profileDisplayName, setProfileDisplayName] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [profileEmail, setProfileEmail] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
@@ -1530,6 +1545,7 @@ export default function Home() {
               email,
               firstName: profile.firstName,
               lastName: profile.lastName,
+              displayName: accountDisplayName(profile),
               phone: profile.phone,
               guestUid: profile.guestUid,
               updatedAt: store.serverTimestamp(),
@@ -2786,13 +2802,25 @@ export default function Home() {
 
   const count = Object.values(cart).reduce((a, b) => a + b, 0);
   const hasMenu = menuHasPublishedItems(menu);
-  const effectiveGuestProfile = useMemo(() => guestProfile || (myRsvp ? {
-    guestUid: myRsvp.guestUid,
-    guestName: myRsvp.guestName,
-    guestPhone: myRsvp.guestPhone,
-    createdAt: myRsvp.createdAt,
-    updatedAt: myRsvp.updatedAt,
-  } : null), [guestProfile, myRsvp]);
+  const effectiveGuestProfile = useMemo(() => {
+    const savedProfile = guestProfile || (myRsvp ? {
+      guestUid: myRsvp.guestUid,
+      guestName: myRsvp.guestName,
+      guestPhone: myRsvp.guestPhone,
+      createdAt: myRsvp.createdAt,
+      updatedAt: myRsvp.updatedAt,
+    } : null);
+    if (!accountProfile) return savedProfile;
+    return {
+      ...savedProfile,
+      accountUid: accountProfile.uid,
+      guestUid: accountProfile.guestUid,
+      guestName: accountDisplayName(accountProfile),
+      guestPhone: accountProfile.phone,
+      createdAt: savedProfile?.createdAt || accountProfile.createdAt,
+      updatedAt: savedProfile?.updatedAt || accountProfile.updatedAt,
+    };
+  }, [accountProfile, guestProfile, myRsvp]);
   const currentInvitation = guestEvents.find((access) => access.event.id === menu.id)?.invitation;
   const accountManagesCurrentEvent = !firebaseConfigured
     || accountCanManageEvent(menu, accountUser?.uid, accountUser?.email);
@@ -2858,7 +2886,7 @@ export default function Home() {
     setRsvpCompanionNames(companions.map(companionName));
     setRsvpCompanionPhones(companions.map(companionPhone));
     setChangingGuestPhone(false);
-    setEditingGuestProfile(!effectiveGuestProfile);
+    setEditingGuestProfile(!effectiveGuestProfile && !accountProfile);
     setRsvpPanelOpen(true);
   };
   const closeRsvpPanel = () => {
@@ -3215,11 +3243,12 @@ export default function Home() {
   const normalizedAccountFields = () => {
     const firstName = accountFirstName.trim().replace(/\s+/g, ' ');
     const lastName = accountLastName.trim().replace(/\s+/g, ' ');
+    const displayName = `${firstName} ${lastName}`.trim();
     const enteredPhone = normalizeOptionalPhone(accountPhone);
     if (firstName.length < 1 || firstName.length > 50) throw new Error('Enter your first name.');
     if (lastName.length < 1 || lastName.length > 60) throw new Error('Enter your last name.');
     if (!enteredPhone) throw new Error('Enter a 10-digit phone number, like 555-555-5555.');
-    return { firstName, lastName, phone: `+1${phoneDigits(enteredPhone)}` };
+    return { firstName, lastName, displayName, phone: `+1${phoneDigits(enteredPhone)}` };
   };
 
   const saveAccountProfile = async (accountOverride?: AccountUser) => {
@@ -3239,6 +3268,7 @@ export default function Home() {
     const email = normalizedAccountEmail(auth.currentUser.email || accountEmail);
     const profileRef = store.doc(db, 'users', currentAccount.uid);
     const identityRef = store.doc(db, 'guest-identities', guestUid);
+    const phoneRef = store.doc(db, 'account-phones', await guestNameIndexId(fields.phone));
     const emailRef = store.doc(db, 'account-emails', await guestNameIndexId(email));
     const directoryRef = store.doc(db, 'account-directory', currentAccount.uid);
     const verificationExpiresAt = currentAccount.emailVerified
@@ -3246,16 +3276,25 @@ export default function Home() {
       : store.Timestamp.fromMillis(Date.now() + 90 * 24 * 60 * 60 * 1000);
     try {
       await store.runTransaction(db, async (transaction) => {
-        const [existing, identity] = await Promise.all([
+        const [existing, identity, phoneIdentity] = await Promise.all([
           transaction.get(profileRef),
           transaction.get(identityRef),
+          transaction.get(phoneRef),
         ]);
         if (identity.exists() && identity.data().accountUid !== currentAccount.uid)
+          throw new Error('That phone number is already connected to another Nights account.');
+        if (phoneIdentity.exists() && phoneIdentity.data().accountUid !== currentAccount.uid)
           throw new Error('That phone number is already connected to another Nights account.');
         if (!identity.exists()) transaction.set(identityRef, {
           accountUid: currentAccount.uid,
           phone: fields.phone,
           createdAt: store.serverTimestamp(),
+        });
+        transaction.set(phoneRef, {
+          accountUid: currentAccount.uid,
+          guestUid,
+          phone: fields.phone,
+          updatedAt: store.serverTimestamp(),
         });
         transaction.set(profileRef, {
           uid: currentAccount.uid,
@@ -3293,7 +3332,7 @@ export default function Home() {
       throw error;
     }
     await authModule.updateProfile(auth.currentUser, {
-      displayName: `${fields.firstName} ${fields.lastName}`,
+      displayName: fields.displayName,
     });
     setAccountAuthMode('signin');
     if (!accountNeedsEmailVerification(currentAccount))
@@ -3547,8 +3586,6 @@ export default function Home() {
       ]);
       const user = authModule.getAuth(getApp()).currentUser;
       if (!user || user.uid !== accountUser?.uid) throw new Error('Sign in again before changing your email.');
-      if (!user.providerData.some((provider) => provider.providerId === 'password'))
-        throw new Error('This option is only needed for email and password accounts.');
       if (email === normalizedAccountEmail(user.email || ''))
         throw new Error('Enter a different email address.');
       await authModule.verifyBeforeUpdateEmail(user, email, {
@@ -3567,6 +3604,93 @@ export default function Home() {
             : error instanceof Error ? error.message : 'Could not send the replacement verification email.');
     } finally {
       setAccountAuthBusy(false);
+    }
+  };
+
+  const openAccountProfileEditor = () => {
+    if (!accountProfile || !accountUser) return;
+    setProfileFirstName(accountProfile.firstName || '');
+    setProfileLastName(accountProfile.lastName || '');
+    setProfileDisplayName(accountDisplayName(accountProfile));
+    setProfilePhone(formatPhone(accountProfile.phone || ''));
+    setProfileEmail(accountUser.email || accountProfile.email || '');
+    setProfileMenuOpen(false);
+    setProfileEditorOpen(true);
+  };
+
+  const saveAccountProfileEdits = async () => {
+    if (!accountProfile || !accountUser) return;
+    const firstName = profileFirstName.trim().replace(/\s+/g, ' ');
+    const lastName = profileLastName.trim().replace(/\s+/g, ' ');
+    const displayName = profileDisplayName.trim().replace(/\s+/g, ' ') || `${firstName} ${lastName}`.trim();
+    const enteredPhone = normalizeOptionalPhone(profilePhone);
+    const email = normalizedAccountEmail(profileEmail);
+    if (firstName.length < 1 || firstName.length > 50) return notify('Enter your first name.');
+    if (lastName.length < 1 || lastName.length > 60) return notify('Enter your last name.');
+    if (displayName.length < 2 || displayName.length > 80) return notify('Enter a display name between 2 and 80 characters.');
+    if (!enteredPhone) return notify('Enter a 10-digit phone number, like 555-555-5555.');
+    if (!/^\S+@\S+\.\S+$/.test(email)) return notify('Enter a valid email address.');
+    const phone = `+1${phoneDigits(enteredPhone)}`;
+    const emailChanged = email !== normalizedAccountEmail(accountUser.email || accountProfile.email);
+    setProfileEditorBusy(true);
+    try {
+      const [{ getApp }, authModule, store] = await Promise.all([
+        import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
+      ]);
+      const auth = authModule.getAuth(getApp());
+      const user = auth.currentUser;
+      if (!user || user.uid !== accountUser.uid) throw new Error('Sign in again before editing your profile.');
+      const db = store.getFirestore(getApp());
+      const userRef = store.doc(db, 'users', accountUser.uid);
+      const directoryRef = store.doc(db, 'account-directory', accountUser.uid);
+      const identityRef = store.doc(db, 'guest-identities', accountProfile.guestUid);
+      const oldPhoneRef = store.doc(db, 'account-phones', await guestNameIndexId(accountProfile.phone));
+      const nextPhoneRef = store.doc(db, 'account-phones', await guestNameIndexId(phone));
+      await store.runTransaction(db, async (transaction) => {
+        const [nextPhoneIndex, oldPhoneIndex] = await Promise.all([
+          transaction.get(nextPhoneRef), transaction.get(oldPhoneRef),
+        ]);
+        if (nextPhoneIndex.exists() && nextPhoneIndex.data().accountUid !== accountUser.uid)
+          throw new Error('phone-taken');
+        transaction.update(identityRef, { phone });
+        transaction.update(userRef, {
+          firstName, lastName, displayName, phone, updatedAt: store.serverTimestamp(),
+        });
+        transaction.set(directoryRef, {
+          uid: accountUser.uid,
+          email: accountUser.email,
+          firstName,
+          lastName,
+          displayName,
+          phone,
+          guestUid: accountProfile.guestUid,
+          updatedAt: store.serverTimestamp(),
+        });
+        transaction.set(nextPhoneRef, {
+          accountUid: accountUser.uid,
+          guestUid: accountProfile.guestUid,
+          phone,
+          updatedAt: store.serverTimestamp(),
+        });
+        if (oldPhoneRef.path !== nextPhoneRef.path && oldPhoneIndex.exists()
+          && oldPhoneIndex.data().accountUid === accountUser.uid) transaction.delete(oldPhoneRef);
+      });
+      await authModule.updateProfile(user, { displayName });
+      setProfileEditorOpen(false);
+      if (emailChanged) {
+        await changeUnverifiedAccountEmail(email);
+      } else {
+        notify('Profile updated.');
+      }
+    } catch (error) {
+      const code = (error as { code?: string }).code || '';
+      notify((error as Error).message === 'phone-taken'
+        ? 'That phone number is already connected to another Nights account.'
+        : code.includes('permission-denied')
+          ? 'Your profile could not be updated. Refresh and try again.'
+          : error instanceof Error ? error.message : 'Profile could not be updated.');
+    } finally {
+      setProfileEditorBusy(false);
     }
   };
 
@@ -3611,6 +3735,7 @@ export default function Home() {
             email: verifiedEmail,
             firstName: accountProfile.firstName,
             lastName: accountProfile.lastName,
+            displayName: accountDisplayName(accountProfile),
             phone: accountProfile.phone,
             guestUid: accountProfile.guestUid,
             updatedAt: store.serverTimestamp(),
@@ -3867,6 +3992,7 @@ export default function Home() {
       ]);
       if (accountEmailDocument.exists()) finalBatch.delete(accountEmailRef);
       if (directoryDocument.exists()) finalBatch.delete(directoryRef);
+      finalBatch.delete(store.doc(db, 'account-phones', await guestNameIndexId(accountProfile.phone)));
       finalBatch.delete(store.doc(db, 'guest-identities', accountProfile.guestUid));
       finalBatch.delete(userRef);
       await finalBatch.commit();
@@ -3909,10 +4035,12 @@ export default function Home() {
         targetUid = emailIndex.data()?.accountUid || '';
       } else {
         const normalizedPhone = `+1${phoneDigits(formattedPhone || '')}`;
-        const phoneIndex = await store.getDoc(
-          store.doc(db, 'guest-identities', await guestNameIndexId(normalizedPhone)),
-        );
-        targetUid = phoneIndex.data()?.accountUid || '';
+        const phoneHash = await guestNameIndexId(normalizedPhone);
+        const phoneIndex = await store.getDoc(store.doc(db, 'account-phones', phoneHash));
+        const legacyPhoneIndex = phoneIndex.exists()
+          ? null
+          : await store.getDoc(store.doc(db, 'guest-identities', phoneHash));
+        targetUid = phoneIndex.data()?.accountUid || legacyPhoneIndex?.data()?.accountUid || '';
       }
       if (!targetUid) {
         if (isEmail) throw new Error('not-registered-email');
@@ -4611,11 +4739,41 @@ export default function Home() {
         const profileRef = store.doc(db, 'events', menu.id, 'guests', uid);
         const rsvpRef = store.doc(db, 'events', menu.id, 'rsvps', uid);
         const participantRef = store.doc(db, 'events', menu.id, 'expense-participants', uid);
+        const nameRef = store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(profile.guestName));
+        const phoneRef = store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(profile.guestPhone));
         await store.runTransaction(db, async (transaction) => {
           const [savedProfile, prior] = await Promise.all([
             transaction.get(profileRef), transaction.get(rsvpRef),
           ]);
-          if (!savedProfile.exists()) transaction.set(profileRef, {
+          const priorProfile = savedProfile.data();
+          const oldNameRef = priorProfile && guestNameKey(priorProfile.guestName) !== guestNameKey(profile.guestName)
+            ? store.doc(db, 'events', menu.id, 'guest-names', await guestNameIndexId(priorProfile.guestName))
+            : null;
+          const oldPhoneRef = priorProfile && priorProfile.guestPhone !== profile.guestPhone
+            ? store.doc(db, 'events', menu.id, 'guest-phones', await guestNameIndexId(priorProfile.guestPhone))
+            : null;
+          const [nameClaim, phoneClaim, oldNameClaim, oldPhoneClaim] = await Promise.all([
+            transaction.get(nameRef),
+            transaction.get(phoneRef),
+            oldNameRef ? transaction.get(oldNameRef) : Promise.resolve(null),
+            oldPhoneRef ? transaction.get(oldPhoneRef) : Promise.resolve(null),
+          ]);
+          if (nameClaim.exists() && nameClaim.data().guestUid !== uid) throw new Error('name-taken');
+          if (phoneClaim.exists() && phoneClaim.data().guestUid !== uid) throw new Error('phone-taken');
+          if (!nameClaim.exists()) transaction.set(nameRef, {
+            guestUid: uid, guestName: profile.guestName, createdAt: store.serverTimestamp(),
+          });
+          if (!phoneClaim.exists()) transaction.set(phoneRef, {
+            guestUid: uid, guestPhone: profile.guestPhone, createdAt: store.serverTimestamp(),
+          });
+          if (oldNameRef && oldNameClaim?.data()?.guestUid === uid) transaction.delete(oldNameRef);
+          if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === uid) transaction.delete(oldPhoneRef);
+          if (savedProfile.exists()) transaction.update(profileRef, {
+            guestName: profile.guestName,
+            guestPhone: profile.guestPhone,
+            updatedAt: store.serverTimestamp(),
+          });
+          else transaction.set(profileRef, {
             guestUid: uid, ...(accountUser ? { accountUid: accountUser.uid } : {}), guestName: profile.guestName, guestPhone: profile.guestPhone,
             createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp(),
           });
@@ -4728,6 +4886,10 @@ export default function Home() {
       if ((error as Error).message === 'active-orders' && myRsvp) setRsvpChoice(myRsvp.status);
       notify((error as Error).message === 'active-orders'
         ? 'Your active order must be completed or cancelled before changing your RSVP.'
+        : (error as Error).message === 'name-taken'
+          ? 'That display name is already used for this event. Edit your profile and choose a different display name.'
+          : (error as Error).message === 'phone-taken'
+            ? 'That phone number is already connected to another guest for this event.'
         : 'RSVP was not saved. Please try again.');
     } finally {
       setRsvpBusy(false);
@@ -5746,13 +5908,14 @@ export default function Home() {
         <>
           <button type="button" className="profile-menu-scrim" onClick={() => setProfileMenuOpen(false)} aria-label="Close user profile" />
           <section className="profile-menu" aria-label="User profile">
-            <div className="profile-menu-identity">
+            <button type="button" className="profile-menu-identity" onClick={openAccountProfileEditor}>
               <span>{accountProfile ? `${accountProfile.firstName?.[0] || ''}${accountProfile.lastName?.[0] || ''}`.toUpperCase() : <UsersRound size={17} />}</span>
               <div>
                 <strong>{accountProfile ? accountDisplayName(accountProfile) : 'Account setup'}</strong>
                 <small>{accountUser.email}</small>
               </div>
-            </div>
+              <Pencil size={14} aria-hidden="true" />
+            </button>
             <button type="button" className="profile-menu-action" onClick={() => {
               setProfileMenuOpen(false);
               setSettingsOpen(true);
@@ -5802,6 +5965,33 @@ export default function Home() {
             )}
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
+            </div>
+          </dialog>
+        </div>
+      )}
+
+      {profileEditorOpen && accountUser && accountProfile && (
+        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !profileEditorBusy) setProfileEditorOpen(false);
+        }}>
+          <dialog open className="delete-account-dialog profile-editor-dialog" aria-labelledby="profile-editor-title">
+            <span className="settings-dialog-icon"><Pencil size={24} /></span>
+            <p className="eyebrow">Your Nights identity</p>
+            <h2 id="profile-editor-title" className="font-display">Edit profile</h2>
+            <p>Your display name is what guests see. Your legal name is not required.</p>
+            <div className="profile-editor-name-grid">
+              <label className="field-label">First name<input className="field-input" value={profileFirstName} onChange={(event) => setProfileFirstName(event.target.value)} /></label>
+              <label className="field-label">Last name<input className="field-input" value={profileLastName} onChange={(event) => setProfileLastName(event.target.value)} /></label>
+            </div>
+            <label className="field-label">Display name<input className="field-input" value={profileDisplayName} onChange={(event) => setProfileDisplayName(event.target.value)} placeholder={`${profileFirstName} ${profileLastName}`.trim()} /></label>
+            <label className="field-label">Phone number<input className="field-input" value={profilePhone} onChange={(event) => setProfilePhone(formatPhoneInput(event.target.value))} inputMode="tel" autoComplete="tel" maxLength={12} placeholder="555-555-5555" /></label>
+            <label className="field-label">Email address<input className="field-input" value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} /></label>
+            {normalizedAccountEmail(profileEmail) !== normalizedAccountEmail(accountUser.email) && (
+              <p className="profile-email-note">We’ll send a verification link to the new address. Your current email stays active until you verify the replacement.</p>
+            )}
+            <div className="delete-account-actions">
+              <button type="button" onClick={() => setProfileEditorOpen(false)} disabled={profileEditorBusy}>Cancel</button>
+              <button type="button" className="primary-button" onClick={() => void saveAccountProfileEdits()} disabled={profileEditorBusy}>{profileEditorBusy ? 'Saving…' : 'Save changes'}</button>
             </div>
           </dialog>
         </div>
@@ -6108,6 +6298,26 @@ export default function Home() {
                 {newEvent.backgroundImageUrl && <button type="button" onClick={() => setNewEvent({ ...newEvent, backgroundImageUrl: '', backgroundFocus: centerBackgroundFocus(), backgroundZoom: 1 })}>Use curated image</button>}
               </div>
             </section>
+            <EventBackgroundChoices
+              selectedType={newEvent.eventType}
+              usingCustomImage={Boolean(newEvent.backgroundImageUrl)}
+              onSelect={(eventType) => {
+                const previousDefault = defaultEventPathCategory(newEvent.eventType);
+                setNewEvent({
+                  ...newEvent,
+                  eventType,
+                  publicPathCategory:
+                    !newEvent.publicPathCategory || newEvent.publicPathCategory === previousDefault
+                      ? defaultEventPathCategory(eventType)
+                      : newEvent.publicPathCategory,
+                  customEventType: eventType === 'custom' ? newEvent.customEventType : '',
+                  backgroundImageUrl: '',
+                  backgroundFocus: centerBackgroundFocus(),
+                  backgroundZoom: 1,
+                  colorPalette: '',
+                });
+              }}
+            />
             {newEvent.backgroundImageUrl && (
               <EventPalettePicker
                 value={newEvent.colorPalette || DEFAULT_EVENT_PALETTE[newEvent.eventType]}
@@ -6382,7 +6592,10 @@ export default function Home() {
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
-                  <div><button type="button" onClick={() => setEditingGuestProfile(true)}>Edit Display Name</button><button type="button" onClick={clearGuestAccess}>Sign out</button></div>
+                  <div><button type="button" onClick={() => {
+                    closeRsvpPanel();
+                    openAccountProfileEditor();
+                  }}>Edit profile</button><button type="button" onClick={clearGuestAccess}>Sign out</button></div>
                 </div>
                 <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Going responses need host approval. Maybe and Not going are saved immediately; only approved Going guests can chat or order.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
@@ -6938,6 +7151,9 @@ function GuestMenu({
   const hasMenu = menuHasPublishedItems(menu);
   const eventActionOpen = hasMenu ? menu.accepting : menu.rsvpOpen !== false;
   const backgroundFocus = eventBackgroundFocus(menu);
+  const mobileBackgroundFocus = menu.backgroundImageUrl
+    ? backgroundFocus
+    : EVENT_MOBILE_BACKGROUND_FOCUS[menu.eventType || 'meal'];
   const backgroundZoom = eventBackgroundZoom(menu);
   return (
     <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
@@ -6947,6 +7163,7 @@ function GuestMenu({
           style={{
             backgroundImage: `url(${eventBackground(menu)})`,
             backgroundPosition: `${backgroundFocus.x}% ${backgroundFocus.y}%`,
+            '--mobile-background-position': `${mobileBackgroundFocus.x}% ${mobileBackgroundFocus.y}%`,
             '--background-zoom': backgroundZoom,
             '--background-backdrop-zoom': backgroundZoom * 1.12,
             '--background-zoom-start': backgroundZoom * 1.015,
@@ -9886,6 +10103,38 @@ function BackgroundPositionPreview({
   );
 }
 
+function EventBackgroundChoices({
+  selectedType,
+  usingCustomImage,
+  onSelect,
+}: {
+  selectedType: EventType;
+  usingCustomImage: boolean;
+  onSelect: (eventType: EventType) => void;
+}) {
+  return (
+    <fieldset className="event-background-choices">
+      <legend>Default backgrounds</legend>
+      <p>Choose a Nights backdrop designed to keep the event visible on both phones and larger screens.</p>
+      <div>
+        {EVENT_TYPES.map((type) => (
+          <button
+            type="button"
+            key={type.value}
+            className={!usingCustomImage && selectedType === type.value ? 'selected' : ''}
+            aria-pressed={!usingCustomImage && selectedType === type.value}
+            onClick={() => onSelect(type.value)}
+          >
+            <span style={{ backgroundImage: `url(${EVENT_BACKGROUNDS[type.value]})` }} aria-hidden="true" />
+            <strong>{type.label}</strong>
+            {!usingCustomImage && selectedType === type.value && <i><Check size={13} /> Selected</i>}
+          </button>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function BackgroundCropModal({
   editor,
   onCancel,
@@ -10491,6 +10740,19 @@ function MenuEditor({
           </div>
         </section>
       </section>
+      <EventBackgroundChoices
+        selectedType={menu.eventType || 'meal'}
+        usingCustomImage={Boolean(menu.backgroundImageUrl)}
+        onSelect={(eventType) => setMenu({
+          ...menu,
+          eventType,
+          customEventType: eventType === 'custom' ? menu.customEventType : '',
+          backgroundImageUrl: '',
+          backgroundFocus: centerBackgroundFocus(),
+          backgroundZoom: 1,
+          colorPalette: DEFAULT_EVENT_PALETTE[eventType],
+        })}
+      />
       {menu.backgroundImageUrl && (
         <EventPalettePicker
           value={eventPalette(menu)}
