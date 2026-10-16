@@ -1385,6 +1385,7 @@ export default function Home() {
   const [orders, setOrders] = useState<Order[]>(sampleOrders);
   const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [eventIncomingCounts, setEventIncomingCounts] = useState<Record<string, number>>({});
+  const [eventNotificationCounts, setEventNotificationCounts] = useState<Record<string, number>>({});
   const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [guestName, setGuestName] = useState('');
@@ -2421,6 +2422,30 @@ export default function Home() {
         .catch(() => undefined);
     }
   }, [mode]);
+
+  useEffect(() => {
+    if (mode !== 'guest' || menu.id !== EMPTY_EVENT_ID) return;
+    let active = true;
+    const syncNotificationCounts = () => void readAppBadgeState().then((state) => {
+      if (active) setEventNotificationCounts(state.events);
+    });
+    const receivePush = (event: MessageEvent<{ type?: string }>) => {
+      if (event.data?.type === 'nights-chat-push') syncNotificationCounts();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') syncNotificationCounts();
+    };
+    syncNotificationCounts();
+    window.addEventListener('focus', syncNotificationCounts);
+    document.addEventListener('visibilitychange', handleVisibility);
+    navigator.serviceWorker?.addEventListener('message', receivePush);
+    return () => {
+      active = false;
+      window.removeEventListener('focus', syncNotificationCounts);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      navigator.serviceWorker?.removeEventListener('message', receivePush);
+    };
+  }, [menu.id, mode]);
 
   useEffect(() => {
     if (
@@ -5832,6 +5857,41 @@ export default function Home() {
     notify('Event deleted');
   }
 
+  const guestEventView = mode === 'guest' && menu.id !== EMPTY_EVENT_ID;
+  const navigateBack = () => {
+    if (hostPreview) {
+      window.location.assign(eventRoute(menu.id, 'host', automaticPublicEventPath(menu)));
+      return;
+    }
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute());
+  };
+  const navigateHome = () => {
+    sessionStorage.removeItem(CREATE_EVENT_INTENT_KEY);
+    window.location.assign(hostPreview
+      ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
+      : guestHomeRoute());
+  };
+  const createNewEvent = () => {
+    sessionStorage.setItem(CREATE_EVENT_INTENT_KEY, '1');
+    window.location.assign(newEventHostRoute());
+  };
+  const openEventChat = () => {
+    if (!chatActor) {
+      notify(mode === 'guest'
+        ? 'RSVP Going before joining this event chat.'
+        : 'Sign in before joining this event chat.');
+      return;
+    }
+    primeChatAudio();
+    setChatStarted(true);
+    setChatOpen(true);
+    setEventMenuOpen(false);
+  };
+
   if (!eventReady) {
     return (
       <main className="event-loading" aria-live="polite">
@@ -5849,25 +5909,15 @@ export default function Home() {
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
           <div className="app-header-brand">
-            <button
+            {!guestEventView && <button
               type="button"
               className="app-back-button"
-              onClick={() => {
-                if (hostPreview) {
-                  window.location.assign(eventRoute(menu.id, 'host', automaticPublicEventPath(menu)));
-                  return;
-                }
-                if (window.history.length > 1) {
-                  window.history.back();
-                  return;
-                }
-                window.location.assign(mode === 'host' ? hostHomeRoute() : guestHomeRoute());
-              }}
+              onClick={navigateBack}
               aria-label={hostPreview ? 'Back to event editor' : 'Back to events'}
               title={hostPreview ? 'Back to event editor' : 'Back to events'}
             >
               <ArrowLeft size={18} />
-            </button>
+            </button>}
             <button
               onClick={() => window.location.assign(
                 hostPreview
@@ -5886,28 +5936,20 @@ export default function Home() {
             </button>
           </div>
           <div className="app-header-actions flex items-center gap-2">
-            <button
+            {!guestEventView && <button
               type="button"
               className="guest-event-switch-button"
-              onClick={() => {
-                sessionStorage.removeItem(CREATE_EVENT_INTENT_KEY);
-                window.location.assign(hostPreview
-                  ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
-                  : guestHomeRoute());
-              }}
+              onClick={navigateHome}
               aria-label={hostPreview ? 'Return to host event' : 'Open Nights home'}
             >
               <House size={15} />
               <span>{hostPreview ? 'Back to host' : 'Home'}</span>
-            </button>
-            {mode === 'guest' && !hostPreview && accountProfile && (
+            </button>}
+            {mode === 'guest' && !guestEventView && !hostPreview && accountProfile && (
               <button
                 type="button"
                 className="guest-new-event-button"
-                onClick={() => {
-                  sessionStorage.setItem(CREATE_EVENT_INTENT_KEY, '1');
-                  window.location.assign(newEventHostRoute());
-                }}
+                onClick={createNewEvent}
                 aria-label="Create a new event"
               >
                 <CalendarPlus size={15} />
@@ -5962,7 +6004,7 @@ export default function Home() {
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
-            {menu.id !== EMPTY_EVENT_ID && <div className="event-menu-control">
+            {menu.id !== EMPTY_EVENT_ID && !guestEventView && <div className="event-menu-control">
               <button
                 type="button"
                 className={`chat-header-button ${eventMenuOpen ? 'event-menu-active' : ''}`}
@@ -5979,12 +6021,7 @@ export default function Home() {
                   type="button"
                   role="menuitem"
                   disabled={!chatActor}
-                  onClick={() => {
-                    primeChatAudio();
-                    setChatStarted(true);
-                    setChatOpen(true);
-                    setEventMenuOpen(false);
-                  }}
+                  onClick={openEventChat}
                 >
                   <span><MessageCircle size={18} /></span>
                   <div><strong>Chat</strong><small>{menu.chatOpen === false ? 'Read the locked conversation' : 'Messages, reactions and polls'}</small></div>
@@ -6024,6 +6061,7 @@ export default function Home() {
             phone={accountPhone}
             recoverySentTo={accountRecoverySentTo}
             events={guestEvents}
+            notificationCounts={eventNotificationCounts}
             pendingEvent={pendingGuestEvent}
             busy={accountAuthBusy || guestEventsBusy}
             setAuthMode={setAccountAuthMode}
@@ -6724,43 +6762,85 @@ export default function Home() {
           </section>
         </div>
       )}
-      {mode === 'guest' && hasMenu && !submitted && (
-        <div className="guest-cart-bar fixed inset-x-0 bottom-0 z-40">
-          <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-[.18em]">
-                Your table
-              </p>
-              <p className="font-display text-lg font-semibold">
-                {menu.requireGuestApproval && myRsvp?.status === 'yes' && !guestHasEventAccess
-                  ? approvalStatus(myRsvp) === 'pending'
-                    ? 'Waiting for host approval'
-                    : 'This invitation was not approved'
-                  : menu.accepting && myRsvp?.status === 'yes'
-                  ? count
-                    ? `${count} dish${count === 1 ? '' : 'es'} selected`
-                    : 'Choose what calls to you'
-                  : !menu.accepting ? 'Ordering is closed' : myRsvp ? 'RSVP Going to order' : 'RSVP to order'}
-              </p>
-            </div>
-            <div className="guest-cart-actions">
-              <button type="button" onClick={openRsvpPanel} className="guest-rsvp-button">
-                <ListChecks size={17} /> {rsvpButtonLabel}
-              </button>
-              <button
-                disabled={!count || !menu.accepting || myRsvp?.status !== 'yes' || !guestHasEventAccess}
-                onClick={() =>
-                  (
-                    document.getElementById('checkout') as HTMLDialogElement
-                  )?.showModal()
-                }
-                className="primary-button min-w-48 justify-center disabled:opacity-40"
-              >
-                <ShoppingBag size={17} /> Review order{' '}
-                {count > 0 && <span className="count-badge">{count}</span>}
-              </button>
+      {guestEventView && (
+        <div className="guest-event-dock">
+          <div className="guest-cart-bar">
+            <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[.18em]">Your table</p>
+                <p className="font-display text-lg font-semibold">
+                  {!hasMenu ? 'No menu for this event'
+                    : menu.requireGuestApproval && myRsvp?.status === 'yes' && !guestHasEventAccess
+                      ? approvalStatus(myRsvp) === 'pending'
+                        ? 'Waiting for host approval'
+                        : 'This invitation was not approved'
+                      : menu.accepting && myRsvp?.status === 'yes'
+                        ? count
+                          ? `${count} dish${count === 1 ? '' : 'es'} selected`
+                          : 'Choose what calls to you'
+                        : !menu.accepting ? 'Ordering is closed' : myRsvp ? 'RSVP Going to order' : 'RSVP to order'}
+                </p>
+              </div>
+              <div className="guest-cart-actions">
+                <button type="button" onClick={openRsvpPanel} className="guest-rsvp-button">
+                  <ListChecks size={17} /> {rsvpButtonLabel}
+                </button>
+                <button
+                  disabled={!hasMenu || !count || !menu.accepting || myRsvp?.status !== 'yes' || !guestHasEventAccess}
+                  onClick={() => (document.getElementById('checkout') as HTMLDialogElement)?.showModal()}
+                  className="primary-button min-w-48 justify-center disabled:opacity-40"
+                >
+                  <ShoppingBag size={17} /> Review order{' '}
+                  {count > 0 && <span className="count-badge">{count}</span>}
+                </button>
+              </div>
             </div>
           </div>
+          <nav className="guest-event-nav" aria-label="Event navigation">
+            <button type="button" onClick={navigateBack} aria-label="Back">
+              <ArrowLeft size={20} /><span>Back</span>
+            </button>
+            <button type="button" onClick={createNewEvent} disabled={!accountProfile} aria-label="Create new event">
+              <CalendarPlus size={20} /><span>New event</span>
+            </button>
+            <button type="button" onClick={navigateHome} aria-label="Home">
+              <House size={20} /><span>Home</span>
+            </button>
+            <button type="button" onClick={openEventChat} disabled={!chatActor} aria-label="Open event chat">
+              <MessageCircle size={20} /><span>Chat</span>
+            </button>
+            <div className="event-menu-control guest-event-options">
+              <button
+                type="button"
+                className={eventMenuOpen ? 'event-menu-active' : ''}
+                onClick={() => setEventMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={eventMenuOpen}
+                aria-label="Event options"
+              >
+                <MenuIcon size={21} /><span>Options</span>
+              </button>
+              {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
+                <button type="button" role="menuitem" disabled={!chatActor} onClick={openEventChat}>
+                  <span><MessageCircle size={18} /></span>
+                  <div><strong>Chat</strong><small>{menu.chatOpen === false ? 'Read the locked conversation' : 'Messages, reactions and polls'}</small></div>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!expenseActor}
+                  onClick={() => {
+                    setExpensesOpen(true);
+                    setEventMenuOpen(false);
+                  }}
+                  title={!expenseActor ? 'RSVP Going and receive approval to use expenses' : undefined}
+                >
+                  <span><DollarSign size={18} /></span>
+                  <div><strong>Expenses</strong><small>{expenseActor ? 'Receipts, splits and guest balances' : 'Available to approved Going guests'}</small></div>
+                </button>
+              </div>}
+            </div>
+          </nav>
         </div>
       )}
       {mode === 'guest' && rsvpPanelOpen && (
@@ -7200,6 +7280,7 @@ function GuestAccessPortal({
   phone,
   recoverySentTo,
   events,
+  notificationCounts,
   pendingEvent,
   busy,
   setAuthMode,
@@ -7221,6 +7302,7 @@ function GuestAccessPortal({
   selectEvent,
 }: Omit<AccountAuthCardProps, 'context'> & {
   events: GuestEventAccess[];
+  notificationCounts: Record<string, number>;
   pendingEvent: PendingGuestEvent | null;
   selectEvent: (event: GuestEventAccess) => void;
 }) {
@@ -7248,6 +7330,7 @@ function GuestAccessPortal({
                 <GuestEventCard
                   key={access.event.id}
                   access={access}
+                  unreadCount={notificationCounts[access.event.id] || 0}
                   hosted={Boolean(access.hosted || accountCanManageEvent(access.event, user?.uid, user?.email))}
                   invited={Boolean(access.invitation || (pendingEvent && guestEventMatchesPending(access, pendingEvent)))}
                   onSelect={() => selectEvent(access)}
@@ -7267,12 +7350,14 @@ function GuestEventCard({
   current = false,
   invited = false,
   hosted = false,
+  unreadCount = 0,
   onSelect,
 }: {
   access: GuestEventAccess;
   current?: boolean;
   invited?: boolean;
   hosted?: boolean;
+  unreadCount?: number;
   onSelect: () => void;
 }) {
   const response = hosted
@@ -7281,8 +7366,14 @@ function GuestEventCard({
     ? access.rsvp.status === 'yes' ? 'Going' : access.rsvp.status === 'maybe' ? 'Maybe' : 'Not going'
     : invited ? 'New invitation' : 'Invited · RSVP not sent';
   return (
-    <button type="button" className={`guest-event-card ${current ? 'current' : ''} ${hosted ? 'hosted' : ''}`} onClick={onSelect}>
+    <button type="button" className={`guest-event-card ${current ? 'current' : ''} ${hosted ? 'hosted' : ''} ${unreadCount > 0 ? 'has-notifications' : ''}`} onClick={onSelect}>
       <span className="guest-event-card-art" style={{ backgroundImage: `linear-gradient(145deg, rgb(32 157 139 / 0.82), rgb(31 88 163 / 0.82)), url(${eventBackground(access.event)})` }} />
+      {unreadCount > 0 && (
+        <span className="guest-event-notification" aria-label={`${unreadCount} unread notification${unreadCount === 1 ? '' : 's'}`}>
+          <Bell size={13} />
+          <b>{unreadCount > 9 ? '9+' : unreadCount}</b>
+        </span>
+      )}
       <span className="guest-event-card-copy">
         <small>{eventTypeLabel(access.event)}{current ? ' · Current event' : ''}</small>
         {hosted && <em className="guest-event-hosting-mark font-display">Your event</em>}
@@ -7368,7 +7459,7 @@ function GuestMenu({
     : EVENT_MOBILE_BACKGROUNDS[menu.eventType || 'meal'];
   const backgroundZoom = eventBackgroundZoom(menu);
   return (
-    <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
+    <div className="guest-experience has-event-dock">
       <section className="guest-hero">
         <div
           className={`guest-hero-photo ${menu.backgroundImageUrl ? 'custom-background' : 'curated-background'}`}
