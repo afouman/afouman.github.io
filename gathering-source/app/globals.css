@@ -2020,7 +2020,7 @@ button:disabled {
 .delete-account-dialog > p:not(.eyebrow) { margin: 0.85rem 0 1.15rem; color: rgb(34 32 29 / 0.62); font-size: 0.78rem; line-height: 1.6; }
 .delete-account-dialog .field-label + .field-label { margin-top: 0.8rem; }
 .delete-account-actions { display: grid; grid-template-columns: 1fr 1.3fr; gap: 0.7rem; margin-top: 1.25rem; }
-.delete-account-actions button { min-height: 46px; border: 0; border-radius: 0.85rem; font-size: 0.73rem; font-weight: 900; }
+.delete-account-actions button { display: flex; width: 100%; min-height: 46px; align-items: center; justify-content: center; border: 0; border-radius: 0.85rem; padding-inline: 0.85rem; font-size: 0.73rem; font-weight: 900; text-align: center; }
 .delete-account-actions button:first-child { background: rgb(19 40 44 / 0.08); color: #17363b; }
 .delete-account-actions .danger-button { background: #8b2f31; color: #fff; }
 .delete-account-actions button:disabled { cursor: wait; opacity: 0.5; }
@@ -3698,6 +3698,7 @@ button:disabled {
   }
   .guest-hero-photo::before {
     inset: -1.5rem;
+    background-image: var(--mobile-background-image);
     background-position: var(--mobile-background-position, center);
     background-size: cover;
     filter: none;
@@ -3823,6 +3824,8 @@ button:disabled {
   .profile-menu { top: calc(env(safe-area-inset-top) + 3.55rem); right: 0.65rem; }
   .delete-account-backdrop { align-items: end; padding: 0; }
   .delete-account-dialog { width: 100%; border-radius: 1.5rem 1.5rem 0 0; padding: 1.35rem; }
+  .profile-editor-backdrop { align-items: start; padding: max(0.65rem, env(safe-area-inset-top)) 0.5rem max(0.65rem, env(safe-area-inset-bottom)); }
+  .profile-editor-dialog { max-height: calc(100dvh - max(1.3rem, env(safe-area-inset-top) + env(safe-area-inset-bottom))); overflow-y: auto; border-radius: 1.25rem; }
   .delete-account-actions { grid-template-columns: 1fr; }
   .invite-dialog-backdrop {
     align-items: end;

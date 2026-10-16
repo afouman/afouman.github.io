@@ -347,6 +347,13 @@ const EVENT_BACKGROUNDS: Record<EventType, string> = {
   birthday: '/gathering/gather-birthday-party-hero.jpg',
   custom: '/gathering/gather-custom-event-hero.jpg',
 };
+const EVENT_MOBILE_BACKGROUNDS: Record<EventType, string> = {
+  meal: '/gathering/gather-dinner-hero-mobile.jpg',
+  movie: '/gathering/gather-movie-night-hero-mobile.jpg',
+  game: '/gathering/gather-game-night-hero-mobile.jpg',
+  birthday: '/gathering/gather-birthday-party-hero-mobile.jpg',
+  custom: '/gathering/gather-custom-event-hero-mobile.jpg',
+};
 const EVENT_MOBILE_BACKGROUND_FOCUS: Record<EventType, BackgroundFocus> = {
   meal: { x: 52, y: 50 },
   movie: { x: 50, y: 48 },
@@ -897,8 +904,8 @@ const newEventHostRoute = () => {
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=45', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=45', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=46', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=46', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -2451,10 +2458,37 @@ export default function Home() {
       '.guest-rsvp-backdrop',
       '.expense-backdrop',
     ].join(',');
+    let scrollLocked = false;
+    let lockedScrollY = 0;
+    const originalBodyPosition = document.body.style.position;
+    const originalBodyTop = document.body.style.top;
+    const originalBodyLeft = document.body.style.left;
+    const originalBodyRight = document.body.style.right;
+    const originalBodyWidth = document.body.style.width;
+    const setScrollLocked = (locked: boolean) => {
+      if (locked === scrollLocked) return;
+      scrollLocked = locked;
+      if (locked) {
+        lockedScrollY = window.scrollY;
+        document.body.style.position = 'fixed';
+        document.body.style.top = `-${lockedScrollY}px`;
+        document.body.style.left = '0';
+        document.body.style.right = '0';
+        document.body.style.width = '100%';
+        return;
+      }
+      document.body.style.position = originalBodyPosition;
+      document.body.style.top = originalBodyTop;
+      document.body.style.left = originalBodyLeft;
+      document.body.style.right = originalBodyRight;
+      document.body.style.width = originalBodyWidth;
+      window.scrollTo({ top: lockedScrollY, behavior: 'auto' });
+    };
     const syncScrollLock = () => {
       const overlayOpen = Boolean(document.querySelector(modalSelector));
       document.documentElement.classList.toggle('app-overlay-open', overlayOpen);
       document.body.classList.toggle('app-overlay-open', overlayOpen);
+      setScrollLocked(overlayOpen);
     };
     const observer = new MutationObserver(syncScrollLock);
     observer.observe(document.body, {
@@ -2466,6 +2500,7 @@ export default function Home() {
     syncScrollLock();
     return () => {
       observer.disconnect();
+      setScrollLocked(false);
       document.documentElement.classList.remove('app-overlay-open');
       document.body.classList.remove('app-overlay-open');
     };
@@ -3646,6 +3681,13 @@ export default function Home() {
       const identityRef = store.doc(db, 'guest-identities', accountProfile.guestUid);
       const oldPhoneRef = store.doc(db, 'account-phones', await guestNameIndexId(accountProfile.phone));
       const nextPhoneRef = store.doc(db, 'account-phones', await guestNameIndexId(phone));
+      const connectedEventIds = [...new Set(guestEvents.map((access) => access.event.id))];
+      const nextEventNameHash = await guestNameIndexId(displayName);
+      const eventNameClaims = await Promise.all(connectedEventIds.map((eventId) => store.getDoc(
+        store.doc(db, 'events', eventId, 'guest-names', nextEventNameHash),
+      )));
+      if (eventNameClaims.some((claim) => claim.exists() && claim.data().guestUid !== accountProfile.guestUid))
+        throw new Error('event-name-taken');
       await store.runTransaction(db, async (transaction) => {
         const [nextPhoneIndex, oldPhoneIndex] = await Promise.all([
           transaction.get(nextPhoneRef), transaction.get(oldPhoneRef),
@@ -3675,7 +3717,90 @@ export default function Home() {
         if (oldPhoneRef.path !== nextPhoneRef.path && oldPhoneIndex.exists()
           && oldPhoneIndex.data().accountUid === accountUser.uid) transaction.delete(oldPhoneRef);
       });
+      const eventSyncResults = await Promise.allSettled(connectedEventIds.map((eventId) =>
+        store.runTransaction(db, async (transaction) => {
+          const eventAccess = guestEvents.find((access) => access.event.id === eventId);
+          const profileRef = store.doc(db, 'events', eventId, 'guests', accountProfile.guestUid);
+          const rsvpRef = store.doc(db, 'events', eventId, 'rsvps', accountProfile.guestUid);
+          const [savedProfile, savedRsvp] = await Promise.all([
+            transaction.get(profileRef), transaction.get(rsvpRef),
+          ]);
+          if (!savedProfile.exists() && !savedRsvp.exists()) return;
+          const oldName = savedProfile.data()?.guestName || savedRsvp.data()?.guestName || '';
+          const oldPhone = savedProfile.data()?.guestPhone || savedRsvp.data()?.guestPhone || '';
+          const nextNameRef = store.doc(db, 'events', eventId, 'guest-names', nextEventNameHash);
+          const nextPhoneRef = store.doc(db, 'events', eventId, 'guest-phones', await guestNameIndexId(phone));
+          const oldNameRef = oldName && guestNameKey(oldName) !== guestNameKey(displayName)
+            ? store.doc(db, 'events', eventId, 'guest-names', await guestNameIndexId(oldName))
+            : null;
+          const oldEventPhoneRef = oldPhone && oldPhone !== phone
+            ? store.doc(db, 'events', eventId, 'guest-phones', await guestNameIndexId(oldPhone))
+            : null;
+          const [nextNameClaim, nextPhoneClaim, oldNameClaim, oldPhoneClaim] = await Promise.all([
+            transaction.get(nextNameRef), transaction.get(nextPhoneRef),
+            oldNameRef ? transaction.get(oldNameRef) : Promise.resolve(null),
+            oldEventPhoneRef ? transaction.get(oldEventPhoneRef) : Promise.resolve(null),
+          ]);
+          if (nextNameClaim.exists() && nextNameClaim.data().guestUid !== accountProfile.guestUid)
+            throw new Error('event-name-taken');
+          if (nextPhoneClaim.exists() && nextPhoneClaim.data().guestUid !== accountProfile.guestUid)
+            throw new Error('event-phone-taken');
+          if (!nextNameClaim.exists()) transaction.set(nextNameRef, {
+            guestUid: accountProfile.guestUid,
+            guestName: displayName,
+            createdAt: store.serverTimestamp(),
+          });
+          if (!nextPhoneClaim.exists()) transaction.set(nextPhoneRef, {
+            guestUid: accountProfile.guestUid,
+            guestPhone: phone,
+            createdAt: store.serverTimestamp(),
+          });
+          if (oldNameRef && oldNameClaim?.data()?.guestUid === accountProfile.guestUid)
+            transaction.delete(oldNameRef);
+          if (oldEventPhoneRef && oldPhoneClaim?.data()?.guestUid === accountProfile.guestUid)
+            transaction.delete(oldEventPhoneRef);
+          if (savedProfile.exists()) transaction.update(profileRef, {
+            guestName: displayName,
+            guestPhone: phone,
+            updatedAt: store.serverTimestamp(),
+          });
+          if (savedRsvp.exists()) transaction.update(rsvpRef, {
+            guestName: displayName,
+            guestPhone: phone,
+            approvalStatus: savedRsvp.data().approvalStatus || (
+              !eventAccess?.event.requireGuestApproval
+              || savedRsvp.data().status !== 'yes'
+              || Boolean(eventAccess.invitation)
+              || Boolean(eventAccess.hosted)
+                ? 'approved'
+                : 'pending'
+            ),
+            updatedAt: store.serverTimestamp(),
+          });
+        }),
+      ));
+      if (eventSyncResults.some((result) => result.status === 'rejected'))
+        throw new Error('Your account was updated, but one event could not refresh your guest ticket. Try saving once more.');
       await authModule.updateProfile(user, { displayName });
+      const nextSession: GuestSession = {
+        ...guestSession,
+        authUid: accountUser.uid,
+        email: accountUser.email,
+        guestUid: accountProfile.guestUid,
+        guestName: displayName,
+        guestPhone: phone,
+      };
+      writeGuestSession(nextSession);
+      setGuestSession(nextSession);
+      setGuestName(displayName);
+      setPhoneNumber(formatPhone(phone));
+      setGuestProfile((current) => current ? { ...current, guestName: displayName, guestPhone: phone } : current);
+      setMyRsvp((current) => current ? { ...current, guestName: displayName, guestPhone: phone } : current);
+      setGuestEvents((current) => current.map((access) => ({
+        ...access,
+        profile: { ...access.profile, guestName: displayName, guestPhone: phone },
+        rsvp: access.rsvp ? { ...access.rsvp, guestName: displayName, guestPhone: phone } : null,
+      })));
       setProfileEditorOpen(false);
       if (emailChanged) {
         await changeUnverifiedAccountEmail(email);
@@ -3686,6 +3811,8 @@ export default function Home() {
       const code = (error as { code?: string }).code || '';
       notify((error as Error).message === 'phone-taken'
         ? 'That phone number is already connected to another Nights account.'
+        : (error as Error).message === 'event-name-taken'
+          ? 'That display name is already used in one of your events. Choose a different display name.'
         : code.includes('permission-denied')
           ? 'Your profile could not be updated. Refresh and try again.'
           : error instanceof Error ? error.message : 'Profile could not be updated.');
@@ -5971,7 +6098,7 @@ export default function Home() {
       )}
 
       {profileEditorOpen && accountUser && accountProfile && (
-        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
+        <div className="delete-account-backdrop profile-editor-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !profileEditorBusy) setProfileEditorOpen(false);
         }}>
           <dialog open className="delete-account-dialog profile-editor-dialog" aria-labelledby="profile-editor-title">
@@ -7154,6 +7281,9 @@ function GuestMenu({
   const mobileBackgroundFocus = menu.backgroundImageUrl
     ? backgroundFocus
     : EVENT_MOBILE_BACKGROUND_FOCUS[menu.eventType || 'meal'];
+  const mobileBackground = menu.backgroundImageUrl
+    ? eventBackground(menu)
+    : EVENT_MOBILE_BACKGROUNDS[menu.eventType || 'meal'];
   const backgroundZoom = eventBackgroundZoom(menu);
   return (
     <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
@@ -7163,6 +7293,7 @@ function GuestMenu({
           style={{
             backgroundImage: `url(${eventBackground(menu)})`,
             backgroundPosition: `${backgroundFocus.x}% ${backgroundFocus.y}%`,
+            '--mobile-background-image': `url(${mobileBackground})`,
             '--mobile-background-position': `${mobileBackgroundFocus.x}% ${mobileBackgroundFocus.y}%`,
             '--background-zoom': backgroundZoom,
             '--background-backdrop-zoom': backgroundZoom * 1.12,
@@ -7991,6 +8122,24 @@ function EventChat({
   const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
   const locked = menu.chatOpen === false;
 
+  const scrollStreamToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    stream.scrollTo({ top: stream.scrollHeight, behavior });
+  }, []);
+
+  const scrollMessageInsideStream = useCallback((message: HTMLElement, behavior: ScrollBehavior = 'auto') => {
+    const stream = streamRef.current;
+    if (!stream) return;
+    const streamBounds = stream.getBoundingClientRect();
+    const messageBounds = message.getBoundingClientRect();
+    const nextTop = stream.scrollTop
+      + messageBounds.top
+      - streamBounds.top
+      - (stream.clientHeight - messageBounds.height) / 2;
+    stream.scrollTo({ top: Math.max(0, nextTop), behavior });
+  }, []);
+
   useEffect(() => {
     let active = true;
     void readAppBadgeState().then((state) => {
@@ -8070,9 +8219,9 @@ function EventChat({
   }, [menu.id, previewKey]);
 
   useEffect(() => {
-    if (!visible) return;
-    endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length, visible]);
+    if (!visible || !restoredForOpen.current) return;
+    scrollStreamToBottom('smooth');
+  }, [messages.length, scrollStreamToBottom, visible]);
 
   useEffect(() => {
     if (!visible) {
@@ -8084,7 +8233,7 @@ function EventChat({
     const savedMessageId = localStorage.getItem(readPositionKey);
     requestAnimationFrame(() => {
       if (!savedMessageId) {
-        endRef.current?.scrollIntoView({ block: 'end' });
+        scrollStreamToBottom();
         return;
       }
       const chronological = [...messages].sort(
@@ -8093,11 +8242,11 @@ function EventChat({
       const savedIndex = chronological.findIndex((message) => message.id === savedMessageId);
       const target = chronological[savedIndex + 1] || chronological[savedIndex];
       const targetElement = target ? messageRefs.current[target.id] : null;
-      if (targetElement) targetElement.scrollIntoView({ block: 'center' });
-      else endRef.current?.scrollIntoView({ block: 'end' });
+      if (targetElement) scrollMessageInsideStream(targetElement);
+      else scrollStreamToBottom();
       requestAnimationFrame(rememberReadPosition);
     });
-  }, [messages, readPositionKey, rememberReadPosition, visible]);
+  }, [messages, readPositionKey, rememberReadPosition, scrollMessageInsideStream, scrollStreamToBottom, visible]);
 
   useEffect(() => {
     const currentIds = new Set(messages.map((message) => message.id));
@@ -8117,7 +8266,7 @@ function EventChat({
     if (visible) queueMicrotask(() => {
       setUnread(0);
       void setEventAppBadge(menu.id, 0);
-      composerRef.current?.focus();
+      composerRef.current?.focus({ preventScroll: true });
     });
   }, [menu.id, visible]);
 
@@ -8125,12 +8274,12 @@ function EventChat({
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
   }, []);
 
-  const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus());
+  const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
 
   const jumpToMessage = (messageId: string) => {
     const message = messageRefs.current[messageId];
     if (!message) return;
-    message.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    scrollMessageInsideStream(message, 'smooth');
     setHighlightedMessageId(messageId);
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(null), 1800);
