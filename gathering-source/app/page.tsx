@@ -431,6 +431,8 @@ const eventPalette = (menu: Pick<EventMenu, 'eventType' | 'colorPalette'>) =>
   menu.colorPalette || DEFAULT_EVENT_PALETTE[menu.eventType || 'meal'];
 const eventThemeStyle = (menu: Pick<EventMenu, 'eventType' | 'colorPalette'>) =>
   EVENT_PALETTES.find((palette) => palette.value === eventPalette(menu))?.theme as CSSProperties;
+const eventThemeChromeColor = (menu: Pick<EventMenu, 'eventType' | 'colorPalette'>) =>
+  EVENT_PALETTES.find((palette) => palette.value === eventPalette(menu))?.theme['--wine-deep'] || '#10282b';
 const eventTypeLabel = (menu: EventMenu) =>
   menu.eventType === 'custom' && menu.customEventType?.trim()
     ? menu.customEventType.trim()
@@ -2446,6 +2448,16 @@ export default function Home() {
       navigator.serviceWorker?.removeEventListener('message', receivePush);
     };
   }, [menu.id, mode]);
+
+  useEffect(() => {
+    const color = mode === 'guest'
+      ? menu.id === EMPTY_EVENT_ID ? '#061b2a' : eventThemeChromeColor(menu)
+      : '#0e100d';
+    const themeMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (themeMeta) themeMeta.content = color;
+    document.documentElement.style.background = color;
+    document.body.style.background = color;
+  }, [menu, mode]);
 
   useEffect(() => {
     if (
@@ -6387,7 +6399,7 @@ export default function Home() {
         </div>
       )}
       {creatingEvent && (
-        <div className="fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/45 p-5 backdrop-blur-sm">
+        <div className="new-event-backdrop fixed inset-0 z-[70] grid place-items-center overflow-y-auto bg-black/45 p-5 backdrop-blur-sm">
           <section className="new-event-dialog w-full max-w-xl rounded-3xl bg-[var(--cream)] p-7 shadow-2xl sm:p-9">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -6400,13 +6412,6 @@ export default function Home() {
                 </p>
               </div>
               <div className="new-event-dialog-actions">
-                <button
-                  type="button"
-                  className="new-event-home-button"
-                  onClick={() => window.location.assign(guestHomeRoute())}
-                >
-                  <House size={16} /> Home
-                </button>
                 <button
                   onClick={() => setCreatingEvent(false)}
                   className="icon-button"
@@ -8443,7 +8448,6 @@ function EventChat({
     if (visible) queueMicrotask(() => {
       setUnread(0);
       void setEventAppBadge(menu.id, 0);
-      composerRef.current?.focus({ preventScroll: true });
     });
   }, [menu.id, visible]);
 

@@ -27,6 +27,7 @@ private struct NightsRootView: View {
                 .ignoresSafeArea()
 
             NightsWebView(model: browser)
+                .ignoresSafeArea(.container, edges: .all)
 
             if browser.isOffline {
                 VStack(spacing: 16) {

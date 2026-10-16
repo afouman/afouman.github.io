@@ -13,7 +13,7 @@ export const metadata: Metadata = {
     icon: [{ url: '/gathering/icons/nights-favicon-48.png', sizes: '48x48', type: 'image/png' }],
     apple: [{ url: '/gathering/icons/nights-app-icon-180.png', sizes: '180x180', type: 'image/png' }],
   },
-  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'Nights' },
+  appleWebApp: { capable: true, statusBarStyle: 'black-translucent', title: 'Nights' },
   openGraph: { title: 'Nights', description: 'Every gathering, beautifully organized', images: ['/gathering/og.png'] },
   twitter: { card: 'summary_large_image', title: 'Nights', description: 'Every gathering, beautifully organized', images: ['/gathering/og.png'] },
 };
