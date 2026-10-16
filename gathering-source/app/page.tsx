@@ -36,6 +36,7 @@ import {
   MapPin,
   Menu as MenuIcon,
   MessageCircle,
+  Monitor,
   Minus,
   Move,
   Pencil,
@@ -7370,7 +7371,7 @@ function GuestMenu({
     <div className={`guest-experience ${hasMenu ? 'pb-36' : ''}`}>
       <section className="guest-hero">
         <div
-          className="guest-hero-photo"
+          className={`guest-hero-photo ${menu.backgroundImageUrl ? 'custom-background' : 'curated-background'}`}
           style={{
             backgroundImage: `url(${eventBackground(menu)})`,
             backgroundPosition: `${backgroundFocus.x}% ${backgroundFocus.y}%`,
@@ -10378,6 +10379,8 @@ function BackgroundCropModal({
     Math.min(maximum, Math.max(minimum, value));
   const [focus, setFocus] = useState(editor.focus);
   const [zoom, setZoom] = useState(clamp(editor.zoom, 1, 3));
+  const [previewOverride, setPreviewOverride] = useState<'phone' | 'desktop' | null>(null);
+  const [viewport, setViewport] = useState({ width: 390, height: 844 });
   const [dragging, setDragging] = useState(false);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const pointers = useRef(new Map<number, { x: number; y: number }>());
@@ -10389,6 +10392,30 @@ function BackgroundCropModal({
     zoom: number;
   } | null>(null);
   const pinchStart = useRef<{ distance: number; zoom: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const syncViewport = () => setViewport({
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
+    syncViewport();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', syncViewport);
+    return () => {
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', syncViewport);
+    };
+  }, []);
+
+  const currentDevice = viewport.width <= 700 ? 'phone' : 'desktop';
+  const previewDevice = previewOverride || currentDevice;
+  const currentHeroHeight = currentDevice === 'phone'
+    ? Math.max(680, viewport.height)
+    : Math.min(850, viewport.height * 0.92);
+  const currentAspect = viewport.width / currentHeroHeight;
+  const previewAspect = previewDevice === currentDevice
+    ? currentAspect
+    : previewDevice === 'phone' ? 390 / 844 : 16 / 9;
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -10449,14 +10476,34 @@ function BackgroundCropModal({
           <div>
             <p className="eyebrow">Custom backdrop</p>
             <h2 id="background-crop-title" className="font-display">Frame your event</h2>
-            <p id="background-crop-help">Drag to reposition. Pinch, scroll, or use the slider to zoom.</p>
+            <p id="background-crop-help">Preview the real guest-page crop. Drag to reposition; pinch, scroll, or use the slider to zoom.</p>
           </div>
           <button type="button" onClick={onCancel} aria-label="Close background editor"><XCircle size={24} /></button>
         </header>
+        <div className="background-crop-device-switch" role="group" aria-label="Preview size">
+          <button
+            type="button"
+            className={previewDevice === 'phone' ? 'selected' : ''}
+            aria-pressed={previewDevice === 'phone'}
+            onClick={() => setPreviewOverride('phone')}
+          >
+            <Smartphone size={17} /> Phone{currentDevice === 'phone' ? ' · This screen' : ''}
+          </button>
+          <button
+            type="button"
+            className={previewDevice === 'desktop' ? 'selected' : ''}
+            aria-pressed={previewDevice === 'desktop'}
+            onClick={() => setPreviewOverride('desktop')}
+          >
+            <Monitor size={17} /> Desktop{currentDevice === 'desktop' ? ' · This screen' : ''}
+          </button>
+        </div>
+        <div className={`background-crop-stage ${previewDevice}`}>
         <button
           type="button"
-          className={`background-crop-viewport ${dragging ? 'is-dragging' : ''}`}
-          aria-label="Background image framing area"
+          className={`background-crop-viewport ${previewDevice} ${dragging ? 'is-dragging' : ''}`}
+          aria-label={`${previewDevice === 'phone' ? 'Phone' : 'Desktop'} background image framing area`}
+          style={{ '--crop-preview-aspect': previewAspect } as CSSProperties}
           onPointerDown={(event) => {
             if (event.button !== 0 && event.pointerType === 'mouse') return;
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -10534,6 +10581,7 @@ function BackgroundCropModal({
           <span className="background-crop-grid" aria-hidden="true"><i /><i /><i /><i /></span>
           <span className="background-crop-hint"><Move size={15} /> Drag image</span>
         </button>
+        </div>
         <section className="background-crop-controls">
           <button type="button" onClick={() => updateZoom(zoom - 0.1)} disabled={zoom <= 1} aria-label="Zoom out"><ZoomOut size={19} /></button>
           <label>

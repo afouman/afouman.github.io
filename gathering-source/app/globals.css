@@ -468,12 +468,44 @@ button:disabled {
   border-radius: 50%;
   background: rgb(255 255 255 / 0.58);
 }
+.background-crop-device-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: min(320px, calc(100% - 2.7rem));
+  margin: 0 auto 0.85rem;
+  border: 1px solid rgb(33 28 24 / 0.12);
+  border-radius: 999px;
+  background: rgb(33 28 24 / 0.055);
+  padding: 0.25rem;
+}
+.background-crop-device-switch button {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: rgb(33 28 24 / 0.58);
+  font-size: 0.72rem;
+  font-weight: 850;
+}
+.background-crop-device-switch button.selected {
+  background: #fffaf1;
+  color: #211c18;
+  box-shadow: 0 3px 12px rgb(33 28 24 / 0.12);
+}
+.background-crop-stage {
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  place-items: center;
+}
 .background-crop-viewport {
   position: relative;
-  aspect-ratio: 16 / 9;
-  width: calc(100% - 2.7rem);
-  height: min(52svh, 500px);
-  margin: 0 1.35rem;
+  aspect-ratio: var(--crop-preview-aspect, 9 / 16);
+  margin: 0;
   border: 0;
   border-radius: 1rem;
   background: #16130f;
@@ -484,6 +516,16 @@ button:disabled {
   outline: none;
   padding: 0;
   text-align: left;
+}
+.background-crop-viewport.phone {
+  width: auto;
+  height: min(52svh, 560px);
+  max-width: calc(100% - 2.7rem);
+}
+.background-crop-viewport.desktop {
+  width: calc(100% - 2.7rem);
+  height: auto;
+  max-height: min(52svh, 500px);
 }
 .background-crop-viewport:focus-visible { box-shadow: 0 0 0 3px var(--tomato); }
 .background-crop-viewport.is-dragging { cursor: grabbing; }
@@ -737,8 +779,16 @@ button:disabled {
   .background-crop-dialog > header { padding: 1rem 1rem 0.8rem; }
   .background-crop-dialog > header h2 { font-size: 2rem; }
   .background-crop-dialog > header p:last-child { max-width: 28rem; }
-  .background-crop-viewport { width: calc(100% - 2rem); margin: 0 1rem; }
-  .background-crop-viewport { height: auto; }
+  .background-crop-device-switch { width: calc(100% - 2rem); margin-bottom: 0.7rem; }
+  .background-crop-viewport.phone {
+    width: auto;
+    height: min(54svh, 560px);
+    max-width: calc(100% - 2rem);
+  }
+  .background-crop-viewport.desktop {
+    width: calc(100% - 2rem);
+    height: auto;
+  }
   .background-crop-controls { gap: 0.45rem; padding: 0.85rem 1rem 0.7rem; }
   .background-crop-controls label span { display: none; }
   .background-crop-controls output { width: 2.7rem; }
@@ -2204,6 +2254,11 @@ button:disabled {
 }
 .guest-hero-photo::after {
   display: none;
+}
+.guest-hero-photo.custom-background::before {
+  inset: 0;
+  animation: none;
+  transform: scale(var(--background-zoom, 1));
 }
 .guest-hero-shade {
   background:
@@ -3709,6 +3764,11 @@ button:disabled {
   }
   .guest-hero-photo::after {
     display: none;
+  }
+  .guest-hero-photo.custom-background::before {
+    inset: 0;
+    animation: none;
+    transform: scale(var(--background-zoom, 1));
   }
   .guest-hero-shade {
     background:
