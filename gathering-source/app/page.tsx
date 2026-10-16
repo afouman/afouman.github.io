@@ -904,8 +904,8 @@ const newEventHostRoute = () => {
 const isAppleMobileDevice = () => /iPhone|iPad|iPod/i.test(navigator.userAgent)
   || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const serviceWorkerLocation = () => usesCleanEventUrls()
-  ? { url: new URL('/sw.js?v=46', window.location.origin), scope: '/' }
-  : { url: new URL('sw.js?v=46', document.baseURI), scope: './' };
+  ? { url: new URL('/sw.js?v=47', window.location.origin), scope: '/' }
+  : { url: new URL('sw.js?v=47', document.baseURI), scope: './' };
 const guestEventUrl = (eventId: string, publicPath?: string) =>
   new URL(`${guestHomeRoute()}${guestHomeRoute().includes('?') ? '&' : '?'}invite=${encodeURIComponent(
     normalizedPublicEventPath(publicPath) || eventId,
@@ -1665,6 +1665,87 @@ export default function Home() {
             || (profileData?.accountUid && session.authUid && profileData.accountUid !== session.authUid)
           ) return null;
           const rsvpData = rsvpDocument.data();
+          if (
+            session.authUid
+            && profileData
+            && (
+              profileData.guestName !== session.guestName
+              || profileData.guestPhone !== session.guestPhone
+              || rsvpData?.guestName !== session.guestName
+              || rsvpData?.guestPhone !== session.guestPhone
+            )
+          ) {
+            try {
+              const nextNameHash = await guestNameIndexId(session.guestName);
+              const nextPhoneHash = await guestNameIndexId(session.guestPhone);
+              await store.runTransaction(db, async (transaction) => {
+                const profileRef = store.doc(db, 'events', event.id, 'guests', session.guestUid);
+                const rsvpRef = store.doc(db, 'events', event.id, 'rsvps', session.guestUid);
+                const savedProfile = await transaction.get(profileRef);
+                const savedRsvp = await transaction.get(rsvpRef);
+                if (!savedProfile.exists()) return;
+                const oldName = savedProfile.data().guestName || '';
+                const oldPhone = savedProfile.data().guestPhone || '';
+                const nextNameRef = store.doc(db, 'events', event.id, 'guest-names', nextNameHash);
+                const nextPhoneRef = store.doc(db, 'events', event.id, 'guest-phones', nextPhoneHash);
+                const oldNameRef = oldName && guestNameKey(oldName) !== guestNameKey(session.guestName)
+                  ? store.doc(db, 'events', event.id, 'guest-names', await guestNameIndexId(oldName))
+                  : null;
+                const oldPhoneRef = oldPhone && oldPhone !== session.guestPhone
+                  ? store.doc(db, 'events', event.id, 'guest-phones', await guestNameIndexId(oldPhone))
+                  : null;
+                const [nextNameClaim, nextPhoneClaim, oldNameClaim, oldPhoneClaim] = await Promise.all([
+                  transaction.get(nextNameRef), transaction.get(nextPhoneRef),
+                  oldNameRef ? transaction.get(oldNameRef) : Promise.resolve(null),
+                  oldPhoneRef ? transaction.get(oldPhoneRef) : Promise.resolve(null),
+                ]);
+                if (nextNameClaim.exists() && nextNameClaim.data().guestUid !== session.guestUid)
+                  throw new Error('event-name-taken');
+                if (nextPhoneClaim.exists() && nextPhoneClaim.data().guestUid !== session.guestUid)
+                  throw new Error('event-phone-taken');
+                if (!nextNameClaim.exists()) transaction.set(nextNameRef, {
+                  guestUid: session.guestUid,
+                  guestName: session.guestName,
+                  createdAt: store.serverTimestamp(),
+                });
+                if (!nextPhoneClaim.exists()) transaction.set(nextPhoneRef, {
+                  guestUid: session.guestUid,
+                  guestPhone: session.guestPhone,
+                  createdAt: store.serverTimestamp(),
+                });
+                if (oldNameRef && oldNameClaim?.data()?.guestUid === session.guestUid)
+                  transaction.delete(oldNameRef);
+                if (oldPhoneRef && oldPhoneClaim?.data()?.guestUid === session.guestUid)
+                  transaction.delete(oldPhoneRef);
+                transaction.update(profileRef, {
+                  guestName: session.guestName,
+                  guestPhone: session.guestPhone,
+                  updatedAt: store.serverTimestamp(),
+                });
+                if (savedRsvp.exists()) transaction.update(rsvpRef, {
+                  guestName: session.guestName,
+                  guestPhone: session.guestPhone,
+                  approvalStatus: savedRsvp.data().approvalStatus || (
+                    !event.requireGuestApproval
+                    || savedRsvp.data().status !== 'yes'
+                    || Boolean(invitation)
+                    || isOwner
+                      ? 'approved'
+                      : 'pending'
+                  ),
+                  updatedAt: store.serverTimestamp(),
+                });
+              });
+              profileData.guestName = session.guestName;
+              profileData.guestPhone = session.guestPhone;
+              if (rsvpData) {
+                rsvpData.guestName = session.guestName;
+                rsvpData.guestPhone = session.guestPhone;
+              }
+            } catch {
+              // Keep the event usable with its existing identity if a duplicate claim blocks reconciliation.
+            }
+          }
           return {
             event,
             hosted: isOwner,
