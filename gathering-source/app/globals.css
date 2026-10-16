@@ -1761,6 +1761,13 @@ button:disabled {
   background: var(--peach);
   color: var(--wine-deep);
 }
+.app-logo-frame img {
+  width: calc(100% + 7px);
+  max-width: none;
+  height: calc(100% + 7px);
+  object-fit: cover;
+  transform: scale(1.04);
+}
 .guest-mode .app-back-button {
   border-color: rgb(255 255 255 / 0.3);
   background: rgb(8 35 49 / 0.72);
@@ -1978,8 +1985,9 @@ button:disabled {
   border-radius: 0.7rem;
 }
 .native-ios-app .app-brand-button span:first-child img {
-  width: 100%;
-  height: 100%;
+  width: calc(100% + 7px);
+  max-width: none;
+  height: calc(100% + 7px);
 }
 .native-ios-app .app-brand-button span:last-child {
   overflow: hidden;
@@ -2660,27 +2668,27 @@ button:disabled {
   color: rgb(var(--theme-rgb)/0.5);
 }
 .guest-event-dock {
-  position: fixed;
+  position: fixed !important;
   z-index: 60;
   right: 0;
-  bottom: 0;
+  bottom: 0 !important;
   left: 0;
   width: 100%;
   max-width: 100%;
   overflow: visible;
-  transform: translate3d(0, 0, 0);
+  transform: none;
   backface-visibility: hidden;
-  contain: layout;
+  contain: none;
   isolation: isolate;
 }
 .guest-cart-bar {
   border-top: 1px solid rgb(255 255 255/0.1);
-  background: rgb(var(--theme-deep-rgb)/0.94);
+  background: rgb(var(--theme-deep-rgb));
   color: #fff8eb;
   padding: 0.8rem max(1.25rem, env(safe-area-inset-right)) 0.8rem
     max(1.25rem, env(safe-area-inset-left));
   box-shadow: 0 -18px 55px rgb(37 9 15/0.18);
-  backdrop-filter: blur(18px);
+  backdrop-filter: none;
 }
 .guest-cart-bar p:first-child {
   color: var(--peach);
@@ -2740,6 +2748,32 @@ button:disabled {
   color: #fff;
 }
 .guest-event-nav button:disabled { opacity: 0.38; }
+.guest-event-nav button:disabled:hover { background: transparent; color: rgb(255 248 235 / 0.82); }
+.event-nav-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.event-nav-icon b,
+.header-notification-count {
+  position: absolute;
+  top: -0.55rem;
+  right: -0.75rem;
+  display: grid;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  border: 2px solid rgb(var(--theme-deep-rgb));
+  border-radius: 999px;
+  background: var(--tomato);
+  padding: 0 0.18rem;
+  color: #fff;
+  font-size: 0.52rem;
+  font-weight: 950;
+  line-height: 1;
+}
+.chat-header-button { position: relative; }
+.header-notification-count { top: -0.4rem; right: -0.35rem; border-color: var(--cream); }
 .guest-event-nav .event-menu-control { min-width: 0; }
 .guest-event-options .event-feature-menu {
   top: auto;
@@ -2748,6 +2782,37 @@ button:disabled {
 }
 .has-event-dock {
   padding-bottom: calc(9.6rem + env(safe-area-inset-bottom));
+}
+.guest-home-dock {
+  position: fixed;
+  z-index: 60;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  padding: 0.55rem max(0.75rem, env(safe-area-inset-right))
+    calc(0.55rem + env(safe-area-inset-bottom))
+    max(0.75rem, env(safe-area-inset-left));
+  background: #10282b;
+  box-shadow: 0 -12px 34px rgb(6 31 35 / 0.18);
+}
+.guest-home-dock button {
+  display: flex;
+  width: min(72rem, 100%);
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  margin: 0 auto;
+  border-radius: 0.95rem;
+  background: linear-gradient(135deg, #3ac4a7, #75d9c0);
+  color: #072e31;
+  font-size: 0.84rem;
+  font-weight: 900;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.35);
+}
+.guest-home-dock button:hover { filter: brightness(1.06); }
+.guest-home-view .guest-access-portal {
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom));
 }
 .guest-rsvp-button {
   display: inline-flex;

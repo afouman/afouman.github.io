@@ -2424,7 +2424,7 @@ export default function Home() {
   }, [mode]);
 
   useEffect(() => {
-    if (mode !== 'guest' || menu.id !== EMPTY_EVENT_ID) return;
+    if (mode !== 'guest') return;
     let active = true;
     const syncNotificationCounts = () => void readAppBadgeState().then((state) => {
       if (active) setEventNotificationCounts(state.events);
@@ -5858,6 +5858,7 @@ export default function Home() {
   }
 
   const guestEventView = mode === 'guest' && menu.id !== EMPTY_EVENT_ID;
+  const guestHomeView = mode === 'guest' && menu.id === EMPTY_EVENT_ID;
   const navigateBack = () => {
     if (hostPreview) {
       window.location.assign(eventRoute(menu.id, 'host', automaticPublicEventPath(menu)));
@@ -5891,6 +5892,12 @@ export default function Home() {
     setChatOpen(true);
     setEventMenuOpen(false);
   };
+  const updateCurrentChatUnread = useCallback((unread: number) => {
+    if (menu.id === EMPTY_EVENT_ID) return;
+    setEventNotificationCounts((current) => current[menu.id] === unread
+      ? current
+      : { ...current, [menu.id]: unread });
+  }, [menu.id]);
 
   if (!eventReady) {
     return (
@@ -5903,13 +5910,13 @@ export default function Home() {
 
   return (
     <main
-      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'} ${editing ? 'is-editing' : ''} ${isNativeIOSApp ? 'native-ios-app' : ''}`}
+      className={`app-root min-h-screen ${mode === 'host' ? 'host-mode' : 'guest-mode'} ${guestHomeView ? 'guest-home-view' : ''} ${editing ? 'is-editing' : ''} ${isNativeIOSApp ? 'native-ios-app' : ''}`}
       style={mode === 'guest' ? eventThemeStyle(menu) : undefined}
     >
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
           <div className="app-header-brand">
-            {!guestEventView && <button
+            {!guestEventView && !guestHomeView && <button
               type="button"
               className="app-back-button"
               onClick={navigateBack}
@@ -5927,7 +5934,7 @@ export default function Home() {
               className="app-brand-button flex items-center gap-3"
               aria-label={hostPreview ? 'Return to this event in Nights Host' : mode === 'host' ? 'Nights Host home' : 'Open guest events'}
             >
-              <span className="grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
+              <span className="app-logo-frame grid size-9 place-items-center overflow-hidden rounded-xl bg-[var(--tomato)] text-white">
                 <Image src="/gathering/icons/nights-app-icon-180.png" alt="" width={36} height={36} />
               </span>
               <span className="whitespace-nowrap font-display text-xl font-semibold tracking-tight">
@@ -5936,7 +5943,7 @@ export default function Home() {
             </button>
           </div>
           <div className="app-header-actions flex items-center gap-2">
-            {!guestEventView && <button
+            {!guestEventView && !guestHomeView && <button
               type="button"
               className="guest-event-switch-button"
               onClick={navigateHome}
@@ -5945,17 +5952,6 @@ export default function Home() {
               <House size={15} />
               <span>{hostPreview ? 'Back to host' : 'Home'}</span>
             </button>}
-            {mode === 'guest' && !guestEventView && !hostPreview && accountProfile && (
-              <button
-                type="button"
-                className="guest-new-event-button"
-                onClick={createNewEvent}
-                aria-label="Create a new event"
-              >
-                <CalendarPlus size={15} />
-                <span>New Event</span>
-              </button>
-            )}
             {mode === 'guest' && appEnvironmentReady && !isStandalone && !isNativeIOSApp && (
               <button
                 onClick={openInstallGuide}
@@ -6004,6 +6000,17 @@ export default function Home() {
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
+            {mode === 'host' && menu.id !== EMPTY_EVENT_ID && <button
+              type="button"
+              className="chat-header-button"
+              onClick={openEventChat}
+              disabled={!chatActor}
+              aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}
+            >
+              <MessageCircle size={16} />
+              <span>Chat</span>
+              {eventNotificationCounts[menu.id] > 0 && <b className="header-notification-count">{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
+            </button>}
             {menu.id !== EMPTY_EVENT_ID && !guestEventView && <div className="event-menu-control">
               <button
                 type="button"
@@ -6017,15 +6024,6 @@ export default function Home() {
                 <ChevronDown size={14} />
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!chatActor}
-                  onClick={openEventChat}
-                >
-                  <span><MessageCircle size={18} /></span>
-                  <div><strong>Chat</strong><small>{menu.chatOpen === false ? 'Read the locked conversation' : 'Messages, reactions and polls'}</small></div>
-                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -6307,11 +6305,8 @@ export default function Home() {
           menu={menu}
           actor={chatActor}
           visible={chatOpen}
-          onOpen={() => {
-            primeChatAudio();
-            setChatOpen(true);
-          }}
           onMinimize={() => setChatOpen(false)}
+          onUnreadChange={updateCurrentChatUnread}
           pushNotificationState={pushNotificationState}
           eventMuted={currentEventMuted}
           pushNotificationBusy={pushNotificationBusy}
@@ -6800,14 +6795,16 @@ export default function Home() {
             <button type="button" onClick={navigateBack} aria-label="Back">
               <ArrowLeft size={20} /><span>Back</span>
             </button>
-            <button type="button" onClick={createNewEvent} disabled={!accountProfile} aria-label="Create new event">
+            <button type="button" onClick={createNewEvent} disabled={!accountProfile || hostPreview} aria-label="Create new event">
               <CalendarPlus size={20} /><span>New event</span>
             </button>
-            <button type="button" onClick={navigateHome} aria-label="Home">
+            <button type="button" onClick={navigateHome} disabled={hostPreview} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={openEventChat} disabled={!chatActor} aria-label="Open event chat">
-              <MessageCircle size={20} /><span>Chat</span>
+            <button type="button" onClick={openEventChat} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+              <span className="event-nav-icon"><MessageCircle size={20} />
+                {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
+              </span><span>Chat</span>
             </button>
             <div className="event-menu-control guest-event-options">
               <button
@@ -6821,10 +6818,6 @@ export default function Home() {
                 <MenuIcon size={21} /><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
-                <button type="button" role="menuitem" disabled={!chatActor} onClick={openEventChat}>
-                  <span><MessageCircle size={18} /></span>
-                  <div><strong>Chat</strong><small>{menu.chatOpen === false ? 'Read the locked conversation' : 'Messages, reactions and polls'}</small></div>
-                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -6842,6 +6835,13 @@ export default function Home() {
             </div>
           </nav>
         </div>
+      )}
+      {guestHomeView && accountProfile && (
+        <nav className="guest-home-dock" aria-label="Home actions">
+          <button type="button" onClick={createNewEvent} aria-label="Create a new event">
+            <CalendarPlus size={20} /><span>Create new event</span>
+          </button>
+        </nav>
       )}
       {mode === 'guest' && rsvpPanelOpen && (
         <div className="guest-rsvp-backdrop" role="presentation" onMouseDown={(event) => {
@@ -8243,8 +8243,8 @@ function EventChat({
   menu,
   actor,
   visible,
-  onOpen,
   onMinimize,
+  onUnreadChange,
   pushNotificationState,
   eventMuted,
   pushNotificationBusy,
@@ -8255,8 +8255,8 @@ function EventChat({
   menu: EventMenu;
   actor: ChatActor;
   visible: boolean;
-  onOpen: () => void;
   onMinimize: () => void;
+  onUnreadChange: (unread: number) => void;
   pushNotificationState: PushNotificationState;
   eventMuted: boolean;
   pushNotificationBusy: boolean;
@@ -8322,6 +8322,10 @@ function EventChat({
     });
     return () => { active = false; };
   }, [menu.id, visible]);
+
+  useEffect(() => {
+    onUnreadChange(unread);
+  }, [onUnreadChange, unread]);
 
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return;
@@ -8751,12 +8755,7 @@ function EventChat({
   const visiblePinnedMessage = pinnedMessages[visiblePinnedIndex];
 
   if (!visible) {
-    return (
-      <button type="button" className={`chat-minimized ${actor.role}`} onClick={onOpen} aria-label={`Open event chat${unread ? `, ${unread} unread` : ''}`}>
-        <MessageCircle size={21} />
-        {unread > 0 && <b>{unread > 99 ? '99+' : unread}</b>}
-      </button>
-    );
+    return null;
   }
 
   return (
