@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
+import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import {
@@ -111,6 +112,7 @@ type EventMenu = {
   categories?: string[];
   resources?: EventResource[];
   ownerUid?: string;
+  updatedAt?: number;
   items: MenuItem[];
 };
 type OrderStatus = 'new' | 'preparing' | 'served' | 'cancelled' | 'rejected';
@@ -503,6 +505,15 @@ type GuestEventAccess = {
   invitation?: EventInvitation;
   hosted?: boolean;
 };
+type EventActivity = {
+  id: string;
+  eventId: string;
+  kind: 'invitation' | 'schedule' | 'location' | 'expense' | 'event';
+  title: string;
+  detail: string;
+  createdAt: number;
+  read: boolean;
+};
 type Receipt = {
   eventId: string;
   orderId: string;
@@ -738,6 +749,9 @@ const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
 const CREATE_EVENT_INTENT_KEY = 'nights-create-event-intent-v1';
 const CREATE_EVENT_RETURN_ROUTE_KEY = 'nights-create-event-return-route-v1';
+const eventActivityKey = (accountUid: string) => `nights-event-activity-v1:${accountUid}`;
+const eventActivityMarkerKey = (accountUid: string, activityId: string) =>
+  `nights-event-activity-seen-v1:${accountUid}:${activityId}`;
 const APP_BADGE_CACHE = 'nights-chat-badge-v1';
 const APP_BADGE_STATE_PATH = '/__nights_chat_badge_state__';
 type AppBadgeState = { events: Record<string, number> };
@@ -1393,6 +1407,8 @@ export default function Home() {
   const [rsvps, setRsvps] = useState<Rsvp[]>([]);
   const [eventIncomingCounts, setEventIncomingCounts] = useState<Record<string, number>>({});
   const [eventNotificationCounts, setEventNotificationCounts] = useState<Record<string, number>>({});
+  const [eventActivities, setEventActivities] = useState<EventActivity[]>([]);
+  const [activityCenterOpen, setActivityCenterOpen] = useState(false);
   const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [guestName, setGuestName] = useState('');
@@ -1488,6 +1504,19 @@ export default function Home() {
     colorPalette: '' as EventPalette | '',
     welcome: 'Choose what you’d like and send your order to the host.',
   });
+  const addEventActivity = useCallback((activity: Omit<EventActivity, 'read'>) => {
+    if (!accountUser) return;
+    const marker = eventActivityMarkerKey(accountUser.uid, activity.id);
+    if (localStorage.getItem(marker)) return;
+    localStorage.setItem(marker, '1');
+    setEventActivities((current) => {
+      const next = [{ ...activity, read: false }, ...current]
+        .filter((entry, index, list) => list.findIndex((candidate) => candidate.id === entry.id) === index)
+        .slice(0, 250);
+      localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
+      return next;
+    });
+  }, [accountUser]);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -2034,6 +2063,158 @@ export default function Home() {
     })();
     return () => unsubscribe();
   }, [accountProfile, accountUser, loadGuestEvents]);
+
+  useEffect(() => {
+    if (!accountUser) {
+      queueMicrotask(() => setEventActivities([]));
+      return;
+    }
+    queueMicrotask(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(eventActivityKey(accountUser.uid)) || '[]') as EventActivity[];
+        setEventActivities(saved.filter((activity) => activity?.eventId && activity?.title));
+      } catch {
+        setEventActivities([]);
+      }
+    });
+  }, [accountUser]);
+
+  useEffect(() => {
+    if (!accountUser) return;
+    guestEvents.forEach((access) => {
+      if (!access.invitation || access.rsvp || access.hosted) return;
+      addEventActivity({
+        id: `invitation:${access.event.id}:${access.invitation.createdAt}`,
+        eventId: access.event.id,
+        kind: 'invitation',
+        title: 'New invitation',
+        detail: `You were invited to ${access.event.title}.`,
+        createdAt: access.invitation.createdAt || Date.now(),
+      });
+    });
+  }, [accountUser, addEventActivity, guestEvents]);
+
+  const guestEventIdentity = guestEvents.map((access) => access.event.id).sort().join('|');
+  useEffect(() => {
+    if (!firebaseConfigured || !accountUser || !accountProfile || !guestEventIdentity) return;
+    const stops: Array<() => void> = [];
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const db = store.getFirestore(getApp());
+      guestEvents.forEach((access) => {
+        stops.push(store.onSnapshot(store.doc(db, 'events', access.event.id), (snapshot) => {
+          if (!snapshot.exists()) return;
+          const data = snapshot.data();
+          const nextEvent = {
+            ...data,
+            id: snapshot.id,
+            updatedAt: data.updatedAt?.toMillis?.() ?? data.updatedAt,
+          } as EventMenu;
+          setGuestEvents((current) => current.map((entry) => {
+            if (entry.event.id !== nextEvent.id) return entry;
+            if ((entry.event.startsAt || entry.event.date) !== (nextEvent.startsAt || nextEvent.date))
+              addEventActivity({
+                id: `schedule:${nextEvent.id}:${nextEvent.startsAt || nextEvent.date}`,
+                eventId: nextEvent.id,
+                kind: 'schedule',
+                title: 'Date or time changed',
+                detail: `${nextEvent.title} is now scheduled for ${nextEvent.date}.`,
+                createdAt: Date.now(),
+              });
+            if ((entry.event.address || '') !== (nextEvent.address || ''))
+              addEventActivity({
+                id: `location:${nextEvent.id}:${nextEvent.address || 'removed'}`,
+                eventId: nextEvent.id,
+                kind: 'location',
+                title: 'Location changed',
+                detail: nextEvent.address
+                  ? `${nextEvent.title} will be at ${nextEvent.address}.`
+                  : `The location for ${nextEvent.title} was removed.`,
+                createdAt: Date.now(),
+              });
+            return { ...entry, event: nextEvent };
+          }));
+        }));
+        stops.push(store.onSnapshot(
+          store.doc(db, 'events', access.event.id, 'rsvps', accountProfile.guestUid),
+          (snapshot) => {
+            if (!snapshot.exists()) return;
+            const data = snapshot.data();
+            const nextRsvp = {
+              ...data,
+              guestUid: accountProfile.guestUid,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.() ?? Date.now(),
+            } as Rsvp;
+            setGuestEvents((current) => current.map((entry) => {
+              if (entry.event.id !== access.event.id) return entry;
+              const previousApproval = entry.rsvp ? approvalStatus(entry.rsvp) : '';
+              const nextApproval = approvalStatus(nextRsvp);
+              if (previousApproval && previousApproval !== nextApproval)
+                addEventActivity({
+                  id: `rsvp-approval:${access.event.id}:${nextApproval}:${nextRsvp.updatedAt}`,
+                  eventId: access.event.id,
+                  kind: 'event',
+                  title: nextApproval === 'approved' ? 'RSVP approved' : nextApproval === 'declined' ? 'RSVP not approved' : 'RSVP awaiting approval',
+                  detail: `${access.event.title}: your Going response is ${nextApproval}.`,
+                  createdAt: nextRsvp.updatedAt || Date.now(),
+                });
+              return { ...entry, rsvp: nextRsvp };
+            }));
+          },
+          () => undefined,
+        ));
+        stops.push(store.onSnapshot(
+          store.query(store.collection(db, 'events', access.event.id, 'orders'), store.where('guestUid', '==', accountProfile.guestUid)),
+          (snapshot) => snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') return;
+            const data = change.doc.data();
+            const status = data.status as OrderStatus;
+            const readyItems = (data.tasks as OrderTask[] | undefined)?.filter((task) => task.status === 'ready').length || 0;
+            if (!['served', 'rejected', 'cancelled'].includes(status) && readyItems === 0) return;
+            const updatedAt = data.updatedAt?.toMillis?.() ?? data.updatedAt
+              ?? data.readyAt?.toMillis?.() ?? data.readyAt ?? Date.now();
+            addEventActivity({
+              id: `order:${access.event.id}:${change.doc.id}:${status}:${readyItems}:${updatedAt}`,
+              eventId: access.event.id,
+              kind: 'event',
+              title: readyItems > 0 ? 'Order item ready' : status === 'served' ? 'Order completed' : status === 'rejected' ? 'Order rejected' : 'Order cancelled',
+              detail: readyItems > 0 ? `${readyItems} item${readyItems === 1 ? '' : 's'} from your order ${readyItems === 1 ? 'is' : 'are'} ready.` : `Your order for ${access.event.title} is ${status}.`,
+              createdAt: typeof updatedAt === 'number' ? updatedAt : Date.now(),
+            });
+          }),
+          () => undefined,
+        ));
+        stops.push(store.onSnapshot(store.collection(db, 'events', access.event.id, 'expenses'), (snapshot) => {
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') return;
+            const data = change.doc.data();
+            const expense = {
+              ...data,
+              id: change.doc.id,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.() ?? Date.now(),
+            } as EventExpense;
+            const share = expenseShares(expense)[accountProfile.guestUid] || 0;
+            if (share <= 0) return;
+            addEventActivity({
+              id: `expense:${access.event.id}:${expense.id}:${expense.updatedAt || expense.createdAt}`,
+              eventId: access.event.id,
+              kind: 'expense',
+              title: 'Expense assigned to you',
+              detail: `${expense.title}: your share is ${formatCents(share)}.`,
+              createdAt: expense.updatedAt || expense.createdAt || Date.now(),
+            });
+          });
+        }, () => undefined));
+      });
+    })();
+    return () => stops.forEach((stop) => stop());
+  // The ID signature intentionally keeps listeners stable when event content refreshes.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountProfile, accountUser, addEventActivity, guestEventIdentity]);
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser) {
@@ -3084,6 +3265,23 @@ export default function Home() {
   const notify = (message: string) => {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
+  };
+  const activityUnreadCounts = useMemo(() => eventActivities.reduce<Record<string, number>>((counts, activity) => {
+    if (!activity.read) counts[activity.eventId] = (counts[activity.eventId] || 0) + 1;
+    return counts;
+  }, {}), [eventActivities]);
+  const openActivityCenter = () => {
+    if (menu.id === EMPTY_EVENT_ID) return;
+    setActivityCenterOpen(true);
+    if (!accountUser) return;
+    setEventActivities((current) => {
+      const next = current.map((activity) => activity.eventId === menu.id
+        ? { ...activity, read: true }
+        : activity);
+      localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
+      return next;
+    });
+    setEventMenuOpen(false);
   };
   const notificationTargets = useMemo(() => {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
@@ -6033,7 +6231,8 @@ export default function Home() {
             phone={accountPhone}
             recoverySentTo={accountRecoverySentTo}
             events={guestEvents}
-            notificationCounts={eventNotificationCounts}
+            chatUnreadCounts={eventNotificationCounts}
+            activityUnreadCounts={activityUnreadCounts}
             pendingEvent={pendingGuestEvent}
             busy={accountAuthBusy || guestEventsBusy}
             setAuthMode={setAccountAuthMode}
@@ -6243,6 +6442,31 @@ export default function Home() {
             onClose={() => setExpensesOpen(false)}
             notify={notify}
           />
+        </div>
+      )}
+
+      {activityCenterOpen && (
+        <div className="activity-center-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setActivityCenterOpen(false);
+        }}>
+          <dialog open className="activity-center-dialog" aria-labelledby="activity-center-title">
+            <header>
+              <div><p className="eyebrow">{menu.title}</p><h2 id="activity-center-title" className="font-display">Notifications</h2></div>
+              <button type="button" onClick={() => setActivityCenterOpen(false)} aria-label="Close notifications"><XCircle size={22} /></button>
+            </header>
+            <p className="activity-center-note">Event updates and expenses appear here. Chat messages stay in Chat.</p>
+            <div className="activity-center-list">
+              {eventActivities.filter((activity) => activity.eventId === menu.id).length ? eventActivities
+                .filter((activity) => activity.eventId === menu.id)
+                .sort((a, b) => b.createdAt - a.createdAt)
+                .map((activity) => (
+                  <article key={activity.id}>
+                    <span>{activity.kind === 'expense' ? <DollarSign size={17} /> : activity.kind === 'location' ? <MapPin size={17} /> : activity.kind === 'schedule' ? <Clock3 size={17} /> : <Bell size={17} />}</span>
+                    <div><strong>{activity.title}</strong><p>{activity.detail}</p><time>{new Date(activity.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time></div>
+                  </article>
+                )) : <div className="activity-center-empty"><Bell size={24} /><strong>You’re caught up</strong><span>New event activity will appear here.</span></div>}
+            </div>
+          </dialog>
         </div>
       )}
 
@@ -6724,8 +6948,8 @@ export default function Home() {
           </section>
         </div>
       )}
-      {guestEventView && (
-        <div className="guest-event-dock">
+      {appEnvironmentReady && guestEventView && createPortal(
+        <div className="guest-event-dock" style={eventThemeStyle(menu)}>
           <div className="guest-cart-bar">
             <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
               <div>
@@ -6785,6 +7009,11 @@ export default function Home() {
                 <MenuIcon size={21} /><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
+                <button type="button" role="menuitem" onClick={openActivityCenter}>
+                  <span><Bell size={18} /></span>
+                  <div><strong>Notification center</strong><small>Invitations, event changes and expenses</small></div>
+                  {activityUnreadCounts[menu.id] > 0 && <b className="event-option-count">{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -6801,16 +7030,18 @@ export default function Home() {
               </div>}
             </div>
           </nav>
-        </div>
+        </div>,
+        document.body,
       )}
-      {guestHomeView && accountProfile && (
+      {appEnvironmentReady && guestHomeView && accountProfile && createPortal(
         <nav className="guest-event-nav guest-home-dock" aria-label="Home actions">
           <button type="button" onClick={createNewEvent} aria-label="Create a new event">
             <CalendarPlus size={20} /><span>Create new event</span>
           </button>
-        </nav>
+        </nav>,
+        document.body,
       )}
-      {mode === 'host' && (
+      {appEnvironmentReady && mode === 'host' && createPortal(
         <div className="host-event-dock">
           <nav className="guest-event-nav" aria-label="Host navigation">
             <button type="button" onClick={() => creatingEvent ? cancelCreatingEvent() : navigateBack()} aria-label="Back">
@@ -6845,6 +7076,11 @@ export default function Home() {
                 <MenuIcon size={21} /><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
+                <button type="button" role="menuitem" onClick={openActivityCenter}>
+                  <span><Bell size={18} /></span>
+                  <div><strong>Notification center</strong><small>Invitations, event changes and expenses</small></div>
+                  {activityUnreadCounts[menu.id] > 0 && <b className="event-option-count">{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
+                </button>
                 <button
                   type="button"
                   role="menuitem"
@@ -6860,7 +7096,8 @@ export default function Home() {
               </div>}
             </div>
           </nav>
-        </div>
+        </div>,
+        document.body,
       )}
       {mode === 'guest' && rsvpPanelOpen && (
         <div className="guest-rsvp-backdrop" role="presentation" onMouseDown={(event) => {
@@ -7300,7 +7537,8 @@ function GuestAccessPortal({
   phone,
   recoverySentTo,
   events,
-  notificationCounts,
+  chatUnreadCounts,
+  activityUnreadCounts,
   pendingEvent,
   busy,
   setAuthMode,
@@ -7322,10 +7560,27 @@ function GuestAccessPortal({
   selectEvent,
 }: Omit<AccountAuthCardProps, 'context'> & {
   events: GuestEventAccess[];
-  notificationCounts: Record<string, number>;
+  chatUnreadCounts: Record<string, number>;
+  activityUnreadCounts: Record<string, number>;
   pendingEvent: PendingGuestEvent | null;
   selectEvent: (event: GuestEventAccess) => void;
 }) {
+  const [dateOrder, setDateOrder] = useState<'asc' | 'desc'>('asc');
+  const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past'>('all');
+  const [ownershipScope, setOwnershipScope] = useState<'all' | 'hosting' | 'invited'>('all');
+  const [filterReferenceTime] = useState(() => Date.now());
+  const visibleEvents = useMemo(() => {
+    const eventTime = (access: GuestEventAccess) => {
+      const parsed = Date.parse(access.event.startsAt || access.event.date || '');
+      return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
+    };
+    return events
+      .filter((access) => dateScope === 'all'
+        || (dateScope === 'past' ? eventTime(access) < filterReferenceTime : eventTime(access) >= filterReferenceTime))
+      .filter((access) => ownershipScope === 'all'
+        || (ownershipScope === 'hosting' ? Boolean(access.hosted) : !access.hosted))
+      .sort((a, b) => (eventTime(a) - eventTime(b)) * (dateOrder === 'asc' ? 1 : -1));
+  }, [dateOrder, dateScope, events, filterReferenceTime, ownershipScope]);
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
@@ -7343,19 +7598,26 @@ function GuestAccessPortal({
         <div className="guest-access-events">
           <div className="guest-access-signed-in">
             <span>Welcome, <strong>{accountDisplayName(profile)}</strong></span>
+            <div className="guest-event-filters" aria-label="Filter and sort events">
+              <label><span>Sort</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Date ↑</option><option value="desc">Date ↓</option></select></label>
+              <label><span>Date</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past')}><option value="all">All dates</option><option value="upcoming">Upcoming</option><option value="past">Past</option></select></label>
+              <label><span>Events</span><select value={ownershipScope} onChange={(event) => setOwnershipScope(event.target.value as 'all' | 'hosting' | 'invited')}><option value="all">All events</option><option value="hosting">My events</option><option value="invited">Invited</option></select></label>
+            </div>
           </div>
           {events.length ? (
             <div className="guest-event-card-grid">
-              {events.map((access) => (
+              {visibleEvents.map((access) => (
                 <GuestEventCard
                   key={access.event.id}
                   access={access}
-                  unreadCount={notificationCounts[access.event.id] || 0}
+                  chatUnreadCount={chatUnreadCounts[access.event.id] || 0}
+                  activityUnreadCount={activityUnreadCounts[access.event.id] || 0}
                   hosted={Boolean(access.hosted || accountCanManageEvent(access.event, user?.uid, user?.email))}
                   invited={Boolean(access.invitation || (pendingEvent && guestEventMatchesPending(access, pendingEvent)))}
                   onSelect={() => selectEvent(access)}
                 />
               ))}
+              {!visibleEvents.length && <p className="guest-access-loading">No events match these filters.</p>}
             </div>
           ) : <p className="guest-access-loading">{busy ? 'Loading your events…' : 'No invitations or RSVPs were found for this guest profile.'}</p>}
           {busy && events.length > 0 && <p className="guest-access-refreshing">Refreshing your events…</p>}
@@ -7370,14 +7632,16 @@ function GuestEventCard({
   current = false,
   invited = false,
   hosted = false,
-  unreadCount = 0,
+  chatUnreadCount = 0,
+  activityUnreadCount = 0,
   onSelect,
 }: {
   access: GuestEventAccess;
   current?: boolean;
   invited?: boolean;
   hosted?: boolean;
-  unreadCount?: number;
+  chatUnreadCount?: number;
+  activityUnreadCount?: number;
   onSelect: () => void;
 }) {
   const response = hosted
@@ -7385,15 +7649,16 @@ function GuestEventCard({
     : access.rsvp
     ? access.rsvp.status === 'yes' ? 'Going' : access.rsvp.status === 'maybe' ? 'Maybe' : 'Not going'
     : invited ? 'New invitation' : 'Invited · RSVP not sent';
+  const newInvitation = invited && !access.rsvp && !hosted;
+  const hasUnread = chatUnreadCount > 0 || activityUnreadCount > 0;
   return (
-    <button type="button" className={`guest-event-card ${current ? 'current' : ''} ${hosted ? 'hosted' : ''} ${unreadCount > 0 ? 'has-notifications' : ''}`} onClick={onSelect}>
+    <button type="button" className={`guest-event-card ${current ? 'current' : ''} ${hosted ? 'hosted' : ''} ${newInvitation ? 'new-invitation' : ''} ${hasUnread ? 'has-notifications' : ''}`} onClick={onSelect}>
       <span className="guest-event-card-art" style={{ backgroundImage: `linear-gradient(145deg, rgb(32 157 139 / 0.82), rgb(31 88 163 / 0.82)), url(${eventBackground(access.event)})` }} />
-      {unreadCount > 0 && (
-        <span className="guest-event-notification" aria-label={`${unreadCount} unread notification${unreadCount === 1 ? '' : 's'}`}>
-          <Bell size={13} />
-          <b>{unreadCount > 9 ? '9+' : unreadCount}</b>
-        </span>
-      )}
+      {newInvitation && <span className="guest-event-new-badge">New</span>}
+      {hasUnread && <span className="guest-event-unread-badges">
+        {chatUnreadCount > 0 && <span aria-label={`${chatUnreadCount} unread chat message${chatUnreadCount === 1 ? '' : 's'}`}><MessageCircle size={13} /><b>{chatUnreadCount > 9 ? '9+' : chatUnreadCount}</b></span>}
+        {activityUnreadCount > 0 && <span aria-label={`${activityUnreadCount} unread event notification${activityUnreadCount === 1 ? '' : 's'}`}><Bell size={13} /><b>{activityUnreadCount > 9 ? '9+' : activityUnreadCount}</b></span>}
+      </span>}
       <span className="guest-event-card-copy">
         <small>{eventTypeLabel(access.event)}{current ? ' · Current event' : ''}</small>
         {hosted && <em className="guest-event-hosting-mark font-display">Your event</em>}

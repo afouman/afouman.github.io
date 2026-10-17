@@ -44,6 +44,9 @@ struct NightsWebView: UIViewRepresentable {
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.contentInset = .zero
+        webView.scrollView.scrollIndicatorInsets = .zero
+        webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
         webView.scrollView.bounces = false
         webView.scrollView.alwaysBounceVertical = false
         webView.scrollView.alwaysBounceHorizontal = false
