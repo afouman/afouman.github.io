@@ -23,11 +23,10 @@ private struct NightsRootView: View {
 
     var body: some View {
         ZStack {
-            Color(red: 0.024, green: 0.106, blue: 0.165)
+            Color(uiColor: browser.themeColor)
                 .ignoresSafeArea()
 
             NightsWebView(model: browser)
-                .ignoresSafeArea(.container, edges: .all)
 
             if browser.isOffline {
                 VStack(spacing: 16) {

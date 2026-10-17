@@ -9,6 +9,7 @@ import GoogleSignIn
 @MainActor
 final class NightsBrowserModel: ObservableObject {
     @Published var isOffline = false
+    @Published var themeColor = UIColor(red: 0.024, green: 0.106, blue: 0.165, alpha: 1)
     fileprivate weak var webView: WKWebView?
 
     fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/")!
@@ -36,12 +37,15 @@ struct NightsWebView: UIViewRepresentable {
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.applicationNameForUserAgent = "Nights-iOS/1.0"
         configuration.userContentController.add(context.coordinator, name: "nightsAuth")
+        configuration.userContentController.add(context.coordinator, name: "nightsTheme")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
+        webView.scrollView.bounces = false
+        webView.scrollView.alwaysBounceVertical = false
         webView.scrollView.alwaysBounceHorizontal = false
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isDirectionalLockEnabled = true
@@ -58,6 +62,7 @@ struct NightsWebView: UIViewRepresentable {
 
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsAuth")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsTheme")
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler,
@@ -83,6 +88,13 @@ struct NightsWebView: UIViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "nightsTheme", isTrustedAppURL(message.frameInfo.request.url),
+               let value = message.body as? String, let color = UIColor(hex: value) {
+                model.themeColor = color
+                webView?.backgroundColor = color
+                webView?.scrollView.backgroundColor = color
+                return
+            }
             guard message.name == "nightsAuth",
                   isTrustedAppURL(message.frameInfo.request.url),
                   let body = message.body as? [String: Any],
@@ -259,5 +271,18 @@ struct NightsWebView: UIViewRepresentable {
             }
             return result
         }
+    }
+}
+
+private extension UIColor {
+    convenience init?(hex: String) {
+        let value = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard value.count == 6, let number = Int(value, radix: 16) else { return nil }
+        self.init(
+            red: CGFloat((number >> 16) & 0xff) / 255,
+            green: CGFloat((number >> 8) & 0xff) / 255,
+            blue: CGFloat(number & 0xff) / 255,
+            alpha: 1
+        )
     }
 }

@@ -23,6 +23,7 @@ import {
   ChevronUp,
   Download,
   DollarSign,
+  Eye,
   ExternalLink,
   FileText,
   Flame,
@@ -168,6 +169,9 @@ type NightsNativeWindow = Window & {
     messageHandlers?: {
       nightsAuth?: {
         postMessage: (message: { provider: 'google' | 'apple' }) => void;
+      };
+      nightsTheme?: {
+        postMessage: (color: string) => void;
       };
     };
   };
@@ -2457,6 +2461,7 @@ export default function Home() {
     if (themeMeta) themeMeta.content = color;
     document.documentElement.style.background = color;
     document.body.style.background = color;
+    (window as NightsNativeWindow).webkit?.messageHandlers?.nightsTheme?.postMessage(color);
   }, [menu, mode]);
 
   useEffect(() => {
@@ -5928,15 +5933,6 @@ export default function Home() {
       <header className="app-header sticky top-0 z-30 border-b border-black/8 bg-[var(--cream)]/92 backdrop-blur-xl">
         <div className="mx-auto flex h-18 max-w-6xl items-center justify-between px-5">
           <div className="app-header-brand">
-            {!guestEventView && !guestHomeView && <button
-              type="button"
-              className="app-back-button"
-              onClick={navigateBack}
-              aria-label={hostPreview ? 'Back to event editor' : 'Back to events'}
-              title={hostPreview ? 'Back to event editor' : 'Back to events'}
-            >
-              <ArrowLeft size={18} />
-            </button>}
             <button
               onClick={() => window.location.assign(
                 hostPreview
@@ -5955,15 +5951,6 @@ export default function Home() {
             </button>
           </div>
           <div className="app-header-actions flex items-center gap-2">
-            {!guestEventView && !guestHomeView && <button
-              type="button"
-              className="guest-event-switch-button"
-              onClick={navigateHome}
-              aria-label={hostPreview ? 'Return to host event' : 'Open Nights home'}
-            >
-              <House size={15} />
-              <span>{hostPreview ? 'Back to host' : 'Home'}</span>
-            </button>}
             {mode === 'guest' && appEnvironmentReady && !isStandalone && !isNativeIOSApp && (
               <button
                 onClick={openInstallGuide}
@@ -6012,45 +5999,6 @@ export default function Home() {
               {pushNotificationState === 'enabled' ? <BellRing size={16} /> : currentEventMuted ? <BellOff size={16} /> : <Bell size={16} />}
               <span>{pushNotificationState === 'enabled' ? 'Notifications on' : currentEventMuted ? 'Unmute event' : 'Notify me'}</span>
             </button>}
-            {mode === 'host' && menu.id !== EMPTY_EVENT_ID && <button
-              type="button"
-              className="chat-header-button"
-              onClick={openEventChat}
-              disabled={!chatActor}
-              aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}
-            >
-              <MessageCircle size={16} />
-              <span>Chat</span>
-              {eventNotificationCounts[menu.id] > 0 && <b className="header-notification-count">{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
-            </button>}
-            {menu.id !== EMPTY_EVENT_ID && !guestEventView && <div className="event-menu-control">
-              <button
-                type="button"
-                className={`chat-header-button ${eventMenuOpen ? 'event-menu-active' : ''}`}
-                onClick={() => setEventMenuOpen((open) => !open)}
-                aria-haspopup="menu"
-                aria-expanded={eventMenuOpen}
-              >
-                <MenuIcon size={16} />
-                <span>Event</span>
-                <ChevronDown size={14} />
-              </button>
-              {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  disabled={!expenseActor}
-                  onClick={() => {
-                    setExpensesOpen(true);
-                    setEventMenuOpen(false);
-                  }}
-                  title={!expenseActor && mode === 'guest' ? 'RSVP Going and receive approval to use expenses' : undefined}
-                >
-                  <span><DollarSign size={18} /></span>
-                  <div><strong>Expenses</strong><small>{expenseActor ? 'Receipts, splits and guest balances' : 'Available to approved Going guests'}</small></div>
-                </button>
-              </div>}
-            </div>}
           </div>
         </div>
       </header>
@@ -6842,11 +6790,63 @@ export default function Home() {
         </div>
       )}
       {guestHomeView && accountProfile && (
-        <nav className="guest-home-dock" aria-label="Home actions">
+        <nav className="guest-event-nav guest-home-dock" aria-label="Home actions">
           <button type="button" onClick={createNewEvent} aria-label="Create a new event">
             <CalendarPlus size={20} /><span>Create new event</span>
           </button>
         </nav>
+      )}
+      {mode === 'host' && (
+        <div className="host-event-dock">
+          <nav className="guest-event-nav" aria-label="Host navigation">
+            <button type="button" onClick={() => creatingEvent ? setCreatingEvent(false) : navigateBack()} aria-label="Back">
+              <ArrowLeft size={20} /><span>Back</span>
+            </button>
+            <button
+              type="button"
+              disabled={creatingEvent || menu.id === EMPTY_EVENT_ID}
+              onClick={() => window.location.assign(hostPreviewRoute(menu.id, automaticPublicEventPath(menu)))}
+              aria-label="Preview event"
+            >
+              <Eye size={20} /><span>Preview</span>
+            </button>
+            <button type="button" onClick={() => window.location.assign(guestHomeRoute())} aria-label="Home">
+              <House size={20} /><span>Home</span>
+            </button>
+            <button type="button" onClick={openEventChat} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+              <span className="event-nav-icon"><MessageCircle size={20} />
+                {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
+              </span><span>Chat</span>
+            </button>
+            <div className="event-menu-control guest-event-options">
+              <button
+                type="button"
+                className={eventMenuOpen ? 'event-menu-active' : ''}
+                disabled={creatingEvent || menu.id === EMPTY_EVENT_ID}
+                onClick={() => setEventMenuOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={eventMenuOpen}
+                aria-label="Event options"
+              >
+                <MenuIcon size={21} /><span>Options</span>
+              </button>
+              {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!expenseActor}
+                  onClick={() => {
+                    setExpensesOpen(true);
+                    setEventMenuOpen(false);
+                  }}
+                >
+                  <span><DollarSign size={18} /></span>
+                  <div><strong>Expenses</strong><small>Receipts, splits and guest balances</small></div>
+                </button>
+              </div>}
+            </div>
+          </nav>
+        </div>
       )}
       {mode === 'guest' && rsvpPanelOpen && (
         <div className="guest-rsvp-backdrop" role="presentation" onMouseDown={(event) => {
