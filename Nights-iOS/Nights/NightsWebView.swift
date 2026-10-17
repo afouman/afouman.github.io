@@ -52,6 +52,7 @@ struct NightsWebView: UIViewRepresentable {
         webView.scrollView.alwaysBounceHorizontal = false
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isDirectionalLockEnabled = true
+        webView.scrollView.decelerationRate = .normal
         webView.isOpaque = false
         webView.backgroundColor = UIColor(red: 0.024, green: 0.106, blue: 0.165, alpha: 1)
         webView.scrollView.backgroundColor = webView.backgroundColor

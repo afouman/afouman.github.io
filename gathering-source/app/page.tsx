@@ -752,6 +752,7 @@ const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
 const CREATE_EVENT_INTENT_KEY = 'nights-create-event-intent-v1';
 const CREATE_EVENT_RETURN_ROUTE_KEY = 'nights-create-event-return-route-v1';
+const HOST_PREVIEW_RETURN_ROUTE_KEY = 'nights-host-preview-return-route-v1';
 const eventActivityKey = (accountUid: string) => `nights-event-activity-v1:${accountUid}`;
 const eventActivityMarkerKey = (accountUid: string, activityId: string) =>
   `nights-event-activity-seen-v1:${accountUid}:${activityId}`;
@@ -1440,7 +1441,7 @@ export default function Home() {
   const [profileDisplayName, setProfileDisplayName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
-  const [accountBalanceCents, setAccountBalanceCents] = useState(0);
+  const [accountMoney, setAccountMoney] = useState({ balance: 0, owed: 0, owes: 0 });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
@@ -2101,16 +2102,20 @@ export default function Home() {
   const guestEventIdentity = guestEvents.map((access) => access.event.id).sort().join('|');
   useEffect(() => {
     if (accountUser && accountProfile && guestEventIdentity) return;
-    queueMicrotask(() => setAccountBalanceCents(0));
+    queueMicrotask(() => setAccountMoney({ balance: 0, owed: 0, owes: 0 }));
   }, [accountProfile, accountUser, guestEventIdentity]);
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile || !guestEventIdentity) return;
     const stops: Array<() => void> = [];
-    const balancesByEvent = new Map<string, number>();
-    const updateAccountBalance = () => setAccountBalanceCents(
-      [...balancesByEvent.values()].reduce((sum, cents) => sum + cents, 0),
-    );
+    const moneyByEvent = new Map<string, { owed: number; owes: number }>();
+    const updateAccountBalance = () => {
+      const totals = [...moneyByEvent.values()].reduce(
+        (sum, eventMoney) => ({ owed: sum.owed + eventMoney.owed, owes: sum.owes + eventMoney.owes }),
+        { owed: 0, owes: 0 },
+      );
+      setAccountMoney({ ...totals, balance: totals.owed - totals.owes });
+    };
     void (async () => {
       const [{ getApp }, store] = await Promise.all([
         import('firebase/app'), import('firebase/firestore'),
@@ -2210,11 +2215,15 @@ export default function Home() {
               updatedAt: data.updatedAt?.toMillis?.() ?? Date.now(),
             } as EventExpense] as const;
           }));
-          balancesByEvent.set(access.event.id, [...expensesById.values()].reduce((balance, expense) => {
-            const credit = expense.submittedByAccountUid === accountUser.uid ? expenseTotal(expense) : 0;
-            const debit = expenseShares(expense)[accountProfile.guestUid] || 0;
-            return balance + credit - debit;
-          }, 0));
+          moneyByEvent.set(access.event.id, [...expensesById.values()].reduce((eventMoney, expense) => {
+            const shares = expenseShares(expense);
+            const myShare = shares[accountProfile.guestUid] || 0;
+            const submittedByMe = expense.submittedByAccountUid === accountUser.uid
+              || expense.submittedByUid === accountProfile.guestUid;
+            if (submittedByMe) eventMoney.owed += Math.max(0, expenseTotal(expense) - myShare);
+            else eventMoney.owes += myShare;
+            return eventMoney;
+          }, { owed: 0, owes: 0 }));
           updateAccountBalance();
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'removed') return;
@@ -2644,7 +2653,13 @@ export default function Home() {
     if (mode !== 'guest') return;
     let active = true;
     const syncNotificationCounts = () => void readAppBadgeState().then((state) => {
-      if (active) setEventNotificationCounts(state.events);
+      if (active) setEventNotificationCounts((current) => {
+        const next = { ...current };
+        Object.entries(state.events).forEach(([eventId, count]) => {
+          if (count > 0) next[eventId] = Math.max(next[eventId] || 0, count);
+        });
+        return next;
+      });
     });
     const receivePush = (event: MessageEvent<{ type?: string }>) => {
       if (event.data?.type === 'nights-chat-push') syncNotificationCounts();
@@ -3316,6 +3331,15 @@ export default function Home() {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
     const targets = new Map<string, { event: EventMenu; actor: ChatActor }>();
     guestEvents.forEach((access) => {
+      const hosted = Boolean(access.hosted
+        || accountCanManageEvent(access.event, accountUser.uid, accountUser.email));
+      if (hosted) {
+        targets.set(access.event.id, {
+          event: access.event,
+          actor: { uid: accountUser.uid, name: 'Host', role: 'host' },
+        });
+        return;
+      }
       if (
         access.rsvp?.status === 'yes'
         && guestIsApproved(access.event, access.rsvp)
@@ -3344,6 +3368,49 @@ export default function Home() {
       targets.set(menu.id, { event: menu, actor: chatActor });
     return [...targets.values()];
   }, [accountProfile, accountUser, chatActor, events, guestEvents, menu]);
+  const chatUnreadTargetIdentity = notificationTargets
+    .map(({ event, actor }) => `${event.id}:${actor.uid}`)
+    .sort()
+    .join('|');
+  useEffect(() => {
+    if (!firebaseConfigured || !accountUser || !chatUnreadTargetIdentity) {
+      queueMicrotask(() => setEventNotificationCounts({}));
+      return;
+    }
+    const stops: Array<() => void> = [];
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([
+        import('firebase/app'), import('firebase/firestore'),
+      ]);
+      const db = store.getFirestore(getApp());
+      notificationTargets.forEach(({ event, actor }) => {
+        const query = store.query(
+          store.collection(db, 'events', event.id, 'chat'),
+          store.orderBy('createdAt', 'asc'),
+        );
+        stops.push(store.onSnapshot(query, (snapshot) => {
+          const messages = snapshot.docs.map((document) => ({
+            id: document.id,
+            ...document.data(),
+          } as ChatMessage));
+          const lastReadId = localStorage.getItem(`gather-chat-read:${event.id}:${actor.uid}`);
+          const lastReadIndex = lastReadId
+            ? messages.findIndex((message) => message.id === lastReadId)
+            : -1;
+          const unread = messages
+            .slice(lastReadIndex + 1)
+            .filter((message) => message.authorUid !== actor.uid && !message.deleted)
+            .length;
+          setEventNotificationCounts((current) => current[event.id] === unread
+            ? current
+            : { ...current, [event.id]: unread });
+        }, () => undefined));
+      });
+    })();
+    return () => stops.forEach((stop) => stop());
+  // The identity string keeps listeners stable while event objects receive live updates.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountUser, chatUnreadTargetIdentity]);
   const currentEventMuted = Boolean(accountProfile?.mutedEventIds.includes(menu.id));
   const pushActorUid = chatActorUid;
   useEffect(() => {
@@ -6105,9 +6172,19 @@ export default function Home() {
 
   const guestEventView = mode === 'guest' && menu.id !== EMPTY_EVENT_ID;
   const guestHomeView = mode === 'guest' && menu.id === EMPTY_EVENT_ID;
+  const openHostPreview = () => {
+    sessionStorage.setItem(
+      HOST_PREVIEW_RETURN_ROUTE_KEY,
+      `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    );
+    window.location.replace(hostPreviewRoute(menu.id, automaticPublicEventPath(menu)));
+  };
   const navigateBack = () => {
     if (hostPreview) {
-      window.location.assign(eventRoute(menu.id, 'host', automaticPublicEventPath(menu)));
+      const returnRoute = sessionStorage.getItem(HOST_PREVIEW_RETURN_ROUTE_KEY)
+        || eventRoute(menu.id, 'host', automaticPublicEventPath(menu));
+      sessionStorage.removeItem(HOST_PREVIEW_RETURN_ROUTE_KEY);
+      window.location.replace(returnRoute);
       return;
     }
     if (window.history.length > 1) {
@@ -6310,6 +6387,7 @@ export default function Home() {
           setEditing={setEditing}
           setMenu={setMenu}
           selectEvent={selectHostEvent}
+          onPreview={openHostPreview}
           setCreatingEvent={setCreatingEvent}
           setDeletingEvent={setDeletingEvent}
           saveMenu={saveMenu}
@@ -6360,8 +6438,12 @@ export default function Home() {
               <div>
                 <strong>{accountProfile ? accountDisplayName(accountProfile) : 'Account setup'}</strong>
                 <small>{accountUser.email}</small>
-                <span className={`profile-balance ${accountBalanceCents < 0 ? 'negative' : accountBalanceCents > 0 ? 'positive' : ''}`}>
-                  <span>Balance</span><b>{formatBalance(accountBalanceCents)}</b>
+                <span className="profile-money-summary">
+                  <span className={`profile-balance ${accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}`}>
+                    <span>Balance</span><b>{formatBalance(accountMoney.balance)}</b>
+                  </span>
+                  <span className="profile-balance positive"><span>Owed to you</span><b>{formatCents(accountMoney.owed)}</b></span>
+                  <span className="profile-balance negative"><span>You owe</span><b>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</b></span>
                 </span>
               </div>
               <Pencil size={14} aria-hidden="true" />
@@ -6429,10 +6511,11 @@ export default function Home() {
             <p className="eyebrow">Your Nights identity</p>
             <h2 id="profile-editor-title" className="font-display">Edit profile</h2>
             <p>Your display name is what guests see. Your legal name is not required.</p>
-            <section className={`profile-editor-balance ${accountBalanceCents < 0 ? 'negative' : accountBalanceCents > 0 ? 'positive' : ''}`} aria-label="Expense balance">
+            <section className="profile-editor-balance" aria-label="Expense balances">
               <span><DollarSign size={17} /></span>
-              <div><small>Expense balance</small><strong>{formatBalance(accountBalanceCents)}</strong></div>
-              <p>{accountBalanceCents < 0 ? 'Your share still owed' : accountBalanceCents > 0 ? 'Other guests owe you' : 'You’re settled up'}</p>
+              <div className={accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}><small>My balance</small><strong>{formatBalance(accountMoney.balance)}</strong></div>
+              <div className="positive"><small>Owed to me</small><strong>{formatCents(accountMoney.owed)}</strong></div>
+              <div className="negative"><small>I owe</small><strong>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</strong></div>
             </section>
             <div className="profile-editor-name-grid">
               <label className="field-label">First name<input className="field-input" value={profileFirstName} onChange={(event) => setProfileFirstName(event.target.value)} /></label>
@@ -7087,7 +7170,7 @@ export default function Home() {
             <button
               type="button"
               disabled={creatingEvent || menu.id === EMPTY_EVENT_ID}
-              onClick={() => window.location.assign(hostPreviewRoute(menu.id, automaticPublicEventPath(menu)))}
+              onClick={openHostPreview}
               aria-label="Preview event"
             >
               <Eye size={20} /><span>Preview</span>
@@ -7781,7 +7864,7 @@ function GuestMenu({
     : EVENT_MOBILE_BACKGROUNDS[menu.eventType || 'meal'];
   const backgroundZoom = eventBackgroundZoom(menu);
   return (
-    <div className="guest-experience has-event-dock">
+    <div className={`guest-experience has-event-dock ${hasMenu ? 'has-menu' : 'invitation-only'}`}>
       <section className="guest-hero">
         <div
           className={`guest-hero-photo ${menu.backgroundImageUrl ? 'custom-background' : 'curated-background'}`}
@@ -9306,6 +9389,7 @@ function HostWorkspace({
   setEditing,
   setMenu,
   selectEvent,
+  onPreview,
   setCreatingEvent,
   setDeletingEvent,
   saveMenu,
@@ -9339,6 +9423,7 @@ function HostWorkspace({
   setEditing: (value: boolean) => void;
   setMenu: (menu: EventMenu) => void;
   selectEvent: (event: EventMenu) => void;
+  onPreview: () => void;
   setCreatingEvent: (value: boolean) => void;
   setDeletingEvent: (event: EventMenu | null) => void;
   saveMenu: () => Promise<void>;
@@ -9468,10 +9553,10 @@ function HostWorkspace({
                 </div>
               </div>
               <div className="host-actions">
-                <a href={hostPreviewRoute(menu.id, automaticPublicEventPath(menu))}>
+                <button type="button" onClick={onPreview}>
                   <ExternalLink size={16} />
                   <span>Preview</span>
-                </a>
+                </button>
                 <button
                   onClick={() => setInviteOpen(true)}
                   className="invite"
