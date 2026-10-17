@@ -2051,6 +2051,11 @@ button:disabled {
 .profile-menu-identity > svg { flex: none; color: rgb(23 54 59 / 0.46); }
 .profile-menu-identity strong { font-size: 0.78rem; }
 .profile-menu-identity small { overflow: hidden; color: rgb(23 54 59 / 0.52); font-size: 0.64rem; text-overflow: ellipsis; }
+.profile-balance { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; margin-top: 0.35rem; border-top: 1px solid rgb(18 59 66 / 0.08); padding-top: 0.35rem; color: #53666a; }
+.profile-balance > span { font-size: 0.58rem; font-weight: 850; letter-spacing: 0.06em; text-transform: uppercase; }
+.profile-balance > b { color: #344e52; font-size: 0.75rem; font-weight: 900; }
+.profile-balance.positive > b { color: #137562; }
+.profile-balance.negative > b { color: #b2383d; }
 .profile-menu-action,
 .profile-menu-delete { display: flex; align-items: center; gap: 0.7rem; width: 100%; border: 0; border-top: 1px solid rgb(18 59 66 / 0.08); border-radius: 0.75rem; background: transparent; padding: 0.72rem; color: #17363b; text-align: left; }
 .profile-menu-action:hover { background: #edf8f4; }
@@ -2063,6 +2068,16 @@ button:disabled {
 .profile-menu-action small,
 .profile-menu-delete small { color: rgb(152 54 57 / 0.58); font-size: 0.61rem; }
 .profile-menu-action small { color: rgb(23 54 59 / 0.52); }
+.profile-editor-balance { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 0.75rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 1rem; background: #f2f8f5; padding: 0.8rem 0.9rem; }
+.profile-editor-balance > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 50%; background: #dcefe9; color: #176d64; }
+.profile-editor-balance > div { display: grid; gap: 0.08rem; }
+.profile-editor-balance small { color: rgb(23 54 59 / 0.52); font-size: 0.59rem; font-weight: 850; letter-spacing: 0.06em; text-transform: uppercase; }
+.profile-editor-balance strong { color: #344e52; font-size: 1rem; font-weight: 900; }
+.profile-editor-balance > p { margin: 0; color: rgb(23 54 59 / 0.56); font-size: 0.64rem; text-align: right; }
+.profile-editor-balance.positive strong { color: #137562; }
+.profile-editor-balance.negative { border-color: rgb(178 56 61 / 0.16); background: #fff3f1; }
+.profile-editor-balance.negative > span { background: #f9dcd7; color: #a52f35; }
+.profile-editor-balance.negative strong { color: #b2383d; }
 .profile-editor-dialog { width: min(560px, calc(100vw - 2rem)); }
 .profile-editor-dialog .field-label { margin-top: 0.8rem; }
 .profile-editor-name-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
@@ -3997,6 +4012,8 @@ button:disabled {
     scroll-snap-align: start;
   }
   .profile-editor-name-grid { grid-template-columns: 1fr; gap: 0; }
+  .profile-editor-balance { grid-template-columns: 38px minmax(0, 1fr); }
+  .profile-editor-balance > p { grid-column: 2; text-align: left; }
   .guest-event-meta {
     align-items: flex-start;
     flex-direction: column;
@@ -5902,6 +5919,24 @@ button:disabled {
 
 /* Shared app chrome: the header and action dock are viewport controls. They
    never participate in document scrolling, regardless of the active view. */
+html.native-ios-shell,
+body.native-ios-shell {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.app-root.native-ios-app {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0 !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
 .app-header,
 .guest-mode .app-header,
 .host-mode .app-header {

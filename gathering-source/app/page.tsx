@@ -523,6 +523,9 @@ type Receipt = {
 const expensePreviewKey = (eventId: string) => `gather-demo-expenses:${eventId}`;
 const money = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const formatCents = (cents: number) => money.format(Math.max(0, cents) / 100);
+const formatBalance = (cents: number) => cents < 0
+  ? `-${money.format(Math.abs(cents) / 100)}`
+  : money.format(cents / 100);
 const parseMoneyCents = (value: string) => {
   const amount = Number(value.replace(/[^0-9.]/g, ''));
   return Number.isFinite(amount) && amount >= 0 ? Math.round(amount * 100) : 0;
@@ -1437,6 +1440,7 @@ export default function Home() {
   const [profileDisplayName, setProfileDisplayName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
+  const [accountBalanceCents, setAccountBalanceCents] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
@@ -2096,8 +2100,17 @@ export default function Home() {
 
   const guestEventIdentity = guestEvents.map((access) => access.event.id).sort().join('|');
   useEffect(() => {
+    if (accountUser && accountProfile && guestEventIdentity) return;
+    queueMicrotask(() => setAccountBalanceCents(0));
+  }, [accountProfile, accountUser, guestEventIdentity]);
+
+  useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile || !guestEventIdentity) return;
     const stops: Array<() => void> = [];
+    const balancesByEvent = new Map<string, number>();
+    const updateAccountBalance = () => setAccountBalanceCents(
+      [...balancesByEvent.values()].reduce((sum, cents) => sum + cents, 0),
+    );
     void (async () => {
       const [{ getApp }, store] = await Promise.all([
         import('firebase/app'), import('firebase/firestore'),
@@ -2188,15 +2201,25 @@ export default function Home() {
           () => undefined,
         ));
         stops.push(store.onSnapshot(store.collection(db, 'events', access.event.id, 'expenses'), (snapshot) => {
-          snapshot.docChanges().forEach((change) => {
-            if (change.type === 'removed') return;
-            const data = change.doc.data();
-            const expense = {
+          const expensesById = new Map(snapshot.docs.map((document) => {
+            const data = document.data();
+            return [document.id, {
               ...data,
-              id: change.doc.id,
+              id: document.id,
               createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
               updatedAt: data.updatedAt?.toMillis?.() ?? Date.now(),
-            } as EventExpense;
+            } as EventExpense] as const;
+          }));
+          balancesByEvent.set(access.event.id, [...expensesById.values()].reduce((balance, expense) => {
+            const credit = expense.submittedByAccountUid === accountUser.uid ? expenseTotal(expense) : 0;
+            const debit = expenseShares(expense)[accountProfile.guestUid] || 0;
+            return balance + credit - debit;
+          }, 0));
+          updateAccountBalance();
+          snapshot.docChanges().forEach((change) => {
+            if (change.type === 'removed') return;
+            const expense = expensesById.get(change.doc.id);
+            if (!expense) return;
             const share = expenseShares(expense)[accountProfile.guestUid] || 0;
             if (share <= 0) return;
             addEventActivity({
@@ -2577,6 +2600,8 @@ export default function Home() {
 
   useEffect(() => {
     const nativeIOSApp = navigator.userAgent.includes('Nights-iOS/');
+    document.documentElement.classList.toggle('native-ios-shell', nativeIOSApp);
+    document.body.classList.toggle('native-ios-shell', nativeIOSApp);
     const installed =
       window.matchMedia('(display-mode: standalone)').matches ||
       Boolean((navigator as Navigator & { standalone?: boolean }).standalone) ||
@@ -2609,6 +2634,10 @@ export default function Home() {
         })
         .catch(() => undefined);
     }
+    return () => {
+      document.documentElement.classList.remove('native-ios-shell');
+      document.body.classList.remove('native-ios-shell');
+    };
   }, [mode]);
 
   useEffect(() => {
@@ -6331,6 +6360,9 @@ export default function Home() {
               <div>
                 <strong>{accountProfile ? accountDisplayName(accountProfile) : 'Account setup'}</strong>
                 <small>{accountUser.email}</small>
+                <span className={`profile-balance ${accountBalanceCents < 0 ? 'negative' : accountBalanceCents > 0 ? 'positive' : ''}`}>
+                  <span>Balance</span><b>{formatBalance(accountBalanceCents)}</b>
+                </span>
               </div>
               <Pencil size={14} aria-hidden="true" />
             </button>
@@ -6397,6 +6429,11 @@ export default function Home() {
             <p className="eyebrow">Your Nights identity</p>
             <h2 id="profile-editor-title" className="font-display">Edit profile</h2>
             <p>Your display name is what guests see. Your legal name is not required.</p>
+            <section className={`profile-editor-balance ${accountBalanceCents < 0 ? 'negative' : accountBalanceCents > 0 ? 'positive' : ''}`} aria-label="Expense balance">
+              <span><DollarSign size={17} /></span>
+              <div><small>Expense balance</small><strong>{formatBalance(accountBalanceCents)}</strong></div>
+              <p>{accountBalanceCents < 0 ? 'Your share still owed' : accountBalanceCents > 0 ? 'Other guests owe you' : 'You’re settled up'}</p>
+            </section>
             <div className="profile-editor-name-grid">
               <label className="field-label">First name<input className="field-input" value={profileFirstName} onChange={(event) => setProfileFirstName(event.target.value)} /></label>
               <label className="field-label">Last name<input className="field-input" value={profileLastName} onChange={(event) => setProfileLastName(event.target.value)} /></label>
