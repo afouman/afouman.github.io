@@ -737,6 +737,7 @@ const PENDING_GUEST_EVENT_KEY = 'nights-pending-guest-event-v1';
 const TRUSTED_GUEST_ROUTE_KEY = 'nights-selected-guest-route-v1';
 const LAST_EVENT_KEY = 'gather-last-event';
 const CREATE_EVENT_INTENT_KEY = 'nights-create-event-intent-v1';
+const CREATE_EVENT_RETURN_ROUTE_KEY = 'nights-create-event-return-route-v1';
 const APP_BADGE_CACHE = 'nights-chat-badge-v1';
 const APP_BADGE_STATE_PATH = '/__nights_chat_badge_state__';
 type AppBadgeState = { events: Record<string, number> };
@@ -4661,6 +4662,7 @@ export default function Home() {
     setMenu(event);
     setOrders([]);
     setEditing(true);
+    sessionStorage.removeItem(CREATE_EVENT_RETURN_ROUTE_KEY);
     setCreatingEvent(false);
     setNewEvent({
       title: '',
@@ -5889,13 +5891,25 @@ export default function Home() {
   };
   const navigateHome = () => {
     sessionStorage.removeItem(CREATE_EVENT_INTENT_KEY);
+    sessionStorage.removeItem(CREATE_EVENT_RETURN_ROUTE_KEY);
     window.location.assign(hostPreview
       ? eventRoute(menu.id, 'host', automaticPublicEventPath(menu))
       : guestHomeRoute());
   };
   const createNewEvent = () => {
     sessionStorage.setItem(CREATE_EVENT_INTENT_KEY, '1');
+    sessionStorage.setItem(
+      CREATE_EVENT_RETURN_ROUTE_KEY,
+      `${window.location.pathname}${window.location.search}${window.location.hash}`,
+    );
     window.location.assign(newEventHostRoute());
+  };
+  const cancelCreatingEvent = () => {
+    const returnRoute = sessionStorage.getItem(CREATE_EVENT_RETURN_ROUTE_KEY);
+    sessionStorage.removeItem(CREATE_EVENT_INTENT_KEY);
+    sessionStorage.removeItem(CREATE_EVENT_RETURN_ROUTE_KEY);
+    setCreatingEvent(false);
+    if (returnRoute) window.location.replace(returnRoute);
   };
   const openEventChat = () => {
     if (!chatActor) {
@@ -6361,7 +6375,7 @@ export default function Home() {
               </div>
               <div className="new-event-dialog-actions">
                 <button
-                  onClick={() => setCreatingEvent(false)}
+                  onClick={cancelCreatingEvent}
                   className="icon-button"
                   aria-label="Close new event"
                 >
@@ -6799,7 +6813,7 @@ export default function Home() {
       {mode === 'host' && (
         <div className="host-event-dock">
           <nav className="guest-event-nav" aria-label="Host navigation">
-            <button type="button" onClick={() => creatingEvent ? setCreatingEvent(false) : navigateBack()} aria-label="Back">
+            <button type="button" onClick={() => creatingEvent ? cancelCreatingEvent() : navigateBack()} aria-label="Back">
               <ArrowLeft size={20} /><span>Back</span>
             </button>
             <button
@@ -6881,15 +6895,16 @@ export default function Home() {
             ) : (
               <div className="guest-rsvp-panel">
                 <div className="guest-rsvp-heading">
-                  <div><p className="eyebrow">Your response</p><h2 className="font-display">RSVP for {menu.title}</h2></div>
-                  {myRsvp && <span className={`rsvp-status ${menu.requireGuestApproval && myRsvp.status === 'yes' ? `approval-${approvalStatus(myRsvp)}` : `rsvp-${myRsvp.status}`}`}>{menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) !== 'approved' ? (approvalStatus(myRsvp) === 'pending' ? 'Pending approval' : 'Not approved') : myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+                  <div>
+                    <p className="eyebrow">Your response</p>
+                    <div className="guest-rsvp-title-line">
+                      <h2 className="font-display">RSVP for {menu.title}</h2>
+                      {myRsvp && <span className={`rsvp-status ${menu.requireGuestApproval && myRsvp.status === 'yes' ? `approval-${approvalStatus(myRsvp)}` : `rsvp-${myRsvp.status}`}`}>{menu.requireGuestApproval && myRsvp.status === 'yes' && approvalStatus(myRsvp) !== 'approved' ? (approvalStatus(myRsvp) === 'pending' ? 'Pending approval' : 'Not approved') : myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not going'}</span>}
+                    </div>
+                  </div>
                 </div>
                 <div className="guest-profile-summary">
                   <div><strong>{effectiveGuestProfile.guestName}</strong><span>{formatPhone(effectiveGuestProfile.guestPhone)}</span></div>
-                  <div><button type="button" onClick={() => {
-                    closeRsvpPanel();
-                    openAccountProfileEditor();
-                  }}>Edit profile</button><button type="button" onClick={clearGuestAccess}>Sign out</button></div>
                 </div>
                 <p className="guest-rsvp-explainer">{menu.requireGuestApproval ? 'Going responses need host approval. Maybe and Not going are saved immediately; only approved Going guests can chat or order.' : 'Choose Going to place orders. You can still update your RSVP when ordering is closed.'}</p>
                 <div className="guest-rsvp-form rsvp-only-form">
@@ -9063,7 +9078,10 @@ function HostWorkspace({
             <p>Your live command center for every table.</p>
           </div>
           <button
-            onClick={() => setCreatingEvent(true)}
+            onClick={() => {
+              sessionStorage.removeItem(CREATE_EVENT_RETURN_ROUTE_KEY);
+              setCreatingEvent(true);
+            }}
             className="host-new-event"
           >
             <CalendarPlus size={17} /> New event
