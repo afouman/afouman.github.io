@@ -48,6 +48,7 @@ import {
   Reply,
   Send,
   Settings2,
+  SlidersHorizontal,
   Share2,
   ShoppingBag,
   Smile,
@@ -255,6 +256,23 @@ type EventExpense = {
   receiptName?: string;
   createdAt: number;
   updatedAt?: number;
+};
+type MoneyDetail = {
+  id: string;
+  direction: 'owed' | 'owes';
+  eventId: string;
+  eventTitle: string;
+  personId: string;
+  personName: string;
+  amountCents: number;
+  expenseTitles: string[];
+};
+type AccountMoney = {
+  balance: number;
+  owed: number;
+  owes: number;
+  owedDetails: MoneyDetail[];
+  owesDetails: MoneyDetail[];
 };
 type ExpenseActor = {
   accountUid: string;
@@ -572,6 +590,21 @@ const expenseTotal = (expense: Pick<EventExpense, 'items' | 'taxCents' | 'feesCe
   expense.items.reduce((sum, item) => sum + Math.max(0, item.amountCents), 0)
   + Math.max(0, expense.taxCents)
   + Math.max(0, expense.feesCents);
+const emptyAccountMoney = (): AccountMoney => ({ balance: 0, owed: 0, owes: 0, owedDetails: [], owesDetails: [] });
+const groupMoneyDetails = (details: MoneyDetail[]) => {
+  const grouped = new Map<string, MoneyDetail>();
+  details.forEach((detail) => {
+    const key = `${detail.direction}:${detail.eventId}:${detail.personId}`;
+    const current = grouped.get(key);
+    if (current) {
+      current.amountCents += detail.amountCents;
+      current.expenseTitles = [...new Set([...current.expenseTitles, ...detail.expenseTitles])];
+    } else grouped.set(key, { ...detail, expenseTitles: [...detail.expenseTitles] });
+  });
+  return [...grouped.values()].sort((a, b) => b.amountCents - a.amountCents
+    || a.eventTitle.localeCompare(b.eventTitle)
+    || a.personName.localeCompare(b.personName));
+};
 type ModelContext = {
   registerTool: (
     tool: {
@@ -1441,7 +1474,8 @@ export default function Home() {
   const [profileDisplayName, setProfileDisplayName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
   const [profileEmail, setProfileEmail] = useState('');
-  const [accountMoney, setAccountMoney] = useState({ balance: 0, owed: 0, owes: 0 });
+  const [accountMoney, setAccountMoney] = useState<AccountMoney>(emptyAccountMoney);
+  const [moneyDetailsOpen, setMoneyDetailsOpen] = useState<'owed' | 'owes' | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
@@ -2102,19 +2136,19 @@ export default function Home() {
   const guestEventIdentity = guestEvents.map((access) => access.event.id).sort().join('|');
   useEffect(() => {
     if (accountUser && accountProfile && guestEventIdentity) return;
-    queueMicrotask(() => setAccountMoney({ balance: 0, owed: 0, owes: 0 }));
+    queueMicrotask(() => setAccountMoney(emptyAccountMoney()));
   }, [accountProfile, accountUser, guestEventIdentity]);
 
   useEffect(() => {
     if (!firebaseConfigured || !accountUser || !accountProfile || !guestEventIdentity) return;
     const stops: Array<() => void> = [];
-    const moneyByEvent = new Map<string, { owed: number; owes: number }>();
+    const moneyByEvent = new Map<string, { owedDetails: MoneyDetail[]; owesDetails: MoneyDetail[] }>();
     const updateAccountBalance = () => {
-      const totals = [...moneyByEvent.values()].reduce(
-        (sum, eventMoney) => ({ owed: sum.owed + eventMoney.owed, owes: sum.owes + eventMoney.owes }),
-        { owed: 0, owes: 0 },
-      );
-      setAccountMoney({ ...totals, balance: totals.owed - totals.owes });
+      const owedDetails = groupMoneyDetails([...moneyByEvent.values()].flatMap((eventMoney) => eventMoney.owedDetails));
+      const owesDetails = groupMoneyDetails([...moneyByEvent.values()].flatMap((eventMoney) => eventMoney.owesDetails));
+      const owed = owedDetails.reduce((sum, detail) => sum + detail.amountCents, 0);
+      const owes = owesDetails.reduce((sum, detail) => sum + detail.amountCents, 0);
+      setAccountMoney({ balance: owed - owes, owed, owes, owedDetails, owesDetails });
     };
     void (async () => {
       const [{ getApp }, store] = await Promise.all([
@@ -2220,10 +2254,32 @@ export default function Home() {
             const myShare = shares[accountProfile.guestUid] || 0;
             const submittedByMe = expense.submittedByAccountUid === accountUser.uid
               || expense.submittedByUid === accountProfile.guestUid;
-            if (submittedByMe) eventMoney.owed += Math.max(0, expenseTotal(expense) - myShare);
-            else eventMoney.owes += myShare;
+            if (submittedByMe) Object.entries(shares).forEach(([participantUid, amountCents]) => {
+              if (participantUid === accountProfile.guestUid || amountCents <= 0) return;
+              const participant = expense.participants?.find((entry) => entry.id === participantUid);
+              eventMoney.owedDetails.push({
+                id: `${access.event.id}:${expense.id}:${participantUid}`,
+                direction: 'owed',
+                eventId: access.event.id,
+                eventTitle: access.event.title,
+                personId: participantUid,
+                personName: participant?.name || 'Guest',
+                amountCents,
+                expenseTitles: [expense.title],
+              });
+            });
+            else if (myShare > 0) eventMoney.owesDetails.push({
+              id: `${access.event.id}:${expense.id}:${expense.submittedByUid || expense.submittedByAccountUid}`,
+              direction: 'owes',
+              eventId: access.event.id,
+              eventTitle: access.event.title,
+              personId: expense.submittedByUid || expense.submittedByAccountUid || 'organizer',
+              personName: expense.submittedByName || 'Event organizer',
+              amountCents: myShare,
+              expenseTitles: [expense.title],
+            });
             return eventMoney;
-          }, { owed: 0, owes: 0 }));
+          }, { owedDetails: [], owesDetails: [] } as { owedDetails: MoneyDetail[]; owesDetails: MoneyDetail[] }));
           updateAccountBalance();
           snapshot.docChanges().forEach((change) => {
             if (change.type === 'removed') return;
@@ -6438,16 +6494,20 @@ export default function Home() {
               <div>
                 <strong>{accountProfile ? accountDisplayName(accountProfile) : 'Account setup'}</strong>
                 <small>{accountUser.email}</small>
-                <span className="profile-money-summary">
-                  <span className={`profile-balance ${accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}`}>
-                    <span>Balance</span><b>{formatBalance(accountMoney.balance)}</b>
-                  </span>
-                  <span className="profile-balance positive"><span>Owed to you</span><b>{formatCents(accountMoney.owed)}</b></span>
-                  <span className="profile-balance negative"><span>You owe</span><b>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</b></span>
-                </span>
               </div>
               <Pencil size={14} aria-hidden="true" />
             </button>
+            <section className="profile-money-summary profile-menu-money" aria-label="Expense balances">
+              <span className={`profile-balance ${accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}`}>
+                <span>Balance</span><b>{formatBalance(accountMoney.balance)}</b>
+              </span>
+              <button type="button" className="profile-balance positive" onClick={() => { setProfileMenuOpen(false); setMoneyDetailsOpen('owed'); }}>
+                <span>Owed to you</span><b>{formatCents(accountMoney.owed)}</b><ChevronRight size={13} />
+              </button>
+              <button type="button" className="profile-balance negative" onClick={() => { setProfileMenuOpen(false); setMoneyDetailsOpen('owes'); }}>
+                <span>You owe</span><b>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</b><ChevronRight size={13} />
+              </button>
+            </section>
             <button type="button" className="profile-menu-action" onClick={() => {
               setProfileMenuOpen(false);
               setSettingsOpen(true);
@@ -6514,8 +6574,8 @@ export default function Home() {
             <section className="profile-editor-balance" aria-label="Expense balances">
               <span><DollarSign size={17} /></span>
               <div className={accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}><small>My balance</small><strong>{formatBalance(accountMoney.balance)}</strong></div>
-              <div className="positive"><small>Owed to me</small><strong>{formatCents(accountMoney.owed)}</strong></div>
-              <div className="negative"><small>I owe</small><strong>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</strong></div>
+              <button type="button" className="positive" onClick={() => setMoneyDetailsOpen('owed')}><small>Owed to me</small><strong>{formatCents(accountMoney.owed)}</strong><ChevronRight size={14} /></button>
+              <button type="button" className="negative" onClick={() => setMoneyDetailsOpen('owes')}><small>I owe</small><strong>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</strong><ChevronRight size={14} /></button>
             </section>
             <div className="profile-editor-name-grid">
               <label className="field-label">First name<input className="field-input" value={profileFirstName} onChange={(event) => setProfileFirstName(event.target.value)} /></label>
@@ -6530,6 +6590,39 @@ export default function Home() {
             <div className="delete-account-actions">
               <button type="button" onClick={() => setProfileEditorOpen(false)} disabled={profileEditorBusy}>Cancel</button>
               <button type="button" className="primary-button" onClick={() => void saveAccountProfileEdits()} disabled={profileEditorBusy}>{profileEditorBusy ? 'Saving…' : 'Save changes'}</button>
+            </div>
+          </dialog>
+        </div>
+      )}
+
+      {moneyDetailsOpen && (
+        <div className="money-details-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setMoneyDetailsOpen(null);
+        }}>
+          <dialog open className="money-details-dialog" aria-labelledby="money-details-title">
+            <header>
+              <div>
+                <p className="eyebrow">Expense breakdown</p>
+                <h2 id="money-details-title" className="font-display">{moneyDetailsOpen === 'owed' ? 'Owed to me' : 'I owe'}</h2>
+                <span>{moneyDetailsOpen === 'owed' ? formatCents(accountMoney.owed) : formatCents(accountMoney.owes)} total</span>
+              </div>
+              <button type="button" onClick={() => setMoneyDetailsOpen(null)} aria-label="Close balance details"><XCircle size={21} /></button>
+            </header>
+            <div className="money-details-list">
+              {(moneyDetailsOpen === 'owed' ? accountMoney.owedDetails : accountMoney.owesDetails).map((detail) => (
+                <article key={`${detail.direction}:${detail.eventId}:${detail.personId}`}>
+                  <span>{detail.personName.trim().slice(0, 1).toUpperCase() || '?'}</span>
+                  <div>
+                    <strong>{detail.personName}</strong>
+                    <small><CalendarPlus size={12} />{detail.eventTitle}</small>
+                    <p>{detail.expenseTitles.join(' · ')}</p>
+                  </div>
+                  <b>{formatCents(detail.amountCents)}</b>
+                </article>
+              ))}
+              {!(moneyDetailsOpen === 'owed' ? accountMoney.owedDetails : accountMoney.owesDetails).length && (
+                <div className="money-details-empty"><DollarSign size={25} /><strong>Nothing here yet</strong><span>Expense shares will appear here by person and event.</span></div>
+              )}
             </div>
           </dialog>
         </div>
@@ -7688,7 +7781,9 @@ function GuestAccessPortal({
   const [dateOrder, setDateOrder] = useState<'asc' | 'desc'>('asc');
   const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past'>('all');
   const [ownershipScope, setOwnershipScope] = useState<'all' | 'hosting' | 'invited'>('all');
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
+  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (ownershipScope === 'all' ? 0 : 1);
   const visibleEvents = useMemo(() => {
     const eventTime = (access: GuestEventAccess) => {
       const parsed = Date.parse(access.event.startsAt || access.event.date || '');
@@ -7718,10 +7813,22 @@ function GuestAccessPortal({
         <div className="guest-access-events">
           <div className="guest-access-signed-in">
             <span>Welcome, <strong>{accountDisplayName(profile)}</strong></span>
-            <div className="guest-event-filters" aria-label="Filter and sort events">
-              <label><span>Sort</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Date ↑</option><option value="desc">Date ↓</option></select></label>
-              <label><span>Date</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past')}><option value="all">All dates</option><option value="upcoming">Upcoming</option><option value="past">Past</option></select></label>
-              <label><span>Events</span><select value={ownershipScope} onChange={(event) => setOwnershipScope(event.target.value as 'all' | 'hosting' | 'invited')}><option value="all">All events</option><option value="hosting">My events</option><option value="invited">Invited</option></select></label>
+            <div className="guest-filter-control">
+              <button type="button" className={`guest-filter-button ${activeFilterCount ? 'active' : ''}`} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen} aria-controls="guest-event-filter-popover">
+                <SlidersHorizontal size={16} /><span>Filter</span>{activeFilterCount > 0 && <b>{activeFilterCount}</b>}
+              </button>
+              {filtersOpen && <>
+                <button type="button" className="guest-filter-scrim" onClick={() => setFiltersOpen(false)} aria-label="Close event filters" />
+                <section id="guest-event-filter-popover" className="guest-event-filter-popover" aria-label="Filter and sort events">
+                  <header><div><strong>Filter events</strong><small>Choose what appears on your home screen.</small></div><button type="button" onClick={() => setFiltersOpen(false)} aria-label="Close event filters"><XCircle size={18} /></button></header>
+                  <div className="guest-event-filters">
+                    <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
+                    <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option></select></label>
+                    <label><span>Relationship</span><select value={ownershipScope} onChange={(event) => setOwnershipScope(event.target.value as 'all' | 'hosting' | 'invited')}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option></select></label>
+                  </div>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setOwnershipScope('all'); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                </section>
+              </>}
             </div>
           </div>
           {events.length ? (
