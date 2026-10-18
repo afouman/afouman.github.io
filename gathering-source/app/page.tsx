@@ -7217,9 +7217,11 @@ export default function Home() {
                 onClick={() => setEventMenuOpen((open) => !open)}
                 aria-haspopup="menu"
                 aria-expanded={eventMenuOpen}
-                aria-label="Event options"
+                aria-label={`Event options${activityUnreadCounts[menu.id] ? `, ${activityUnreadCounts[menu.id]} unread notification${activityUnreadCounts[menu.id] === 1 ? '' : 's'}` : ''}`}
               >
-                <MenuIcon size={21} /><span>Options</span>
+                <span className="event-nav-icon"><MenuIcon size={21} />
+                  {activityUnreadCounts[menu.id] > 0 && <b>{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
+                </span><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
                 <button type="button" role="menuitem" onClick={openActivityCenter}>
@@ -7284,9 +7286,11 @@ export default function Home() {
                 onClick={() => setEventMenuOpen((open) => !open)}
                 aria-haspopup="menu"
                 aria-expanded={eventMenuOpen}
-                aria-label="Event options"
+                aria-label={`Event options${activityUnreadCounts[menu.id] ? `, ${activityUnreadCounts[menu.id]} unread notification${activityUnreadCounts[menu.id] === 1 ? '' : 's'}` : ''}`}
               >
-                <MenuIcon size={21} /><span>Options</span>
+                <span className="event-nav-icon"><MenuIcon size={21} />
+                  {activityUnreadCounts[menu.id] > 0 && <b>{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
+                </span><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
                 <button type="button" role="menuitem" onClick={openActivityCenter}>
