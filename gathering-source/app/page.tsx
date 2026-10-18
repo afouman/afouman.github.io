@@ -7788,6 +7788,21 @@ function GuestAccessPortal({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
   const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (ownershipScope === 'all' ? 0 : 1);
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    const previousAppOverflow = appScroller?.style.overflow || '';
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    if (appScroller) appScroller.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+      if (appScroller) appScroller.style.overflow = previousAppOverflow;
+    };
+  }, [filtersOpen]);
   const visibleEvents = useMemo(() => {
     const eventTime = (access: GuestEventAccess) => {
       const parsed = Date.parse(access.event.startsAt || access.event.date || '');
@@ -7821,9 +7836,11 @@ function GuestAccessPortal({
               <button type="button" className={`guest-filter-button ${activeFilterCount ? 'active' : ''}`} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen} aria-controls="guest-event-filter-popover">
                 <SlidersHorizontal size={16} /><span>Filter</span>{activeFilterCount > 0 && <b>{activeFilterCount}</b>}
               </button>
-              {filtersOpen && <>
-                <button type="button" className="guest-filter-scrim" onClick={() => setFiltersOpen(false)} aria-label="Close event filters" />
-                <section id="guest-event-filter-popover" className="guest-event-filter-popover" aria-label="Filter and sort events">
+              {filtersOpen && createPortal(
+                <div className="guest-filter-overlay" role="presentation" onMouseDown={(event) => {
+                  if (event.target === event.currentTarget) setFiltersOpen(false);
+                }}>
+                <section id="guest-event-filter-popover" className="guest-event-filter-popover" role="dialog" aria-modal="true" aria-label="Filter and sort events">
                   <header><div><strong>Filter events</strong><small>Choose what appears on your home screen.</small></div><button type="button" onClick={() => setFiltersOpen(false)} aria-label="Close event filters"><XCircle size={18} /></button></header>
                   <div className="guest-event-filters">
                     <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
@@ -7832,7 +7849,9 @@ function GuestAccessPortal({
                   </div>
                   <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setOwnershipScope('all'); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
-              </>}
+                </div>,
+                document.body,
+              )}
             </div>
           </div>
           {events.length ? (
