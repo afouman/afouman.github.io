@@ -1476,6 +1476,7 @@ export default function Home() {
   const [profileEmail, setProfileEmail] = useState('');
   const [accountMoney, setAccountMoney] = useState<AccountMoney>(emptyAccountMoney);
   const [moneyDetailsOpen, setMoneyDetailsOpen] = useState<'owed' | 'owes' | null>(null);
+  const [moneyDetailsReturnTo, setMoneyDetailsReturnTo] = useState<'menu' | 'editor' | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
@@ -1556,6 +1557,22 @@ export default function Home() {
       return next;
     });
   }, [accountUser]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
+    const previousBodyOverflow = document.body.style.overflow;
+    const previousRootOverflow = document.documentElement.style.overflow;
+    const previousAppOverflow = appScroller?.style.overflow || '';
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    if (appScroller) appScroller.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      document.documentElement.style.overflow = previousRootOverflow;
+      if (appScroller) appScroller.style.overflow = previousAppOverflow;
+    };
+  }, [settingsOpen]);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -4128,6 +4145,21 @@ export default function Home() {
     setProfileEditorOpen(true);
   };
 
+  const openMoneyDetails = (direction: 'owed' | 'owes', returnTo: 'menu' | 'editor') => {
+    setMoneyDetailsReturnTo(returnTo);
+    setProfileMenuOpen(false);
+    setProfileEditorOpen(false);
+    setMoneyDetailsOpen(direction);
+  };
+
+  const closeMoneyDetails = () => {
+    const returnTo = moneyDetailsReturnTo;
+    setMoneyDetailsOpen(null);
+    setMoneyDetailsReturnTo(null);
+    if (returnTo === 'menu') setProfileMenuOpen(true);
+    if (returnTo === 'editor') setProfileEditorOpen(true);
+  };
+
   const saveAccountProfileEdits = async () => {
     if (!accountProfile || !accountUser) return;
     const firstName = profileFirstName.trim().replace(/\s+/g, ' ');
@@ -6499,12 +6531,12 @@ export default function Home() {
             </button>
             <section className="profile-money-summary profile-menu-money" aria-label="Expense balances">
               <span className={`profile-balance ${accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}`}>
-                <span>Balance</span><b>{formatBalance(accountMoney.balance)}</b>
+                <span>Balance</span><b>{formatBalance(accountMoney.balance)}</b><i aria-hidden="true" />
               </span>
-              <button type="button" className="profile-balance positive" onClick={() => { setProfileMenuOpen(false); setMoneyDetailsOpen('owed'); }}>
+              <button type="button" className="profile-balance positive" onClick={() => openMoneyDetails('owed', 'menu')}>
                 <span>Owed to you</span><b>{formatCents(accountMoney.owed)}</b><ChevronRight size={13} />
               </button>
-              <button type="button" className="profile-balance negative" onClick={() => { setProfileMenuOpen(false); setMoneyDetailsOpen('owes'); }}>
+              <button type="button" className="profile-balance negative" onClick={() => openMoneyDetails('owes', 'menu')}>
                 <span>You owe</span><b>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</b><ChevronRight size={13} />
               </button>
             </section>
@@ -6523,8 +6555,8 @@ export default function Home() {
         </>
       )}
 
-      {settingsOpen && accountUser && (
-        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
+      {settingsOpen && accountUser && createPortal(
+        <div className="delete-account-backdrop settings-modal-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !pushNotificationBusy) setSettingsOpen(false);
         }}>
           <dialog open className="delete-account-dialog settings-dialog" aria-labelledby="settings-title">
@@ -6559,7 +6591,8 @@ export default function Home() {
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
             </div>
           </dialog>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {profileEditorOpen && accountUser && accountProfile && (
@@ -6574,8 +6607,8 @@ export default function Home() {
             <section className="profile-editor-balance" aria-label="Expense balances">
               <span><DollarSign size={17} /></span>
               <div className={accountMoney.balance < 0 ? 'negative' : accountMoney.balance > 0 ? 'positive' : ''}><small>My balance</small><strong>{formatBalance(accountMoney.balance)}</strong></div>
-              <button type="button" className="positive" onClick={() => setMoneyDetailsOpen('owed')}><small>Owed to me</small><strong>{formatCents(accountMoney.owed)}</strong><ChevronRight size={14} /></button>
-              <button type="button" className="negative" onClick={() => setMoneyDetailsOpen('owes')}><small>I owe</small><strong>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</strong><ChevronRight size={14} /></button>
+              <button type="button" className="positive" onClick={() => openMoneyDetails('owed', 'editor')}><small>Owed to me</small><strong>{formatCents(accountMoney.owed)}</strong><ChevronRight size={14} /></button>
+              <button type="button" className="negative" onClick={() => openMoneyDetails('owes', 'editor')}><small>I owe</small><strong>{accountMoney.owes ? `-${formatCents(accountMoney.owes)}` : formatCents(0)}</strong><ChevronRight size={14} /></button>
             </section>
             <div className="profile-editor-name-grid">
               <label className="field-label">First name<input className="field-input" value={profileFirstName} onChange={(event) => setProfileFirstName(event.target.value)} /></label>
@@ -6597,7 +6630,7 @@ export default function Home() {
 
       {moneyDetailsOpen && (
         <div className="money-details-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setMoneyDetailsOpen(null);
+          if (event.target === event.currentTarget) closeMoneyDetails();
         }}>
           <dialog open className="money-details-dialog" aria-labelledby="money-details-title">
             <header>
@@ -6606,7 +6639,7 @@ export default function Home() {
                 <h2 id="money-details-title" className="font-display">{moneyDetailsOpen === 'owed' ? 'Owed to me' : 'I owe'}</h2>
                 <span>{moneyDetailsOpen === 'owed' ? formatCents(accountMoney.owed) : formatCents(accountMoney.owes)} total</span>
               </div>
-              <button type="button" onClick={() => setMoneyDetailsOpen(null)} aria-label="Close balance details"><XCircle size={21} /></button>
+              <button type="button" onClick={closeMoneyDetails} aria-label="Close balance details"><XCircle size={21} /></button>
             </header>
             <div className="money-details-list">
               {(moneyDetailsOpen === 'owed' ? accountMoney.owedDetails : accountMoney.owesDetails).map((detail) => (

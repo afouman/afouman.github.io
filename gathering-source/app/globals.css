@@ -2058,10 +2058,12 @@ button:disabled {
 .profile-balance.positive > b { color: #137562; }
 .profile-balance.negative > b { color: #b2383d; }
 .profile-menu-money { margin: 0 0.65rem 0.35rem; padding: 0.4rem 0 0; }
-button.profile-balance { width: 100%; border: 0; border-radius: 0.5rem; background: transparent; padding: 0.32rem 0.25rem; text-align: left; cursor: pointer; }
+.profile-menu-money .profile-balance { display: grid; grid-template-columns: minmax(0, 1fr) 5.4rem 0.9rem; align-items: center; gap: 0.1rem; width: 100%; padding: 0.28rem 0.05rem 0.28rem 0.25rem; }
+button.profile-balance { border: 0; border-radius: 0.5rem; background: transparent; text-align: left; cursor: pointer; }
 button.profile-balance:hover { background: #edf8f4; }
-button.profile-balance > b { margin-left: auto; }
-button.profile-balance > svg { flex: none; color: rgb(23 54 59 / 0.42); }
+.profile-menu-money .profile-balance > b { justify-self: end; margin: 0; text-align: right; }
+.profile-menu-money .profile-balance > svg { justify-self: end; color: rgb(23 54 59 / 0.42); }
+.profile-menu-money .profile-balance > i { width: 13px; height: 1px; }
 .profile-menu-action,
 .profile-menu-delete { display: flex; align-items: center; gap: 0.7rem; width: 100%; border: 0; border-top: 1px solid rgb(18 59 66 / 0.08); border-radius: 0.75rem; background: transparent; padding: 0.72rem; color: #17363b; text-align: left; }
 .profile-menu-action:hover { background: #edf8f4; }
@@ -2119,6 +2121,8 @@ button.profile-balance > svg { flex: none; color: rgb(23 54 59 / 0.42); }
   padding: 1.25rem;
   backdrop-filter: blur(12px);
 }
+.settings-modal-backdrop { z-index: 180; overflow: hidden; overscroll-behavior: contain; touch-action: none; animation: overlay-fade-in 180ms ease-out both; }
+.settings-modal-backdrop .settings-dialog { max-height: min(640px, calc(100dvh - 2.5rem)); overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; animation: dialog-rise-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both; -webkit-overflow-scrolling: touch; }
 .delete-account-dialog {
   width: min(500px, 100%);
   border: 0;
@@ -4140,6 +4144,8 @@ button.profile-balance > svg { flex: none; color: rgb(23 54 59 / 0.42); }
   .profile-menu { top: calc(env(safe-area-inset-top) + 3.55rem); right: 0.65rem; }
   .delete-account-backdrop { align-items: end; padding: 0; }
   .delete-account-dialog { width: 100%; border-radius: 1.5rem 1.5rem 0 0; padding: 1.35rem; }
+  .settings-modal-backdrop { align-items: center; padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left)); }
+  .settings-modal-backdrop .settings-dialog { width: min(500px, 100%); border-radius: 1.4rem; padding: 1.35rem; }
   .profile-editor-backdrop { align-items: start; padding: max(0.65rem, env(safe-area-inset-top)) 0.5rem max(0.65rem, env(safe-area-inset-bottom)); }
   .profile-editor-dialog { max-height: calc(100dvh - max(1.3rem, env(safe-area-inset-top) + env(safe-area-inset-bottom))); overflow-y: auto; border-radius: 1.25rem; }
   .delete-account-actions { grid-template-columns: 1fr; }
