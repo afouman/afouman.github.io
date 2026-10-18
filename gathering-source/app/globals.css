@@ -2209,7 +2209,7 @@ button.profile-balance > svg { flex: none; color: rgb(23 54 59 / 0.42); }
 .guest-event-filter-popover > header > button { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.07); }
 .guest-event-filters { display: grid; gap: 0.55rem; margin-top: 0.8rem; }
 .guest-event-filters label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.7rem; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; padding: 0.38rem 0.48rem 0.38rem 0.7rem; }
-.guest-event-filters label > span { justify-self: end; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-align: right; text-transform: uppercase; }
+.guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .guest-event-filters select { justify-self: end; min-height: 34px; max-width: 180px; border: 0; background: transparent; color: #146b66; font-size: 0.68rem; font-weight: 850; outline: 0; text-align: right; text-align-last: right; }
 .guest-event-filter-popover > footer { display: grid; grid-template-columns: 0.7fr 1fr; gap: 0.55rem; margin-top: 0.75rem; }
 .guest-event-filter-popover > footer button { justify-content: center; min-height: 40px; border-radius: 0.75rem; background: #edf2ef; padding: 0.55rem 0.7rem; color: #176d64; font-size: 0.67rem; font-weight: 900; }
@@ -4836,8 +4836,6 @@ button.profile-balance > svg { flex: none; color: rgb(23 54 59 / 0.42); }
   .guest-event-card-status { grid-column: 2; justify-content: flex-start; padding: 0 0.9rem 0.85rem; }
   .guest-event-card.has-notifications .guest-event-card-status { padding-top: 0; padding-right: 6.6rem; padding-bottom: 0.85rem; }
   .guest-access-signed-in { align-items: center; flex-direction: row; }
-  .guest-filter-overlay { align-items: end; padding: max(0.75rem, env(safe-area-inset-top)) 0 0; }
-  .guest-event-filter-popover { width: 100%; max-height: min(78dvh, 650px); border-radius: 1.5rem 1.5rem 0 0; padding: 1.1rem 1rem calc(1.1rem + env(safe-area-inset-bottom)); transform-origin: bottom center; }
   .guest-event-card.new-invitation .guest-event-card-copy { padding-right: 4.2rem; }
   .guest-event-picker-backdrop { align-items: end; padding: 0; }
   .guest-event-picker { width: 100%; max-height: 90dvh; border-radius: 1.6rem 1.6rem 0 0; padding-bottom: calc(1.2rem + env(safe-area-inset-bottom)); }
