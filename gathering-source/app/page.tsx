@@ -8630,12 +8630,16 @@ function GamePanel({
 
   return (
     <div className="game-panel-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget && !busy) onClose();
+      if (event.target === event.currentTarget) onClose();
     }}>
       <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
         <header className="game-panel-header">
           <div><p className="eyebrow">{menu.title}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
-          <button type="button" onClick={onClose} disabled={busy} aria-label="Close games"><XCircle size={22} /></button>
+          <button type="button" onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onClose();
+          }} aria-label="Close games"><XCircle size={22} /></button>
         </header>
         {!editorOpen ? <>
           {canManage && <section className="game-create-callout">
