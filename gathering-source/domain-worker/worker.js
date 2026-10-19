@@ -392,10 +392,12 @@ Available UI constructors only:
 - ui.teams(teams)
 - ui.scoreboard(objectOfLabelToNumber)
 - ui.list(array)
+- ui.grid(numberOfColumns, arrayOfUiNodes)
 - ui.secret(label, value)
 - ui.input(label, key, optionalPlaceholder)
 
 An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
+When the host requests a board, tile layout, card matrix, or grid, use ui.grid with interactive ui.button children. For a 3x3 board, use ui.grid(3, nine button nodes). Never represent a board with ui.list or plain text rows.
 
 Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
 The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
