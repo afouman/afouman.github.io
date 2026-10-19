@@ -396,18 +396,39 @@ Available UI constructors only:
 An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
 
 Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
+The safety validator rejects these names anywhere in logicSource, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
 
 Host definition:
 ${JSON.stringify(definition, null, 2)}`;
 }
 
-function validGeneratedRuntime(value) {
-  if (!value || typeof value !== 'object') return false;
-  if (typeof value.instructions !== 'string' || typeof value.uiNotes !== 'string' || typeof value.logicSource !== 'string') return false;
+function generatedRuntimeValidation(value) {
+  if (!value || typeof value !== 'object') return { valid: false, error: 'Gemini did not return a game object.' };
+  if (typeof value.instructions !== 'string' || typeof value.uiNotes !== 'string' || typeof value.logicSource !== 'string')
+    return { valid: false, error: 'Gemini omitted part of the playable game.' };
   const source = value.logicSource.trim();
-  if (!source.startsWith('({') || !source.endsWith('})') || source.length > 16_000) return false;
-  if (GAME_SOURCE_FORBIDDEN.test(source)) return false;
-  return /\bsetup\s*\(/.test(source) && /\bonAction\s*\(/.test(source) && /\bview\s*\(/.test(source);
+  if (!source.startsWith('({') || !source.endsWith('})'))
+    return { valid: false, error: 'Gemini returned code in the wrong format.' };
+  if (source.length > 16_000)
+    return { valid: false, error: 'Gemini generated a game that is too large for the safe player.' };
+  const forbiddenMatch = source.match(GAME_SOURCE_FORBIDDEN);
+  if (forbiddenMatch) {
+    const replacement = ['Date', 'performance', 'setTimeout', 'setInterval'].includes(forbiddenMatch[0])
+      ? ' It must use Nights’ built-in game clock instead.'
+      : '';
+    return {
+      valid: false,
+      error: `Gemini used the blocked capability “${forbiddenMatch[0]}”. Your game description is valid; generate again.${replacement}`,
+    };
+  }
+  const missing = ['setup', 'onAction', 'view'].filter(name => !new RegExp(`\\b${name}\\s*\\(`).test(source));
+  if (missing.length)
+    return { valid: false, error: `Gemini omitted the required ${missing.join(', ')} game function${missing.length === 1 ? '' : 's'}. Generate again.` };
+  return { valid: true, error: '' };
+}
+
+function validGeneratedRuntime(value) {
+  return generatedRuntimeValidation(value).valid;
 }
 
 async function generateEventGame(request, env) {
@@ -458,8 +479,9 @@ async function generateEventGame(request, env) {
     } catch {
       return json(request, { error: 'Gemini returned an invalid game draft. Please generate it again.' }, 502);
     }
-    if (!validGeneratedRuntime(game))
-      return json(request, { error: 'The generated game requested capabilities that Nights does not allow. Revise the description and try again.' }, 422);
+    const validation = generatedRuntimeValidation(game);
+    if (!validation.valid)
+      return json(request, { error: validation.error }, 422);
 
     await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
     return json(request, {
@@ -800,6 +822,7 @@ export {
   eventExpenseUrl,
   expiredUnverifiedProfiles,
   gameGenerationPrompt,
+  generatedRuntimeValidation,
   purgeExpiredUnverifiedAccounts,
   upstreamPath,
   validGeneratedRuntime,
