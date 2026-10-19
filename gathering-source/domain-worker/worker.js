@@ -407,11 +407,17 @@ function normalizeGeneratedGameSource(value) {
   source = source
     .replace(/^```(?:javascript|js)?\s*/i, '')
     .replace(/\s*```$/, '')
+    .replace(/^(?:javascript|js)\s*\n/i, '')
     .trim()
     .replace(/;\s*$/, '')
     .trim();
   const assignment = source.match(/^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*([\s\S]+)$/);
   if (assignment) source = assignment[1].trim().replace(/;\s*$/, '').trim();
+  if (!source.startsWith('{') && !source.startsWith('({')) {
+    const firstBrace = source.indexOf('{');
+    const lastBrace = source.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) source = source.slice(firstBrace, lastBrace + 1).trim();
+  }
   if (source.startsWith('{') && source.endsWith('}')) source = `(${source})`;
   return source;
 }
@@ -445,6 +451,33 @@ function validGeneratedRuntime(value) {
   return generatedRuntimeValidation(value).valid;
 }
 
+async function requestGeminiGame(env, model, prompt) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: gameResponseSchema(),
+        temperature: 0.2,
+        maxOutputTokens: 8192,
+      },
+    }),
+  });
+  const result = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = result?.error?.message || 'Gemini could not generate this game.';
+    return { game: null, error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message, status: response.status === 429 ? 429 : 502 };
+  }
+  const text = (result?.candidates?.[0]?.content?.parts || []).map(part => part.text || '').join('').trim();
+  try {
+    return { game: JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')), error: '', status: 200 };
+  } catch {
+    return { game: null, error: 'Gemini returned an invalid JSON game draft.', status: 502 };
+  }
+}
+
 async function generateEventGame(request, env) {
   try {
     const { token, claims } = await verifyFirebaseToken(request);
@@ -467,35 +500,18 @@ async function generateEventGame(request, env) {
       return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
 
     const model = String(env.GEMINI_MODEL || 'gemini-2.5-flash-lite');
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: gameGenerationPrompt(definition) }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: gameResponseSchema(),
-          temperature: 0.35,
-          maxOutputTokens: 8192,
-        },
-      }),
-    });
-    const result = await response.json().catch(() => null);
-    if (!response.ok) {
-      const message = result?.error?.message || 'Gemini could not generate this game.';
-      const status = response.status === 429 ? 429 : 502;
-      return json(request, { error: status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message }, status);
+    let generation = await requestGeminiGame(env, model, gameGenerationPrompt(definition));
+    if (!generation.game) return json(request, { error: generation.error }, generation.status);
+    let game = generation.game;
+    let validation = generatedRuntimeValidation(game);
+    if (!validation.valid) {
+      generation = await requestGeminiGame(env, model, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate the module from scratch. Return only the required JSON. Use a plain object expression for logicSource and implement setup, onAction, and view.`);
+      if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
+      game = generation.game;
+      validation = generatedRuntimeValidation(game);
     }
-    const text = (result?.candidates?.[0]?.content?.parts || []).map(part => part.text || '').join('').trim();
-    let game;
-    try {
-      game = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
-    } catch {
-      return json(request, { error: 'Gemini returned an invalid game draft. Please generate it again.' }, 502);
-    }
-    const validation = generatedRuntimeValidation(game);
     if (!validation.valid)
-      return json(request, { error: validation.error }, 422);
+      return json(request, { error: `Gemini could not produce a safe playable module after two attempts. Last issue: ${validation.error}` }, 422);
 
     await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
     return json(request, {
