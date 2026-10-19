@@ -4,6 +4,13 @@
 	"main": "worker.js",
 	"compatibility_date": "2026-10-04",
 	"workers_dev": true,
+	"vars": {
+		"GEMINI_MODEL": "gemini-2.5-flash-lite",
+		"GAME_GENERATION_DAILY_LIMIT": "15"
+	},
+	"triggers": {
+		"crons": ["17 3 * * *"]
+	},
 	"routes": [
 		{
 			"pattern": "gaemaj.tech/*",

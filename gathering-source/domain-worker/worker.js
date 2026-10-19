@@ -3,8 +3,13 @@ import { buildPushPayload } from '@block65/webcrypto-web-push';
 const GITHUB_PAGES_ORIGIN = 'https://afouman.github.io';
 const APP_BASE_PATH = '/gathering';
 const FIRESTORE_ROOT = 'https://firestore.googleapis.com/v1/projects/gathering-app-109eb/databases/(default)/documents';
+const FIREBASE_PROJECT_ID = 'gathering-app-109eb';
+const UNVERIFIED_ACCOUNT_RETENTION_DAYS = 90;
 const VAPID_PUBLIC_KEY = 'BBLVoXFRiUDSV72gImtZXfRgu92qgCEmBY-nByHqKDiaQrB7uEkvAWRo-D6VtQlHmtESAFH7bpPMImL2uXOu5dY';
 const ALLOWED_ORIGINS = new Set(['https://gaemaj.tech', 'https://www.gaemaj.tech', 'https://afouman.github.io']);
+const LEGACY_HOST_EMAIL = 'alaki.dolaki.holholaki@gmail.com';
+const LEGACY_HOST_UID = 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
+const GAME_SOURCE_FORBIDDEN = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|globalThis|self|postMessage|close|Worker|Blob|URL|WebAssembly|Atomics|SharedArrayBuffer|navigator|caches|indexedDB|document|window|parent|top|opener|localStorage|sessionStorage|constructor|__proto__|prototype|setTimeout|setInterval|queueMicrotask|crypto|performance|Date|Promise|async|await|while)\b/;
 
 const APP_ASSETS = new Set([
   '/favicon.svg', '/manifest.webmanifest', '/manifest-guest.webmanifest',
@@ -73,6 +78,219 @@ function decodeBase64Url(value) {
   return Uint8Array.from(atob(padded), character => character.charCodeAt(0));
 }
 
+function encodeBase64Url(value) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function serviceAccountPrivateKey(value) {
+  const normalized = String(value || '').replace(/\\n/g, '\n');
+  const body = normalized
+    .replace('-----BEGIN PRIVATE KEY-----', '')
+    .replace('-----END PRIVATE KEY-----', '')
+    .replace(/\s+/g, '');
+  if (!body) throw new Error('FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY is not configured.');
+  return Uint8Array.from(atob(body), character => character.charCodeAt(0));
+}
+
+let cachedAdminToken;
+async function firebaseAdminAccessToken(env) {
+  if (cachedAdminToken && cachedAdminToken.expiresAt > Date.now() + 60_000)
+    return cachedAdminToken.value;
+  if (!env.FIREBASE_SERVICE_ACCOUNT_EMAIL || !env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY)
+    throw new Error('Firebase cleanup credentials are not configured.');
+  const now = Math.floor(Date.now() / 1000);
+  const header = encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = encodeBase64Url(JSON.stringify({
+    iss: env.FIREBASE_SERVICE_ACCOUNT_EMAIL,
+    scope: 'https://www.googleapis.com/auth/cloud-platform',
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+  }));
+  const key = await crypto.subtle.importKey(
+    'pkcs8',
+    serviceAccountPrivateKey(env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY),
+    { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    'RSASSA-PKCS1-v1_5',
+    key,
+    new TextEncoder().encode(`${header}.${claim}`),
+  );
+  const assertion = `${header}.${claim}.${encodeBase64Url(new Uint8Array(signature))}`;
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }),
+  });
+  const result = await response.json();
+  if (!response.ok || !result.access_token)
+    throw new Error(result.error_description || 'Could not authorize Firebase cleanup.');
+  cachedAdminToken = {
+    value: result.access_token,
+    expiresAt: Date.now() + Math.max(300, Number(result.expires_in) || 3600) * 1000,
+  };
+  return cachedAdminToken.value;
+}
+
+async function adminFirebaseFetch(env, url, options = {}) {
+  const accessToken = await firebaseAdminAccessToken(env);
+  const headers = new Headers(options.headers || {});
+  headers.set('authorization', `Bearer ${accessToken}`);
+  if (options.body && !headers.has('content-type')) headers.set('content-type', 'application/json');
+  const response = await fetch(url, { ...options, headers });
+  if (!response.ok && response.status !== 404) {
+    const detail = await response.text();
+    throw new Error(`Firebase cleanup request failed (${response.status}): ${detail.slice(0, 300)}`);
+  }
+  return response;
+}
+
+async function sha256Hex(value) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(value).trim().toLowerCase()));
+  return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function firestoreDocumentPath(name) {
+  const marker = '/documents/';
+  const index = String(name || '').indexOf(marker);
+  return index >= 0 ? String(name).slice(index + marker.length) : '';
+}
+
+async function expiredUnverifiedProfiles(env, now = new Date()) {
+  const response = await adminFirebaseFetch(env, `${FIRESTORE_ROOT}:runQuery`, {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'users' }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'verificationExpiresAt' },
+            op: 'LESS_THAN_OR_EQUAL',
+            value: { timestampValue: now.toISOString() },
+          },
+        },
+        orderBy: [{ field: { fieldPath: 'verificationExpiresAt' }, direction: 'ASCENDING' }],
+        limit: 100,
+      },
+    }),
+  });
+  const rows = await response.json();
+  return rows
+    .filter(row => row.document)
+    .map(row => ({
+      path: firestoreDocumentPath(row.document.name),
+      data: firestoreFields(row.document.fields),
+    }))
+    .filter(record => record.path && record.data.emailVerified === false);
+}
+
+async function collectionDocumentPaths(env, parentPath, collectionId) {
+  const paths = [];
+  let pageToken = '';
+  do {
+    const url = new URL(`${FIRESTORE_ROOT}/${parentPath}/${collectionId}`);
+    url.searchParams.set('pageSize', '300');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const response = await adminFirebaseFetch(env, url.toString());
+    if (response.status === 404) return paths;
+    const result = await response.json();
+    paths.push(...(result.documents || []).map(document => firestoreDocumentPath(document.name)).filter(Boolean));
+    pageToken = result.nextPageToken || '';
+  } while (pageToken);
+  return paths;
+}
+
+async function contactPathsForAccount(env, accountUid) {
+  const response = await adminFirebaseFetch(env, `${FIRESTORE_ROOT}:runQuery`, {
+    method: 'POST',
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: 'contacts', allDescendants: true }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: 'accountUid' },
+            op: 'EQUAL',
+            value: { stringValue: accountUid },
+          },
+        },
+      },
+    }),
+  });
+  const rows = await response.json();
+  return rows.filter(row => row.document).map(row => firestoreDocumentPath(row.document.name)).filter(Boolean);
+}
+
+async function deleteAdminDocument(env, path) {
+  if (!path) return;
+  await adminFirebaseFetch(env, `${FIRESTORE_ROOT}/${path.split('/').map(encodeURIComponent).join('/')}`, {
+    method: 'DELETE',
+  });
+}
+
+async function deletePushSubscriptionsForAccount(env, accountUid, guestUid) {
+  let cursor;
+  do {
+    const page = await env.PUSH_SUBSCRIPTIONS.list({ cursor });
+    const records = await Promise.all(page.keys.map(async key => ({
+      key: key.name,
+      value: await env.PUSH_SUBSCRIPTIONS.get(key.name, 'json'),
+    })));
+    const matching = records.filter(record => record.value
+      && (record.value.actorUid === guestUid || record.value.actorUid === accountUid));
+    await Promise.all(matching.map(record => env.PUSH_SUBSCRIPTIONS.delete(record.key)));
+    cursor = page.list_complete ? undefined : page.cursor;
+  } while (cursor);
+}
+
+async function purgeExpiredUnverifiedAccount(env, profile) {
+  const accountUid = profile.data.uid || profile.path.split('/').pop();
+  const guestUid = profile.data.guestUid;
+  if (!safeSegment(accountUid) || !safeSegment(guestUid))
+    throw new Error(`Invalid expired account profile: ${profile.path}`);
+
+  await adminFirebaseFetch(
+    env,
+    `https://identitytoolkit.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/accounts:batchDelete`,
+    { method: 'POST', body: JSON.stringify({ localIds: [accountUid], force: true }) },
+  );
+
+  const [invitationPaths, ownContactPaths, referringContactPaths] = await Promise.all([
+    collectionDocumentPaths(env, `users/${encodeURIComponent(accountUid)}`, 'invitations'),
+    collectionDocumentPaths(env, `users/${encodeURIComponent(accountUid)}`, 'contacts'),
+    contactPathsForAccount(env, accountUid),
+  ]);
+  const emailHash = profile.data.email ? await sha256Hex(profile.data.email) : '';
+  const paths = new Set([
+    ...invitationPaths,
+    ...ownContactPaths,
+    ...referringContactPaths,
+    `guest-identities/${guestUid}`,
+    `account-directory/${accountUid}`,
+    emailHash ? `account-emails/${emailHash}` : '',
+  ].filter(Boolean));
+  await Promise.all([...paths].map(path => deleteAdminDocument(env, path)));
+  await deletePushSubscriptionsForAccount(env, accountUid, guestUid);
+  await deleteAdminDocument(env, profile.path);
+  return accountUid;
+}
+
+async function purgeExpiredUnverifiedAccounts(env) {
+  const expired = await expiredUnverifiedProfiles(env);
+  const results = await Promise.allSettled(expired.map(profile => purgeExpiredUnverifiedAccount(env, profile)));
+  const failed = results.filter(result => result.status === 'rejected');
+  if (failed.length) console.error('Unverified account cleanup failures', failed.map(result => result.reason));
+  return { checked: expired.length, deleted: results.length - failed.length, failed: failed.length };
+}
+
 async function verifyFirebaseToken(request) {
   const authorization = request.headers.get('authorization') || '';
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
@@ -111,6 +329,151 @@ async function verifyFirebaseToken(request) {
   );
   if (!verified) throw new Error('Invalid account session.');
   return { token, claims };
+}
+
+function cleanGameDefinition(value) {
+  if (!value || typeof value !== 'object') throw new Error('Game definition is required.');
+  const textFields = [
+    'title', 'summary', 'playerArrangement', 'interfaceDescription', 'rules',
+    'scoring', 'timing', 'hiddenInformation', 'winCondition',
+  ];
+  const definition = {};
+  for (const field of textFields) {
+    const text = String(value[field] || '').trim();
+    if (text.length > 6000) throw new Error(`${field} is too long.`);
+    definition[field] = text;
+  }
+  if (!definition.title || !definition.playerArrangement || !definition.interfaceDescription || !definition.rules)
+    throw new Error('Name, player arrangement, interface, and rules are required.');
+  definition.minPlayers = Math.max(1, Math.min(100, Math.floor(Number(value.minPlayers) || 1)));
+  definition.maxPlayers = Math.max(definition.minPlayers, Math.min(100, Math.floor(Number(value.maxPlayers) || definition.minPlayers)));
+  if (JSON.stringify(definition).length > 20_000) throw new Error('Game definition is too large.');
+  return definition;
+}
+
+function gameResponseSchema() {
+  return {
+    type: 'object',
+    required: ['instructions', 'logicSource', 'uiNotes'],
+    properties: {
+      instructions: { type: 'string', description: 'A short host-facing explanation of how to start and test the game.' },
+      uiNotes: { type: 'string', description: 'A short description of the generated player interface.' },
+      logicSource: { type: 'string', description: 'One JavaScript object expression implementing the exact Nights game contract.' },
+    },
+  };
+}
+
+function gameGenerationPrompt(definition) {
+  return `You are the game designer for Nights, a gathering app. Convert the host's description into a small deterministic party-game module.
+
+Return JSON matching the response schema. logicSource must be a SINGLE JAVASCRIPT OBJECT EXPRESSION, beginning with ({ and ending with }). Do not use Markdown fences.
+
+The object must implement exactly:
+- setup(context) -> serializable initial state
+- onAction(state, action, context) -> serializable next state
+- view(state, viewer, ui) -> one serializable UI node
+
+Available context only:
+- context.players.list() returns [{id,name}]
+- context.teams.randomize(count) returns [{id,name,players}]
+- context.random.pick(array)
+- context.random.shuffle(array)
+- context.clock.now()
+
+Available UI constructors only:
+- ui.screen(children)
+- ui.heading(text)
+- ui.text(text)
+- ui.card(title, children)
+- ui.button(label, actionObject, optionalTone)
+- ui.timer(deadlineMilliseconds, optionalLabel)
+- ui.teams(teams)
+- ui.scoreboard(objectOfLabelToNumber)
+- ui.list(array)
+- ui.secret(label, value)
+- ui.input(label, key, optionalPlaceholder)
+
+An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
+
+Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
+
+Host definition:
+${JSON.stringify(definition, null, 2)}`;
+}
+
+function validGeneratedRuntime(value) {
+  if (!value || typeof value !== 'object') return false;
+  if (typeof value.instructions !== 'string' || typeof value.uiNotes !== 'string' || typeof value.logicSource !== 'string') return false;
+  const source = value.logicSource.trim();
+  if (!source.startsWith('({') || !source.endsWith('})') || source.length > 16_000) return false;
+  if (GAME_SOURCE_FORBIDDEN.test(source)) return false;
+  return /\bsetup\s*\(/.test(source) && /\bonAction\s*\(/.test(source) && /\bview\s*\(/.test(source);
+}
+
+async function generateEventGame(request, env) {
+  try {
+    const { token, claims } = await verifyFirebaseToken(request);
+    const body = await request.json().catch(() => null);
+    if (!body || !safeSegment(body.eventId)) return json(request, { error: 'Invalid event.' }, 400);
+    const event = await firestoreDocument(`events/${encodeURIComponent(body.eventId)}`, token);
+    const managesEvent = event && (
+      event.ownerUid === claims.sub
+      || (claims.email === LEGACY_HOST_EMAIL && event.ownerUid === LEGACY_HOST_UID)
+    );
+    if (!managesEvent) return json(request, { error: 'Only this event’s host can generate games.' }, 403);
+    if (!env.GEMINI_API_KEY) return json(request, { error: 'Game generation is not configured yet.' }, 503);
+
+    const definition = cleanGameDefinition(body.definition);
+    const day = new Date().toISOString().slice(0, 10);
+    const quotaKey = `game-ai:${claims.sub}:${day}`;
+    const used = Number(await env.PUSH_SUBSCRIPTIONS.get(quotaKey)) || 0;
+    const dailyLimit = Math.max(1, Math.min(100, Number(env.GAME_GENERATION_DAILY_LIMIT) || 15));
+    if (used >= dailyLimit)
+      return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
+
+    const model = String(env.GEMINI_MODEL || 'gemini-2.5-flash-lite');
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: gameGenerationPrompt(definition) }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: gameResponseSchema(),
+          temperature: 0.35,
+          maxOutputTokens: 8192,
+        },
+      }),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      const message = result?.error?.message || 'Gemini could not generate this game.';
+      const status = response.status === 429 ? 429 : 502;
+      return json(request, { error: status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message }, status);
+    }
+    const text = (result?.candidates?.[0]?.content?.parts || []).map(part => part.text || '').join('').trim();
+    let game;
+    try {
+      game = JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''));
+    } catch {
+      return json(request, { error: 'Gemini returned an invalid game draft. Please generate it again.' }, 502);
+    }
+    if (!validGeneratedRuntime(game))
+      return json(request, { error: 'The generated game requested capabilities that Nights does not allow. Revise the description and try again.' }, 422);
+
+    await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
+    return json(request, {
+      game: {
+        instructions: game.instructions.slice(0, 1000),
+        uiNotes: game.uiNotes.slice(0, 1000),
+        logicSource: game.logicSource.trim(),
+      },
+      remainingToday: Math.max(0, dailyLimit - used - 1),
+      model,
+    });
+  } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : 'Game generation failed.' }, 400);
+  }
 }
 
 async function deleteAccountPushData(request, env) {
@@ -430,11 +793,29 @@ async function sendPush(request, env, context) {
   return json(request, { ok: true, recipients: subscriptions.length });
 }
 
-export { allocatedExpenseParticipantIds, eligibleExpenseGuestIds, eventExpenseUrl, upstreamPath };
+export {
+  allocatedExpenseParticipantIds,
+  cleanGameDefinition,
+  eligibleExpenseGuestIds,
+  eventExpenseUrl,
+  expiredUnverifiedProfiles,
+  gameGenerationPrompt,
+  purgeExpiredUnverifiedAccounts,
+  upstreamPath,
+  validGeneratedRuntime,
+};
 
 export default {
   async fetch(request, env, context) {
     const incomingUrl = new URL(request.url);
+    if (incomingUrl.pathname.startsWith('/api/games/')) {
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
+      const origin = request.headers.get('origin');
+      if (origin && !ALLOWED_ORIGINS.has(origin)) return json(request, { error: 'Origin not allowed.' }, 403);
+      if (incomingUrl.pathname === '/api/games/generate' && request.method === 'POST')
+        return generateEventGame(request, env);
+      return json(request, { error: 'Not found.' }, 404);
+    }
     if (incomingUrl.pathname.startsWith('/api/push/')) {
       if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
       const origin = request.headers.get('origin');
@@ -471,5 +852,13 @@ export default {
     headers.set('x-gather-route', incomingUrl.pathname);
     if (releaseFile || freshPage) headers.set('cache-control', 'no-cache, no-store, must-revalidate');
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+  },
+  async scheduled(_controller, env, context) {
+    context.waitUntil(purgeExpiredUnverifiedAccounts(env).then(result => {
+      console.log('Unverified account cleanup complete', {
+        ...result,
+        retentionDays: UNVERIFIED_ACCOUNT_RETENTION_DAYS,
+      });
+    }));
   },
 };

@@ -28,6 +28,7 @@ import {
   ExternalLink,
   FileText,
   Flame,
+  Gamepad2,
   GripVertical,
   House,
   ImagePlus,
@@ -42,12 +43,15 @@ import {
   Minus,
   Move,
   Pencil,
+  Play,
   Pin,
   PinOff,
   Plus,
   Reply,
   Send,
+  Save,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Share2,
   ShoppingBag,
@@ -256,6 +260,31 @@ type EventExpense = {
   receiptName?: string;
   createdAt: number;
   updatedAt?: number;
+};
+type GeneratedGameRuntime = {
+  instructions: string;
+  logicSource: string;
+  uiNotes: string;
+};
+type EventGame = {
+  id: string;
+  title: string;
+  summary: string;
+  status: 'draft' | 'published';
+  playerArrangement: string;
+  interfaceDescription: string;
+  rules: string;
+  scoring: string;
+  timing: string;
+  hiddenInformation: string;
+  winCondition: string;
+  minPlayers: number;
+  maxPlayers: number;
+  runtime: GeneratedGameRuntime | null;
+  createdBy: string;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
 };
 type MoneyDetail = {
   id: string;
@@ -753,6 +782,7 @@ const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY?.trim() || '';
 const PUSH_NOTIFICATIONS_ENABLED =
   process.env.NEXT_PUBLIC_PUSH_NOTIFICATIONS_ENABLED === 'true';
 const PUSH_API_URL = 'https://gaemaj.tech/api/push';
+const GAME_API_URL = 'https://gaemaj.tech/api/games';
 const callPushApi = async (
   path: 'subscribe' | 'send' | 'invite' | 'expense' | 'account',
   method: 'POST' | 'DELETE',
@@ -771,6 +801,30 @@ const callPushApi = async (
     throw new Error(result?.error || 'Notification service is unavailable.');
   }
   return response.json().catch(() => ({ ok: true })) as Promise<Record<string, unknown>>;
+};
+const callGameGenerator = async (
+  eventId: string,
+  definition: Pick<EventGame,
+    'title' | 'summary' | 'playerArrangement' | 'interfaceDescription' | 'rules'
+    | 'scoring' | 'timing' | 'hiddenInformation' | 'winCondition' | 'minPlayers' | 'maxPlayers'>,
+  authToken: string,
+) => {
+  const response = await fetch(`${GAME_API_URL}/generate`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${authToken}`,
+    },
+    body: JSON.stringify({ eventId, definition }),
+  });
+  const result = await response.json().catch(() => null) as {
+    game?: GeneratedGameRuntime;
+    error?: string;
+    remainingToday?: number;
+  } | null;
+  if (!response.ok || !result?.game)
+    throw new Error(result?.error || 'The game designer is unavailable right now.');
+  return result;
 };
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const LEGACY_HOST_UID = process.env.NEXT_PUBLIC_LEGACY_HOST_UID?.trim()
@@ -1480,6 +1534,7 @@ export default function Home() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
+  const [gamesOpen, setGamesOpen] = useState(false);
   const [expenseEditRequest, setExpenseEditRequest] = useState<{ id: string; nonce: number } | null>(null);
   const [deleteAccountBusy, setDeleteAccountBusy] = useState(false);
   const [notificationsDefaultEnabled, setNotificationsDefaultEnabled] = useState(false);
@@ -6693,6 +6748,17 @@ export default function Home() {
         </div>
       )}
 
+      {gamesOpen && menu.id !== EMPTY_EVENT_ID && (
+        <GamePanel
+          key={menu.id}
+          menu={menu}
+          canManage={canManageCurrentEvent}
+          accountUid={accountUser?.uid || ''}
+          onClose={() => setGamesOpen(false)}
+          notify={notify}
+        />
+      )}
+
       {activityCenterOpen && (
         <div className="activity-center-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) setActivityCenterOpen(false);
@@ -7277,6 +7343,13 @@ export default function Home() {
                   <span><DollarSign size={18} /></span>
                   <div><strong>Expenses</strong><small>{expenseActor ? 'Receipts, splits and guest balances' : 'Available to approved Going guests'}</small></div>
                 </button>
+                <button type="button" role="menuitem" onClick={() => {
+                  setGamesOpen(true);
+                  setEventMenuOpen(false);
+                }}>
+                  <span><Gamepad2 size={18} /></span>
+                  <div><strong>Games</strong><small>Play event games or build a new one</small></div>
+                </button>
               </div>}
             </div>
           </nav>
@@ -7344,6 +7417,13 @@ export default function Home() {
                 >
                   <span><DollarSign size={18} /></span>
                   <div><strong>Expenses</strong><small>Receipts, splits and guest balances</small></div>
+                </button>
+                <button type="button" role="menuitem" onClick={() => {
+                  setGamesOpen(true);
+                  setEventMenuOpen(false);
+                }}>
+                  <span><Gamepad2 size={18} /></span>
+                  <div><strong>Games</strong><small>Manage and play this event’s games</small></div>
                 </button>
               </div>}
             </div>
@@ -8248,6 +8328,360 @@ function GuestMenu({
         )}
       </section>
       )}
+    </div>
+  );
+}
+
+const gamePreviewKey = (eventId: string) => `nights-preview-games-v1:${eventId}`;
+const newGameDraft = (accountUid = ''): EventGame => ({
+  id: '',
+  title: '',
+  summary: '',
+  status: 'draft',
+  playerArrangement: '',
+  interfaceDescription: '',
+  rules: '',
+  scoring: '',
+  timing: '',
+  hiddenInformation: '',
+  winCondition: '',
+  minPlayers: 2,
+  maxPlayers: 12,
+  runtime: null,
+  createdBy: accountUid,
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+  version: 1,
+});
+
+const GAME_WORKER_SOURCE = String.raw`
+self.onmessage = ({ data }) => {
+  try {
+    const forbidden = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|globalThis|self|postMessage|close|Worker|Blob|URL|WebAssembly|Atomics|SharedArrayBuffer|navigator|caches|indexedDB|document|window|parent|top|opener|localStorage|sessionStorage|constructor|__proto__|prototype|setTimeout|setInterval|queueMicrotask|crypto|performance|Date|Promise|async|await|while)\b/;
+    if (typeof data.source !== 'string' || forbidden.test(data.source))
+      throw new Error('This game requested a capability that Nights does not allow.');
+    const ui = {
+      screen: (children) => ({ type: 'screen', children }),
+      heading: (text) => ({ type: 'heading', text }),
+      text: (text) => ({ type: 'text', text }),
+      card: (title, children) => ({ type: 'card', title, children }),
+      button: (label, action, tone = 'primary') => ({ type: 'button', label, action, tone }),
+      timer: (deadline, label = 'Time remaining') => ({ type: 'timer', deadline, label }),
+      teams: (teams) => ({ type: 'teams', teams }),
+      scoreboard: (scores) => ({ type: 'scoreboard', scores }),
+      list: (items) => ({ type: 'list', items }),
+      secret: (label, value) => ({ type: 'secret', label, value }),
+      input: (label, key, placeholder = '') => ({ type: 'input', label, key, placeholder }),
+    };
+    const players = Array.isArray(data.players) ? data.players : [];
+    const context = Object.freeze({
+      players: Object.freeze({ list: () => structuredClone(players) }),
+      teams: Object.freeze({
+        randomize: (count) => {
+          const size = Math.max(1, Math.min(8, Math.floor(Number(count) || 2)));
+          const shuffled = [...players].sort(() => Math.random() - 0.5);
+          return Array.from({ length: size }, (_, index) => ({
+            id: 'team-' + (index + 1),
+            name: 'Team ' + (index + 1),
+            players: shuffled.filter((_, playerIndex) => playerIndex % size === index),
+          }));
+        },
+      }),
+      random: Object.freeze({
+        pick: (items) => items[Math.floor(Math.random() * items.length)],
+        shuffle: (items) => [...items].sort(() => Math.random() - 0.5),
+      }),
+      clock: Object.freeze({ now: () => Date.now() }),
+    });
+    const game = Function('"use strict"; return (' + data.source + ')')();
+    if (!game || typeof game.setup !== 'function' || typeof game.onAction !== 'function' || typeof game.view !== 'function')
+      throw new Error('The generated game does not implement the Nights game contract.');
+    let state = data.task === 'setup'
+      ? game.setup(context)
+      : game.onAction(structuredClone(data.state), structuredClone(data.action), context);
+    if (state === undefined) throw new Error('The game returned no state.');
+    const view = game.view(structuredClone(state), { id: 'preview-player', name: 'You' }, ui);
+    self.postMessage({ ok: true, state, view });
+  } catch (error) {
+    self.postMessage({ ok: false, error: error instanceof Error ? error.message : 'Game runtime failed.' });
+  }
+};`;
+
+const inlineJson = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c');
+const gameSandboxDocument = (game: EventGame) => {
+  const runtime = game.runtime || { instructions: '', logicSource: '', uiNotes: '' };
+  const players = Array.from({ length: Math.max(2, Math.min(game.maxPlayers, 6)) }, (_, index) => ({
+    id: `player-${index + 1}`,
+    name: index === 0 ? 'You' : `Player ${index + 1}`,
+  }));
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'none';"><style>
+  :root{color-scheme:dark;font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b2425;color:#f7f2e8}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0%,#1c5b54 0,transparent 38%),linear-gradient(155deg,#102d2e,#071718);padding:20px}.shell{width:min(720px,100%);margin:auto}.brand{margin:0 0 16px;color:#9ce6cf;font-size:11px;font-weight:900;letter-spacing:.2em;text-transform:uppercase}.screen{display:grid;gap:14px}.heading{font-family:Georgia,serif;font-size:clamp(28px,7vw,52px);line-height:.95}.text{color:#c5d4cd;line-height:1.55}.card{display:grid;gap:12px;border:1px solid #ffffff1c;border-radius:22px;background:#ffffff0d;padding:18px;box-shadow:0 20px 60px #0004}.card h3{margin:0;color:#9ce6cf;font-size:12px;letter-spacing:.12em;text-transform:uppercase}.button{width:100%;border:0;border-radius:15px;background:#98dbc7;color:#092421;padding:14px 17px;font:inherit;font-weight:900}.button.secondary{background:#ffffff12;color:#f7f2e8;border:1px solid #ffffff20}.timer{display:flex;align-items:center;justify-content:space-between;border-radius:17px;background:#081719;padding:14px 16px}.timer b{font-size:24px}.teams,.scoreboard{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.team,.score{border-radius:16px;background:#ffffff0a;padding:13px}.team strong,.score strong{display:block;margin-bottom:6px;color:#9ce6cf}.team span{display:block;color:#c5d4cd;font-size:13px}.score b{font-size:30px}.list{display:grid;gap:8px;margin:0;padding:0;list-style:none}.list li{border-radius:12px;background:#ffffff0a;padding:10px 12px}.secret{border:1px dashed #f0c77b88;border-radius:16px;background:#f0c77b12;padding:14px}.secret small{display:block;color:#f0c77b}.secret strong{display:block;margin-top:5px;font-size:22px}.input{display:grid;gap:7px}.input span{color:#b7c9c1;font-size:12px;font-weight:800}.input input{width:100%;border:1px solid #ffffff22;border-radius:13px;background:#071719;color:#fff;padding:13px;font:inherit}.error{border:1px solid #ff8d8d55;border-radius:16px;background:#ff6d6d18;padding:16px;color:#ffd4d4}.loading{padding:50px 10px;text-align:center;color:#9ce6cf}@media(max-width:480px){body{padding:14px}.card{border-radius:18px;padding:15px}}
+  </style></head><body><main class="shell"><p class="brand">Nights · Sandboxed game</p><div id="root" class="loading">Preparing ${String(game.title).replace(/[<>&]/g, '')}…</div></main><script>
+  const source=${inlineJson(runtime.logicSource)}; const players=${inlineJson(players)}; const workerSource=${inlineJson(GAME_WORKER_SOURCE)}; let state=null; let view=null; const inputs={}; let timerHandle=0;
+  const root=document.getElementById('root');
+  const resolveInputs=(value)=>{if(typeof value==='string'&&value.startsWith('$input:'))return inputs[value.slice(7)]||'';if(Array.isArray(value))return value.map(resolveInputs);if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,resolveInputs(item)]));return value};
+  const run=(task,action)=>new Promise((resolve,reject)=>{const blob=new Blob([workerSource],{type:'text/javascript'});const url=URL.createObjectURL(blob);const worker=new Worker(url);const timeout=setTimeout(()=>{worker.terminate();URL.revokeObjectURL(url);reject(new Error('This game took too long and was stopped safely.'))},350);worker.onmessage=({data})=>{clearTimeout(timeout);worker.terminate();URL.revokeObjectURL(url);data.ok?resolve(data):reject(new Error(data.error||'Game runtime failed.'))};worker.onerror=()=>{clearTimeout(timeout);worker.terminate();URL.revokeObjectURL(url);reject(new Error('The isolated game worker stopped unexpectedly.'))};worker.postMessage({task,action,state,source,players})});
+  const node=(tag,className,text)=>{const element=document.createElement(tag);if(className)element.className=className;if(text!==undefined)element.textContent=String(text);return element};
+  const renderNode=(item)=>{if(!item||typeof item!=='object')return node('div','text',item??'');const type=item.type; if(type==='screen'){const el=node('div','screen');(item.children||[]).forEach(child=>el.append(renderNode(child)));return el}if(type==='heading')return node('div','heading',item.text);if(type==='text')return node('div','text',item.text);if(type==='card'){const el=node('section','card');if(item.title)el.append(node('h3','',item.title));(item.children||[]).forEach(child=>el.append(renderNode(child)));return el}if(type==='button'){const el=node('button','button '+(item.tone==='secondary'?'secondary':''),item.label);el.type='button';el.onclick=()=>dispatch(resolveInputs(item.action||{}));return el}if(type==='timer'){const el=node('div','timer');el.append(node('span','',item.label||'Time remaining'));const remaining=node('b','','');const update=()=>{const seconds=Math.max(0,Math.ceil((Number(item.deadline||0)-Date.now())/1000));remaining.textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')};update();timerHandle=setInterval(update,250);el.append(remaining);return el}if(type==='teams'){const el=node('div','teams');(item.teams||[]).forEach(team=>{const teamEl=node('div','team');teamEl.append(node('strong','',team.name));(team.players||[]).forEach(player=>teamEl.append(node('span','',player.name||player)));el.append(teamEl)});return el}if(type==='scoreboard'){const el=node('div','scoreboard');Object.entries(item.scores||{}).forEach(([label,score])=>{const scoreEl=node('div','score');scoreEl.append(node('strong','',label),node('b','',score));el.append(scoreEl)});return el}if(type==='list'){const el=node('ul','list');(item.items||[]).forEach(value=>el.append(node('li','',typeof value==='object'?value.label||JSON.stringify(value):value)));return el}if(type==='secret'){const el=node('div','secret');el.append(node('small','',item.label||'Private'),node('strong','',item.value));return el}if(type==='input'){const label=node('label','input');label.append(node('span','',item.label));const input=node('input','','');input.placeholder=item.placeholder||'';input.value=inputs[item.key]||'';input.oninput=event=>{inputs[item.key]=event.target.value};label.append(input);return label}return node('div','text','Unsupported game element')};
+  const draw=()=>{clearInterval(timerHandle);root.className='';root.replaceChildren(renderNode(view))};
+  const fail=(error)=>{root.className='error';root.textContent=error.message||'The game could not start.'};
+  const dispatch=async(action)=>{try{root.style.pointerEvents='none';const result=await run('action',action);state=result.state;view=result.view;draw()}catch(error){fail(error)}finally{root.style.pointerEvents=''}};
+  run('setup',null).then(result=>{state=result.state;view=result.view;draw()}).catch(fail);
+  </script></body></html>`;
+};
+
+function GameSandbox({ game, onClose }: { game: EventGame; onClose: () => void }) {
+  const documentSource = useMemo(() => gameSandboxDocument(game), [game]);
+  return (
+    <div className="game-sandbox-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <div className="game-sandbox-shell" role="dialog" aria-modal="true" aria-label={`Play ${game.title}`}>
+        <header><div><p className="eyebrow">Isolated preview</p><h3 className="font-display">{game.title}</h3></div><button type="button" onClick={onClose} aria-label="Close game"><XCircle size={22} /></button></header>
+        <iframe title={`${game.title} game`} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={documentSource} />
+        <footer><ShieldCheck size={15} /><span>This game runs without access to Nights, Firebase, your camera, or the network.</span></footer>
+      </div>
+    </div>
+  );
+}
+
+function GamePanel({
+  menu,
+  canManage,
+  accountUid,
+  onClose,
+  notify,
+}: {
+  menu: EventMenu;
+  canManage: boolean;
+  accountUid: string;
+  onClose: () => void;
+  notify: (message: string) => void;
+}) {
+  const [games, setGames] = useState<EventGame[]>([]);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [draft, setDraft] = useState<EventGame>(() => newGameDraft(accountUid));
+  const [playing, setPlaying] = useState<EventGame | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!firebaseConfigured) {
+      try {
+        const saved = JSON.parse(localStorage.getItem(gamePreviewKey(menu.id)) || '[]') as EventGame[];
+        queueMicrotask(() => {
+          setGames(saved);
+          setLoading(false);
+        });
+      } catch {
+        queueMicrotask(() => setLoading(false));
+      }
+      return;
+    }
+    let stop = () => {};
+    void (async () => {
+      const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+      const gamesCollection = store.collection(store.getFirestore(getApp()), 'events', menu.id, 'games');
+      const gamesQuery = canManage
+        ? store.query(gamesCollection, store.orderBy('updatedAt', 'desc'))
+        : store.query(gamesCollection, store.where('status', '==', 'published'));
+      stop = store.onSnapshot(
+        gamesQuery,
+        (snapshot) => {
+          setGames(snapshot.docs.map((document) => {
+            const data = document.data();
+            return {
+              ...data,
+              id: document.id,
+              runtime: data.runtime || null,
+              createdAt: data.createdAt?.toMillis?.() ?? Date.now(),
+              updatedAt: data.updatedAt?.toMillis?.() ?? Date.now(),
+            } as EventGame;
+          }));
+          setLoading(false);
+        },
+        () => {
+          setError('Games could not be loaded.');
+          setLoading(false);
+        },
+      );
+    })();
+    return () => stop();
+  }, [canManage, menu.id]);
+
+  const visibleGames = canManage ? games : games.filter((game) => game.status === 'published');
+  const updateDraft = <K extends keyof EventGame>(key: K, value: EventGame[K]) =>
+    setDraft((current) => ({
+      ...current,
+      [key]: value,
+      runtime: key === 'runtime'
+        ? value as EventGame['runtime']
+        : ['playerArrangement', 'interfaceDescription', 'rules', 'scoring', 'timing', 'hiddenInformation', 'winCondition', 'minPlayers', 'maxPlayers'].includes(key)
+          ? null
+          : current.runtime,
+    }));
+  const beginCreate = () => {
+    setDraft(newGameDraft(accountUid));
+    setError('');
+    setEditorOpen(true);
+  };
+  const beginEdit = (game: EventGame) => {
+    setDraft({ ...game });
+    setError('');
+    setEditorOpen(true);
+  };
+  const validateDraft = () => {
+    if (!draft.title.trim()) return 'Give the game a name.';
+    if (!draft.playerArrangement.trim()) return 'Describe how players or teams are arranged.';
+    if (!draft.rules.trim()) return 'Describe the game rules.';
+    if (!draft.interfaceDescription.trim()) return 'Describe what players need to see and control.';
+    if (draft.minPlayers < 1 || draft.maxPlayers < draft.minPlayers) return 'Check the player limits.';
+    return '';
+  };
+  const generate = async () => {
+    const validation = validateDraft();
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      if (!firebaseConfigured) throw new Error('Connect the production backend to generate a game.');
+      const [{ getApp }, authModule] = await Promise.all([import('firebase/app'), import('firebase/auth')]);
+      const user = authModule.getAuth(getApp()).currentUser;
+      if (!user) throw new Error('Sign in again before generating a game.');
+      const result = await callGameGenerator(menu.id, draft, await user.getIdToken());
+      setDraft((current) => ({ ...current, runtime: result.game || null }));
+      notify(`Playable draft generated${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} AI generations left today` : ''}.`);
+    } catch (generationError) {
+      setError(generationError instanceof Error ? generationError.message : 'Game generation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const persist = async (status: EventGame['status']) => {
+    const validation = validateDraft();
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    if (status === 'published' && !draft.runtime?.logicSource) {
+      setError('Generate and preview a playable draft before publishing.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const gameId = draft.id || `game-${crypto.randomUUID()}`;
+      const next: EventGame = {
+        ...draft,
+        id: gameId,
+        title: draft.title.trim(),
+        summary: draft.summary.trim(),
+        status,
+        createdBy: draft.createdBy || accountUid,
+        createdAt: draft.createdAt || Date.now(),
+        updatedAt: Date.now(),
+        version: Math.max(1, draft.version || 1) + (draft.id ? 1 : 0),
+      };
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+        const reference = store.doc(store.getFirestore(getApp()), 'events', menu.id, 'games', gameId);
+        const { createdAt: _createdAt, updatedAt: _updatedAt, ...storedGame } = next;
+        await store.setDoc(reference, draft.id
+          ? { ...storedGame, updatedAt: store.serverTimestamp() }
+          : { ...storedGame, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
+        { merge: true });
+      } else {
+        const updated = [next, ...games.filter((game) => game.id !== gameId)];
+        localStorage.setItem(gamePreviewKey(menu.id), JSON.stringify(updated));
+        setGames(updated);
+      }
+      setDraft(next);
+      setEditorOpen(false);
+      notify(status === 'published' ? 'Game published for this event.' : 'Game draft saved.');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Game could not be saved.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeGame = async (game: EventGame) => {
+    if (!window.confirm(`Delete “${game.title}”? This cannot be undone.`)) return;
+    setBusy(true);
+    try {
+      if (firebaseConfigured) {
+        const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+        await store.deleteDoc(store.doc(store.getFirestore(getApp()), 'events', menu.id, 'games', game.id));
+      } else {
+        const updated = games.filter((entry) => entry.id !== game.id);
+        localStorage.setItem(gamePreviewKey(menu.id), JSON.stringify(updated));
+        setGames(updated);
+      }
+      notify('Game deleted.');
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Game could not be deleted.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="game-panel-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget && !busy) onClose();
+    }}>
+      <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
+        <header className="game-panel-header">
+          <div><p className="eyebrow">{menu.title}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
+          <button type="button" onClick={onClose} disabled={busy} aria-label="Close games"><XCircle size={22} /></button>
+        </header>
+        {!editorOpen ? <>
+          {canManage && <section className="game-create-callout">
+            <span><Sparkles size={22} /></span>
+            <div><strong>Describe any simple gathering game</strong><p>Nights turns your rules, teams, timers, private information and scoring into an isolated playable draft.</p></div>
+            <button type="button" onClick={beginCreate}><Plus size={17} /> Create game</button>
+          </section>}
+          {error && <p className="game-panel-error">{error}</p>}
+          <section className="game-library" aria-label="Event games">
+            <header><div><p className="eyebrow">Game shelf</p><h3 className="font-display">{canManage ? 'Your event games' : 'Ready to play'}</h3></div><span>{visibleGames.length}</span></header>
+            {loading ? <div className="game-empty"><Sparkles size={24} /><strong>Loading games…</strong></div> : visibleGames.length ? <div className="game-card-grid">{visibleGames.map((game) => (
+              <article key={game.id} className="game-card">
+                <div className="game-card-art"><Gamepad2 size={27} /><span>{game.minPlayers}–{game.maxPlayers} players</span></div>
+                <div className="game-card-copy"><div><span className={`game-status ${game.status}`}>{game.status}</span><small>v{game.version}</small></div><h4 className="font-display">{game.title}</h4><p>{game.summary || game.rules}</p></div>
+                <footer>
+                  <button type="button" className="game-play" disabled={!game.runtime?.logicSource} onClick={() => setPlaying(game)}><Play size={15} /> Play</button>
+                  {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete" onClick={() => void removeGame(game)} disabled={busy} aria-label={`Delete ${game.title}`}><Trash2 size={15} /></button></>}
+                </footer>
+              </article>
+            ))}</div> : <div className="game-empty"><Gamepad2 size={29} /><strong>{canManage ? 'No games yet' : 'The host has not published a game yet'}</strong><span>{canManage ? 'Create one from the rules your group already has in mind.' : 'Published games will appear here.'}</span></div>}
+          </section>
+        </> : <section className="game-editor">
+          <header><div><p className="eyebrow">{draft.id ? 'Edit game' : 'New game'}</p><h3 className="font-display">Define the experience</h3><span>Be specific, then generate and test. You can revise these fields and regenerate as often as needed.</span></div><button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Back to games</button></header>
+          {error && <p className="game-panel-error">{error}</p>}
+          <div className="game-editor-grid">
+            <label className="game-field game-field-title"><span>Game name</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="Reverse Charades" maxLength={90} /></label>
+            <div className="game-player-limits"><label><span>Minimum players</span><input type="number" min="1" max="100" value={draft.minPlayers} onChange={(event) => updateDraft('minPlayers', Math.max(1, Number(event.target.value) || 1))} /></label><label><span>Maximum players</span><input type="number" min={draft.minPlayers} max="100" value={draft.maxPlayers} onChange={(event) => updateDraft('maxPlayers', Math.max(draft.minPlayers, Number(event.target.value) || draft.minPlayers))} /></label></div>
+            <label className="game-field game-field-wide"><span>Short description</span><textarea value={draft.summary} onChange={(event) => updateDraft('summary', event.target.value)} placeholder="What kind of game is this, and what makes it fun?" rows={2} /></label>
+            <label className="game-field"><span>Players and teams</span><textarea value={draft.playerArrangement} onChange={(event) => updateDraft('playerArrangement', event.target.value)} placeholder="Two teams. Assign attendees randomly, but allow the host to move players before starting." rows={5} /></label>
+            <label className="game-field"><span>Interface</span><textarea value={draft.interfaceDescription} onChange={(event) => updateDraft('interfaceDescription', event.target.value)} placeholder="Show both teams, whose turn it is, a large timer, and a private word card for the opposing team." rows={5} /></label>
+            <label className="game-field"><span>Rules</span><textarea value={draft.rules} onChange={(event) => updateDraft('rules', event.target.value)} placeholder="Describe setup, each turn, allowed actions, what stays hidden, and when a turn ends." rows={7} /></label>
+            <label className="game-field"><span>Scoring</span><textarea value={draft.scoring} onChange={(event) => updateDraft('scoring', event.target.value)} placeholder="One point for a correct guess. No point when the timer expires." rows={4} /></label>
+            <label className="game-field"><span>Turns and timing</span><textarea value={draft.timing} onChange={(event) => updateDraft('timing', event.target.value)} placeholder="Teams alternate. Each turn lasts 60 seconds." rows={4} /></label>
+            <label className="game-field"><span>Private or hidden information</span><textarea value={draft.hiddenInformation} onChange={(event) => updateDraft('hiddenInformation', event.target.value)} placeholder="The acting word is hidden from the guessing team until the turn ends." rows={4} /></label>
+            <label className="game-field game-field-wide"><span>How the game ends</span><textarea value={draft.winCondition} onChange={(event) => updateDraft('winCondition', event.target.value)} placeholder="After five rounds, the team with the highest score wins. Ties go to one sudden-death round." rows={3} /></label>
+          </div>
+          {draft.runtime && <div className="game-runtime-ready"><ShieldCheck size={19} /><div><strong>Playable sandbox ready</strong><span>{draft.runtime.instructions}</span></div><button type="button" onClick={() => setPlaying(draft)}><Play size={15} /> Preview</button></div>}
+          <footer className="game-editor-actions">
+            <button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Cancel</button>
+            <button type="button" className="game-generate" onClick={() => void generate()} disabled={busy}><Sparkles size={16} />{busy ? 'Designing…' : draft.runtime ? 'Regenerate' : 'Generate playable draft'}</button>
+            <button type="button" onClick={() => void persist('draft')} disabled={busy}><Save size={16} /> Save draft</button>
+            <button type="button" className="game-publish" onClick={() => void persist('published')} disabled={busy || !draft.runtime}><Check size={16} /> Publish</button>
+          </footer>
+        </section>}
+      </div>
+      {playing && <GameSandbox game={playing} onClose={() => setPlaying(null)} />}
     </div>
   );
 }

@@ -53,3 +53,20 @@ environment.
 Firebase's public web configuration is safe to ship in a static bundle; Firestore and Storage rules are the security boundary. Guests do not authenticate. A SHA-256 identifier derived from the normalized phone number lets the same phone recover the same temporary profile across browsers, while event-wide name and phone claims prevent duplicates. Firestore rules permit new orders only for Yes RSVPs while the event accepts orders. Every active order increments a protected RSVP lock, and terminal order transitions release it. Hosts see every order and RSVP, including the phone number supplied by the guest. Cancelling an order records a status change rather than deleting it. Because phone numbers are not verified, they are convenient identifiers—not proof of ownership; anyone who knows a guest's phone number could assume that guest's temporary profile.
 
 Chat push notifications are opt-in and event-specific. On iPhone and iPad they require iOS/iPadOS 16.4 or later and the site must be opened from an icon added to the Home Screen. A participant enables them from the bell in Event chat; Firebase stores the browser push subscription and the `notifyEventChat` function sends new-message notifications only to the host and approved Going guests for that event.
+
+## Generated event games
+
+Event Options → Games contains an event-specific game shelf and structured game
+designer. Hosts describe players and teams, interface, rules, scoring, timing,
+hidden information, and the win condition. The authenticated Cloudflare Worker
+uses Gemini structured output to turn that description into the constrained
+Nights game contract. Drafts remain private to the host; published games are
+available to approved Going guests.
+
+Generated logic never runs in the Nights page. Each operation runs in a fresh,
+time-limited Web Worker inside a sandboxed opaque-origin iframe with networking,
+storage, navigation, forms, popups, camera, and microphone disabled. The game
+receives only the approved players/teams/random/clock functions and renders
+through Nights UI constructors. This first release provides isolated local play
+and preview; synchronized host-authoritative sessions will build on the same
+saved game contract.

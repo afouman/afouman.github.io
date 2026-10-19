@@ -953,6 +953,99 @@ service cloud.firestore {
         );
       }
 
+      match /games/{gameId} {
+        allow get, list: if canManageEvent(eventId) || (
+          hasCompleteAccount()
+          && guestCanChat(eventId, accountProfile().data.guestUid)
+          && resource.data.status == 'published'
+        );
+        allow create: if canManageEvent(eventId)
+          && request.resource.data.keys().hasOnly([
+            'id', 'title', 'summary', 'status', 'playerArrangement',
+            'interfaceDescription', 'rules', 'scoring', 'timing',
+            'hiddenInformation', 'winCondition', 'minPlayers', 'maxPlayers',
+            'runtime', 'createdBy', 'createdAt', 'updatedAt', 'version'
+          ])
+          && request.resource.data.id == gameId
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status in ['draft', 'published']
+          && request.resource.data.title is string
+          && request.resource.data.title.size() >= 1
+          && request.resource.data.title.size() <= 90
+          && request.resource.data.summary is string
+          && request.resource.data.summary.size() <= 2000
+          && request.resource.data.playerArrangement is string
+          && request.resource.data.playerArrangement.size() >= 1
+          && request.resource.data.playerArrangement.size() <= 6000
+          && request.resource.data.interfaceDescription is string
+          && request.resource.data.interfaceDescription.size() >= 1
+          && request.resource.data.interfaceDescription.size() <= 6000
+          && request.resource.data.rules is string
+          && request.resource.data.rules.size() >= 1
+          && request.resource.data.rules.size() <= 6000
+          && request.resource.data.scoring is string
+          && request.resource.data.scoring.size() <= 6000
+          && request.resource.data.timing is string
+          && request.resource.data.timing.size() <= 6000
+          && request.resource.data.hiddenInformation is string
+          && request.resource.data.hiddenInformation.size() <= 6000
+          && request.resource.data.winCondition is string
+          && request.resource.data.winCondition.size() <= 6000
+          && request.resource.data.minPlayers is int
+          && request.resource.data.minPlayers >= 1
+          && request.resource.data.maxPlayers is int
+          && request.resource.data.maxPlayers >= request.resource.data.minPlayers
+          && request.resource.data.maxPlayers <= 100
+          && (
+            request.resource.data.runtime == null
+            || (
+              request.resource.data.runtime is map
+              && request.resource.data.runtime.keys().hasOnly(['instructions', 'logicSource', 'uiNotes'])
+              && request.resource.data.runtime.instructions is string
+              && request.resource.data.runtime.instructions.size() <= 1000
+              && request.resource.data.runtime.logicSource is string
+              && request.resource.data.runtime.logicSource.size() <= 16000
+              && request.resource.data.runtime.uiNotes is string
+              && request.resource.data.runtime.uiNotes.size() <= 1000
+            )
+          )
+          && (request.resource.data.status == 'draft' || request.resource.data.runtime != null)
+          && request.resource.data.version is int
+          && request.resource.data.version >= 1
+          && request.resource.data.createdAt == request.time
+          && request.resource.data.updatedAt == request.time;
+        allow update: if canManageEvent(eventId)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && request.resource.data.version is int
+          && request.resource.data.version > resource.data.version
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'summary', 'status', 'playerArrangement',
+            'interfaceDescription', 'rules', 'scoring', 'timing',
+            'hiddenInformation', 'winCondition', 'minPlayers', 'maxPlayers',
+            'runtime', 'updatedAt', 'version'
+          ])
+          && request.resource.data.status in ['draft', 'published']
+          && request.resource.data.title is string
+          && request.resource.data.title.size() >= 1
+          && request.resource.data.title.size() <= 90
+          && request.resource.data.playerArrangement is string
+          && request.resource.data.playerArrangement.size() >= 1
+          && request.resource.data.interfaceDescription is string
+          && request.resource.data.interfaceDescription.size() >= 1
+          && request.resource.data.rules is string
+          && request.resource.data.rules.size() >= 1
+          && request.resource.data.minPlayers is int
+          && request.resource.data.minPlayers >= 1
+          && request.resource.data.maxPlayers is int
+          && request.resource.data.maxPlayers >= request.resource.data.minPlayers
+          && request.resource.data.maxPlayers <= 100
+          && (request.resource.data.status == 'draft' || request.resource.data.runtime != null);
+        allow delete: if canManageEvent(eventId);
+      }
+
       match /chat/{messageId} {
         allow read: if true;
         allow create: if chatIsOpen(eventId)
