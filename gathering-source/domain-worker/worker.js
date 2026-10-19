@@ -491,6 +491,29 @@ async function requestGeminiGame(env, model, prompt) {
   }
 }
 
+function configuredGameModels(env) {
+  return [...new Set([
+    String(env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim(),
+    ...String(env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash,gemini-2.5-flash-lite')
+      .split(',')
+      .map(value => value.trim()),
+  ].filter(Boolean))];
+}
+
+async function requestGeminiGameWithFallback(env, models, prompt) {
+  let lastFailure = { game: null, error: 'No Gemini model is configured.', status: 503, model: '' };
+  for (const model of models) {
+    const result = await requestGeminiGame(env, model, prompt);
+    if (result.game) return { ...result, model };
+    lastFailure = { ...result, model };
+    if (result.status !== 429 && result.status !== 502 && result.status !== 503) break;
+  }
+  return {
+    ...lastFailure,
+    error: `All configured Gemini models are temporarily unavailable. ${lastFailure.error}`,
+  };
+}
+
 async function generateEventGame(request, env) {
   try {
     const { token, claims } = await verifyFirebaseToken(request);
@@ -512,13 +535,13 @@ async function generateEventGame(request, env) {
     if (used >= dailyLimit)
       return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
 
-    const model = String(env.GEMINI_MODEL || 'gemini-2.5-flash-lite');
-    let generation = await requestGeminiGame(env, model, gameGenerationPrompt(definition));
+    const models = configuredGameModels(env);
+    let generation = await requestGeminiGameWithFallback(env, models, gameGenerationPrompt(definition));
     if (!generation.game) return json(request, { error: generation.error }, generation.status);
     let game = generation.game;
     let validation = generatedRuntimeValidation(game);
     if (!validation.valid) {
-      generation = await requestGeminiGame(env, model, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate from scratch. Return only the required JSON fields, with statements for setupBody, onActionBody, and viewBody.`);
+      generation = await requestGeminiGameWithFallback(env, models, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate from scratch. Return only the required JSON fields, with statements for setupBody, onActionBody, and viewBody.`);
       if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
       game = generation.game;
       validation = generatedRuntimeValidation(game);
@@ -534,7 +557,7 @@ async function generateEventGame(request, env) {
         logicSource: validation.source,
       },
       remainingToday: Math.max(0, dailyLimit - used - 1),
-      model,
+      model: generation.model,
     });
   } catch (error) {
     return json(request, { error: error instanceof Error ? error.message : 'Game generation failed.' }, 400);
@@ -866,6 +889,8 @@ export {
   expiredUnverifiedProfiles,
   gameGenerationPrompt,
   assembleGeneratedGame,
+  configuredGameModels,
+  requestGeminiGameWithFallback,
   generatedRuntimeValidation,
   normalizeGeneratedGameSource,
   purgeExpiredUnverifiedAccounts,
