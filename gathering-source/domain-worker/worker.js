@@ -402,13 +402,27 @@ Host definition:
 ${JSON.stringify(definition, null, 2)}`;
 }
 
+function normalizeGeneratedGameSource(value) {
+  let source = String(value || '').trim();
+  source = source
+    .replace(/^```(?:javascript|js)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim()
+    .replace(/;\s*$/, '')
+    .trim();
+  const assignment = source.match(/^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*([\s\S]+)$/);
+  if (assignment) source = assignment[1].trim().replace(/;\s*$/, '').trim();
+  if (source.startsWith('{') && source.endsWith('}')) source = `(${source})`;
+  return source;
+}
+
 function generatedRuntimeValidation(value) {
   if (!value || typeof value !== 'object') return { valid: false, error: 'Gemini did not return a game object.' };
   if (typeof value.instructions !== 'string' || typeof value.uiNotes !== 'string' || typeof value.logicSource !== 'string')
     return { valid: false, error: 'Gemini omitted part of the playable game.' };
-  const source = value.logicSource.trim();
+  const source = normalizeGeneratedGameSource(value.logicSource);
   if (!source.startsWith('({') || !source.endsWith('})'))
-    return { valid: false, error: 'Gemini returned code in the wrong format.' };
+    return { valid: false, error: 'Gemini returned code that could not be converted into a safe Nights game. Generate again.' };
   if (source.length > 16_000)
     return { valid: false, error: 'Gemini generated a game that is too large for the safe player.' };
   const forbiddenMatch = source.match(GAME_SOURCE_FORBIDDEN);
@@ -421,10 +435,10 @@ function generatedRuntimeValidation(value) {
       error: `Gemini used the blocked capability “${forbiddenMatch[0]}”. Your game description is valid; generate again.${replacement}`,
     };
   }
-  const missing = ['setup', 'onAction', 'view'].filter(name => !new RegExp(`\\b${name}\\s*\\(`).test(source));
+  const missing = ['setup', 'onAction', 'view'].filter(name => !new RegExp(`\\b${name}\\s*(?:\\(|:)`).test(source));
   if (missing.length)
     return { valid: false, error: `Gemini omitted the required ${missing.join(', ')} game function${missing.length === 1 ? '' : 's'}. Generate again.` };
-  return { valid: true, error: '' };
+  return { valid: true, error: '', source };
 }
 
 function validGeneratedRuntime(value) {
@@ -488,7 +502,7 @@ async function generateEventGame(request, env) {
       game: {
         instructions: game.instructions.slice(0, 1000),
         uiNotes: game.uiNotes.slice(0, 1000),
-        logicSource: game.logicSource.trim(),
+        logicSource: validation.source,
       },
       remainingToday: Math.max(0, dailyLimit - used - 1),
       model,
@@ -823,6 +837,7 @@ export {
   expiredUnverifiedProfiles,
   gameGenerationPrompt,
   generatedRuntimeValidation,
+  normalizeGeneratedGameSource,
   purgeExpiredUnverifiedAccounts,
   upstreamPath,
   validGeneratedRuntime,
