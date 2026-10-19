@@ -7,7 +7,7 @@
 	"vars": {
 		"GEMINI_MODEL": "gemini-3.5-flash-lite",
 		"GEMINI_FALLBACK_MODELS": "gemini-3.8-flash,gemini-2.5-flash-lite",
-		"GAME_GENERATION_DAILY_LIMIT": "15"
+		"GAME_GENERATION_DAILY_LIMIT": "100"
 	},
 	"triggers": {
 		"crons": ["17 3 * * *"]
