@@ -63,6 +63,24 @@ function firestoreFields(fields) {
   return Object.fromEntries(Object.entries(fields || {}).map(([key, value]) => [key, firestoreValue(value)]));
 }
 
+function toFirestoreValue(value) {
+  if (value === null || value === undefined) return { nullValue: null };
+  if (typeof value === 'string') return { stringValue: value };
+  if (typeof value === 'boolean') return { booleanValue: value };
+  if (typeof value === 'number') return Number.isInteger(value)
+    ? { integerValue: String(value) }
+    : { doubleValue: value };
+  if (Array.isArray(value)) return { arrayValue: { values: value.map(toFirestoreValue) } };
+  if (typeof value === 'object') return {
+    mapValue: { fields: Object.fromEntries(Object.entries(value).map(([key, item]) => [key, toFirestoreValue(item)])) },
+  };
+  return { stringValue: String(value) };
+}
+
+function toFirestoreFields(value) {
+  return Object.fromEntries(Object.entries(value || {}).map(([key, item]) => [key, toFirestoreValue(item)]));
+}
+
 async function firestoreDocument(path, token = '') {
   const headers = { accept: 'application/json' };
   if (token) headers.authorization = `Bearer ${token}`;
@@ -152,6 +170,34 @@ async function adminFirebaseFetch(env, url, options = {}) {
     throw new Error(`Firebase cleanup request failed (${response.status}): ${detail.slice(0, 300)}`);
   }
   return response;
+}
+
+async function adminFirestoreDocument(env, path) {
+  const response = await adminFirebaseFetch(
+    env,
+    `${FIRESTORE_ROOT}/${path.split('/').map(encodeURIComponent).join('/')}`,
+  );
+  if (response.status === 404) return null;
+  const document = await response.json();
+  return {
+    data: firestoreFields(document.fields || {}),
+    updateTime: document.updateTime || '',
+  };
+}
+
+async function writeAdminFirestoreDocument(env, path, data, updateTime = '') {
+  const url = new URL(`${FIRESTORE_ROOT}/${path.split('/').map(encodeURIComponent).join('/')}`);
+  if (updateTime) url.searchParams.set('currentDocument.updateTime', updateTime);
+  else url.searchParams.set('currentDocument.exists', 'false');
+  const response = await adminFirebaseFetch(env, url.href, {
+    method: 'PATCH',
+    body: JSON.stringify({ fields: toFirestoreFields(data) }),
+  });
+  const document = await response.json();
+  return {
+    data: firestoreFields(document.fields || {}),
+    updateTime: document.updateTime || '',
+  };
 }
 
 async function sha256Hex(value) {
@@ -578,6 +624,164 @@ async function generateEventGame(request, env) {
   }
 }
 
+function cleanGameState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('The game returned an invalid shared state.');
+  const serialized = JSON.stringify(value);
+  if (serialized.length > 80_000) throw new Error('The shared game state is too large.');
+  return JSON.parse(serialized);
+}
+
+function cleanGameTeams(value, joinedPlayers) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 8)
+    throw new Error('Choose between one and eight teams.');
+  const joinedIds = new Set(joinedPlayers.map(player => player.id));
+  const assigned = new Set();
+  return value.map((team, index) => {
+    const playerIds = Array.isArray(team?.playerIds)
+      ? team.playerIds.filter(id => joinedIds.has(id) && !assigned.has(id)).slice(0, 100)
+      : [];
+    playerIds.forEach(id => assigned.add(id));
+    return {
+      id: safeSegment(team?.id) ? team.id : `team-${index + 1}`,
+      name: String(team?.name || `Team ${index + 1}`).trim().slice(0, 60),
+      playerIds,
+    };
+  });
+}
+
+function sessionStateWithRoster(state, session) {
+  const playersById = new Map((session.joinedPlayers || []).map(player => [player.id, player]));
+  const teams = (session.teams || []).map(team => ({
+    id: team.id,
+    name: team.name,
+    playerIds: team.playerIds,
+    players: team.playerIds.map(id => playersById.get(id)).filter(Boolean),
+  }));
+  return {
+    ...cleanGameState(state),
+    hostId: session.hostId,
+    joinedPlayerIds: (session.joinedPlayers || []).map(player => player.id),
+    joinedPlayers: session.joinedPlayers || [],
+    teams,
+  };
+}
+
+async function gameSessionAccess(request, env, body) {
+  const { claims } = await verifyFirebaseToken(request);
+  if (!body || !safeSegment(body.eventId) || !safeSegment(body.gameId))
+    throw new Error('Invalid game session.');
+  const [eventDocument, gameDocument, profileDocument] = await Promise.all([
+    adminFirestoreDocument(env, `events/${body.eventId}`),
+    adminFirestoreDocument(env, `events/${body.eventId}/games/${body.gameId}`),
+    adminFirestoreDocument(env, `users/${claims.sub}`),
+  ]);
+  const event = eventDocument?.data;
+  const game = gameDocument?.data;
+  if (!event || !game) throw new Error('Game not found.');
+  const host = event.ownerUid === claims.sub
+    || (claims.email === LEGACY_HOST_EMAIL && event.ownerUid === LEGACY_HOST_UID);
+  if (host) return {
+    claims,
+    event,
+    game,
+    actor: { id: claims.sub, name: 'Host' },
+    host: true,
+  };
+  const profile = profileDocument?.data;
+  if (!profile?.guestUid) throw new Error('Complete your Nights account before joining.');
+  const [rsvpDocument, invitationDocument] = await Promise.all([
+    adminFirestoreDocument(env, `events/${body.eventId}/rsvps/${profile.guestUid}`),
+    adminFirestoreDocument(env, `users/${claims.sub}/invitations/${body.eventId}`),
+  ]);
+  const rsvp = rsvpDocument?.data;
+  const invited = invitationDocument?.data?.recipientGuestUid === profile.guestUid;
+  const approved = !event.requireGuestApproval || invited || !rsvp?.approvalStatus || rsvp.approvalStatus === 'approved';
+  if (game.status !== 'published' || rsvp?.status !== 'yes' || !approved)
+    throw new Error('Only approved attendees who are going can play.');
+  return {
+    claims,
+    event,
+    game,
+    actor: { id: profile.guestUid, name: String(rsvp.guestName || profile.displayName || profile.firstName || 'Guest').slice(0, 80) },
+    host: false,
+  };
+}
+
+async function updateGameSession(request, env) {
+  try {
+    const body = await request.json().catch(() => null);
+    const access = await gameSessionAccess(request, env, body);
+    const sessionPath = `events/${body.eventId}/games/${body.gameId}/sessions/live`;
+    const existingDocument = await adminFirestoreDocument(env, sessionPath);
+    const existing = existingDocument?.data || null;
+    const operation = String(body.operation || '');
+    if (!existing && operation !== 'ensure')
+      return json(request, { error: 'The shared game is still starting. Try again.' }, 409);
+
+    let next;
+    if (!existing) {
+      const baseState = cleanGameState(body.state);
+      next = {
+        gameId: body.gameId,
+        gameVersion: Number(access.game.version) || 1,
+        hostId: access.event.ownerUid,
+        revision: 1,
+        joinedPlayers: [],
+        teams: [],
+        state: sessionStateWithRoster(baseState, {
+          hostId: access.event.ownerUid,
+          joinedPlayers: [],
+          teams: [],
+        }),
+        updatedBy: access.actor.id,
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      const expectedRevision = Number(body.expectedRevision);
+      if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(existing.revision))
+        return json(request, { error: 'The game changed on another device.', session: existing }, 409);
+      next = { ...existing, revision: expectedRevision + 1, updatedBy: access.actor.id, updatedAt: new Date().toISOString() };
+      if (operation === 'ensure') {
+        if (Number(existing.gameVersion) === Number(access.game.version))
+          return json(request, { ok: true, session: existing });
+        next.gameVersion = Number(access.game.version) || 1;
+        next.joinedPlayers = [];
+        next.teams = [];
+        next.state = sessionStateWithRoster(body.state, next);
+      } else if (operation === 'join') {
+        const joinedPlayers = Array.isArray(existing.joinedPlayers) ? [...existing.joinedPlayers] : [];
+        if (!joinedPlayers.some(player => player.id === access.actor.id)) joinedPlayers.push(access.actor);
+        next.joinedPlayers = joinedPlayers;
+        next.state = sessionStateWithRoster(existing.state || {}, next);
+      } else if (operation === 'teams') {
+        if (!access.host) return json(request, { error: 'Only the host can assign teams.' }, 403);
+        next.teams = cleanGameTeams(body.teams, existing.joinedPlayers || []);
+        next.state = sessionStateWithRoster(existing.state || {}, next);
+      } else if (operation === 'state') {
+        if (!(existing.joinedPlayers || []).some(player => player.id === access.actor.id))
+          return json(request, { error: 'Join the game before playing.' }, 403);
+        next.state = sessionStateWithRoster(body.state, existing);
+      } else {
+        return json(request, { error: 'Unknown game operation.' }, 400);
+      }
+    }
+
+    try {
+      const saved = await writeAdminFirestoreDocument(env, sessionPath, next, existingDocument?.updateTime || '');
+      return json(request, { ok: true, session: saved.data });
+    } catch (writeError) {
+      if (String(writeError).includes('(409)') || String(writeError).includes('FAILED_PRECONDITION')) {
+        const latest = await adminFirestoreDocument(env, sessionPath);
+        return json(request, { error: 'The game changed on another device.', session: latest?.data || null }, 409);
+      }
+      throw writeError;
+    }
+  } catch (error) {
+    return json(request, { error: error instanceof Error ? error.message : 'Shared game update failed.' }, 401);
+  }
+}
+
 async function deleteAccountPushData(request, env) {
   try {
     const { token, claims } = await verifyFirebaseToken(request);
@@ -921,6 +1125,8 @@ export default {
       if (origin && !ALLOWED_ORIGINS.has(origin)) return json(request, { error: 'Origin not allowed.' }, 403);
       if (incomingUrl.pathname === '/api/games/generate' && request.method === 'POST')
         return generateEventGame(request, env);
+      if (incomingUrl.pathname === '/api/games/session' && request.method === 'POST')
+        return updateGameSession(request, env);
       return json(request, { error: 'Not found.' }, 404);
     }
     if (incomingUrl.pathname.startsWith('/api/push/')) {

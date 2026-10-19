@@ -1044,6 +1044,17 @@ service cloud.firestore {
           && request.resource.data.maxPlayers <= 100
           && (request.resource.data.status == 'draft' || request.resource.data.runtime != null);
         allow delete: if canManageEvent(eventId);
+
+        match /sessions/{sessionId} {
+          allow get, list: if canManageEvent(eventId) || (
+            hasCompleteAccount()
+            && guestCanChat(eventId, accountProfile().data.guestUid)
+            && get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.status == 'published'
+          );
+          // Shared game mutations are validated and serialized by the authenticated
+          // Cloudflare game endpoint. Browser clients only receive realtime snapshots.
+          allow create, update, delete: if false;
+        }
       }
 
       match /chat/{messageId} {

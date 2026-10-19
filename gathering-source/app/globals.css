@@ -5893,10 +5893,23 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-editor-actions .game-publish { background: #176d64; color: #fff; }
 .game-editor-actions button:disabled { opacity: 0.45; }
 .game-sandbox-backdrop { position: fixed; z-index: 180; inset: 0; display: grid; place-items: center; background: rgb(2 10 12 / 0.82); padding: 1rem; backdrop-filter: blur(16px); }
-.game-sandbox-shell { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; width: min(780px, 100%); height: min(880px, calc(100dvh - 2rem)); overflow: hidden; border: 1px solid rgb(255 255 255 / 0.12); border-radius: 1.7rem; background: #0b2425; color: #f7f2e8; box-shadow: 0 40px 130px rgb(0 0 0 / 0.6); }
+.game-sandbox-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(780px, 100%); height: min(880px, calc(100dvh - 2rem)); overflow: hidden; border: 1px solid rgb(255 255 255 / 0.12); border-radius: 1.7rem; background: #0b2425; color: #f7f2e8; box-shadow: 0 40px 130px rgb(0 0 0 / 0.6); }
 .game-sandbox-shell > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(255 255 255 / 0.1); padding: 1rem 1.15rem; }
 .game-sandbox-shell > header h3 { margin-top: 0.1rem; font-size: 1.6rem; }
 .game-sandbox-shell > header button { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 50%; background: rgb(255 255 255 / 0.1); color: #fff; }
+.game-session-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.65rem; border-bottom: 1px solid rgb(255 255 255 / 0.1); background: rgb(255 255 255 / 0.045); padding: 0.75rem 1rem; }
+.game-session-status { display: grid; margin-right: auto; }
+.game-session-status strong { color: #9ce6cf; font-size: 0.8rem; }
+.game-session-status span { color: rgb(255 255 255 / 0.62); font-size: 0.65rem; }
+.game-session-bar > button, .game-team-controls > button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 0.35rem; border-radius: 999px; background: #98dbc7; color: #092421; padding: 0.5rem 0.85rem; font-size: 0.7rem; font-weight: 900; }
+.game-session-bar button:disabled { opacity: 0.5; }
+.game-joined { display: inline-flex; align-items: center; gap: 0.3rem; color: #9ce6cf; font-size: 0.72rem; font-weight: 900; }
+.game-team-controls { display: flex; flex: 1 0 100%; flex-wrap: wrap; align-items: end; gap: 0.55rem; border-top: 1px solid rgb(255 255 255 / 0.08); padding-top: 0.65rem; }
+.game-team-controls > label, .game-manual-assignments label { display: grid; gap: 0.22rem; color: rgb(255 255 255 / 0.68); font-size: 0.58rem; font-weight: 800; }
+.game-team-controls select { min-height: 34px; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 0.6rem; background: #122f30; color: #fff; padding: 0.35rem 1.7rem 0.35rem 0.55rem; font: inherit; }
+.game-manual-assignments { display: flex; flex: 1 0 100%; gap: 0.45rem; overflow-x: auto; padding-bottom: 0.15rem; }
+.game-manual-assignments label { min-width: 130px; }
+.game-session-bar > p { flex: 1 0 100%; margin: 0; color: #ffb4a8; font-size: 0.68rem; }
 .game-sandbox-shell iframe { width: 100%; height: 100%; border: 0; background: #0b2425; }
 .game-sandbox-shell > footer { display: flex; align-items: center; gap: 0.45rem; border-top: 1px solid rgb(255 255 255 / 0.08); padding: 0.7rem 1rem calc(0.7rem + env(safe-area-inset-bottom)); color: rgb(255 255 255 / 0.58); font-size: 0.58rem; }
 
