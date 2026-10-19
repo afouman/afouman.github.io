@@ -8553,7 +8553,9 @@ function GamePanel({
       const user = authModule.getAuth(getApp()).currentUser;
       if (!user) throw new Error('Sign in again before generating a game.');
       const result = await callGameGenerator(menu.id, draft, await user.getIdToken());
-      setDraft((current) => ({ ...current, runtime: result.game || null }));
+      const generatedDraft: EventGame = { ...draft, runtime: result.game || null };
+      setDraft(generatedDraft);
+      setPlaying(generatedDraft);
       notify(`Playable draft generated${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} AI generations left today` : ''}.`);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Game generation failed.');
@@ -8594,6 +8596,7 @@ function GamePanel({
           ? { ...storedGame, updatedAt: store.serverTimestamp() }
           : { ...storedGame, createdAt: store.serverTimestamp(), updatedAt: store.serverTimestamp() },
         { merge: true });
+        setGames((current) => [next, ...current.filter((game) => game.id !== gameId)]);
       } else {
         const updated = [next, ...games.filter((game) => game.id !== gameId)];
         localStorage.setItem(gamePreviewKey(menu.id), JSON.stringify(updated));
