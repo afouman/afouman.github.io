@@ -6748,15 +6748,19 @@ export default function Home() {
         </div>
       )}
 
-      {gamesOpen && menu.id !== EMPTY_EVENT_ID && (
+      {appEnvironmentReady && gamesOpen && menu.id !== EMPTY_EVENT_ID && createPortal(
         <GamePanel
           key={menu.id}
           menu={menu}
           canManage={canManageCurrentEvent}
           accountUid={accountUser?.uid || ''}
-          onClose={() => setGamesOpen(false)}
+          onClose={() => {
+            setEventMenuOpen(false);
+            setGamesOpen(false);
+          }}
           notify={notify}
-        />
+        />,
+        document.body,
       )}
 
       {activityCenterOpen && (
@@ -8433,11 +8437,15 @@ const gameSandboxDocument = (game: EventGame) => {
 function GameSandbox({ game, onClose }: { game: EventGame; onClose: () => void }) {
   const documentSource = useMemo(() => gameSandboxDocument(game), [game]);
   return (
-    <div className="game-sandbox-backdrop" role="presentation" onMouseDown={(event) => {
+    <div className="game-sandbox-backdrop" role="presentation" onPointerDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className="game-sandbox-shell" role="dialog" aria-modal="true" aria-label={`Play ${game.title}`}>
-        <header><div><p className="eyebrow">Isolated preview</p><h3 className="font-display">{game.title}</h3></div><button type="button" onClick={onClose} aria-label="Close game"><XCircle size={22} /></button></header>
+        <header><div><p className="eyebrow">Isolated preview</p><h3 className="font-display">{game.title}</h3></div><button type="button" onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClose();
+        }} aria-label="Close game"><XCircle size={22} /></button></header>
         <iframe title={`${game.title} game`} sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={documentSource} />
         <footer><ShieldCheck size={15} /><span>This game runs without access to Nights, Firebase, your camera, or the network.</span></footer>
       </div>
@@ -8632,13 +8640,13 @@ function GamePanel({
   };
 
   return (
-    <div className="game-panel-backdrop" role="presentation" onMouseDown={(event) => {
+    <div className="game-panel-backdrop" role="presentation" onPointerDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
         <header className="game-panel-header">
           <div><p className="eyebrow">{menu.title}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
-          <button type="button" onClick={(event) => {
+          <button type="button" onPointerDown={(event) => {
             event.preventDefault();
             event.stopPropagation();
             onClose();

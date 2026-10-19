@@ -354,11 +354,13 @@ function cleanGameDefinition(value) {
 function gameResponseSchema() {
   return {
     type: 'object',
-    required: ['instructions', 'logicSource', 'uiNotes'],
+    required: ['instructions', 'setupBody', 'onActionBody', 'viewBody', 'uiNotes'],
     properties: {
       instructions: { type: 'string', description: 'A short host-facing explanation of how to start and test the game.' },
       uiNotes: { type: 'string', description: 'A short description of the generated player interface.' },
-      logicSource: { type: 'string', description: 'One JavaScript object expression implementing the exact Nights game contract.' },
+      setupBody: { type: 'string', description: 'Only the JavaScript statements inside setup(context), including an explicit return.' },
+      onActionBody: { type: 'string', description: 'Only the JavaScript statements inside onAction(state, action, context), including an explicit return.' },
+      viewBody: { type: 'string', description: 'Only the JavaScript statements inside view(state, viewer, ui), including an explicit return.' },
     },
   };
 }
@@ -366,7 +368,7 @@ function gameResponseSchema() {
 function gameGenerationPrompt(definition) {
   return `You are the game designer for Nights, a gathering app. Convert the host's description into a small deterministic party-game module.
 
-Return JSON matching the response schema. logicSource must be a SINGLE JAVASCRIPT OBJECT EXPRESSION, beginning with ({ and ending with }). Do not use Markdown fences.
+Return JSON matching the response schema. Return function BODIES only: setupBody is inserted inside setup(context), onActionBody inside onAction(state, action, context), and viewBody inside view(state, viewer, ui). Each body must include an explicit return statement. Do not return function declarations, an object wrapper, Markdown fences, or explanatory text in these fields.
 
 The object must implement exactly:
 - setup(context) -> serializable initial state
@@ -396,7 +398,7 @@ Available UI constructors only:
 An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
 
 Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
-The safety validator rejects these names anywhere in logicSource, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
+The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
 
 Host definition:
 ${JSON.stringify(definition, null, 2)}`;
@@ -451,6 +453,17 @@ function validGeneratedRuntime(value) {
   return generatedRuntimeValidation(value).valid;
 }
 
+function assembleGeneratedGame(value) {
+  if (!value || typeof value !== 'object') return value;
+  const bodies = ['setupBody', 'onActionBody', 'viewBody'];
+  if (!bodies.every(name => typeof value[name] === 'string' && value[name].trim())) return value;
+  return {
+    instructions: String(value.instructions || ''),
+    uiNotes: String(value.uiNotes || ''),
+    logicSource: `({\nsetup(context) {\n${value.setupBody.trim()}\n},\nonAction(state, action, context) {\n${value.onActionBody.trim()}\n},\nview(state, viewer, ui) {\n${value.viewBody.trim()}\n}\n})`,
+  };
+}
+
 async function requestGeminiGame(env, model, prompt) {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
@@ -472,7 +485,7 @@ async function requestGeminiGame(env, model, prompt) {
   }
   const text = (result?.candidates?.[0]?.content?.parts || []).map(part => part.text || '').join('').trim();
   try {
-    return { game: JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')), error: '', status: 200 };
+    return { game: assembleGeneratedGame(JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))), error: '', status: 200 };
   } catch {
     return { game: null, error: 'Gemini returned an invalid JSON game draft.', status: 502 };
   }
@@ -505,7 +518,7 @@ async function generateEventGame(request, env) {
     let game = generation.game;
     let validation = generatedRuntimeValidation(game);
     if (!validation.valid) {
-      generation = await requestGeminiGame(env, model, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate the module from scratch. Return only the required JSON. Use a plain object expression for logicSource and implement setup, onAction, and view.`);
+      generation = await requestGeminiGame(env, model, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate from scratch. Return only the required JSON fields, with statements for setupBody, onActionBody, and viewBody.`);
       if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
       game = generation.game;
       validation = generatedRuntimeValidation(game);
@@ -852,6 +865,7 @@ export {
   eventExpenseUrl,
   expiredUnverifiedProfiles,
   gameGenerationPrompt,
+  assembleGeneratedGame,
   generatedRuntimeValidation,
   normalizeGeneratedGameSource,
   purgeExpiredUnverifiedAccounts,
