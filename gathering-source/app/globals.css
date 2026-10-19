@@ -2107,6 +2107,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .money-details-empty span { font-size: 0.65rem; }
 .profile-editor-dialog { width: min(560px, calc(100vw - 2rem)); }
 .profile-editor-dialog .field-label { margin-top: 0.8rem; }
+.profile-editor-dialog .delete-account-actions { position: sticky; z-index: 3; bottom: -1.8rem; margin: 1rem -1.8rem -1.8rem; border-top: 1px solid rgb(18 59 66 / 0.1); background: rgb(248 244 236 / 0.94); padding: 0.85rem 1.8rem calc(0.85rem + env(safe-area-inset-bottom)); backdrop-filter: blur(14px); }
 .profile-editor-name-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 .profile-editor-name-grid .field-label { min-width: 0; }
 .profile-email-note { margin: 0.7rem 0 0 !important; border-radius: 0.8rem; background: #edf8f4; padding: 0.7rem 0.8rem; color: #176d64 !important; font-size: 0.68rem !important; line-height: 1.45 !important; }
@@ -3762,6 +3763,7 @@ button.profile-balance:hover { background: #edf8f4; }
   background: rgb(5 15 18 / 0.7);
   padding: 1.25rem;
   backdrop-filter: blur(12px);
+  touch-action: none;
 }
 .invite-dialog {
   width: min(620px, 100%);
@@ -3773,6 +3775,8 @@ button.profile-balance:hover { background: #edf8f4; }
   padding: 1.5rem;
   color: #17363b;
   box-shadow: 0 35px 100px rgb(0 0 0 / 0.35);
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 .invite-dialog > header,
 .host-contact-list-heading {
@@ -4148,14 +4152,15 @@ button.profile-balance:hover { background: #edf8f4; }
   .settings-modal-backdrop .settings-dialog { width: min(500px, 100%); border-radius: 1.4rem; padding: 1.35rem; }
   .profile-editor-backdrop { align-items: start; padding: max(0.65rem, env(safe-area-inset-top)) 0.5rem max(0.65rem, env(safe-area-inset-bottom)); }
   .profile-editor-dialog { max-height: calc(100dvh - max(1.3rem, env(safe-area-inset-top) + env(safe-area-inset-bottom))); overflow-y: auto; border-radius: 1.25rem; }
+  .profile-editor-dialog .delete-account-actions { bottom: -1.35rem; margin: 1rem -1.35rem -1.35rem; padding: 0.8rem 1.35rem calc(0.8rem + env(safe-area-inset-bottom)); }
   .delete-account-actions { grid-template-columns: 1fr; }
   .invite-dialog-backdrop {
     align-items: end;
-    padding: 0;
+    padding: 0 0 calc(62px + env(safe-area-inset-bottom));
   }
   .invite-dialog {
     width: 100%;
-    max-height: min(88dvh, 760px);
+    max-height: min(calc(100dvh - 62px - env(safe-area-inset-bottom) - max(0.75rem, env(safe-area-inset-top))), 760px);
     border-radius: 1.5rem 1.5rem 0 0;
     padding: 1.25rem;
   }

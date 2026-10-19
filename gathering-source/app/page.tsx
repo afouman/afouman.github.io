@@ -1559,7 +1559,7 @@ export default function Home() {
   }, [accountUser]);
 
   useEffect(() => {
-    if (!settingsOpen) return;
+    if (!settingsOpen && !moneyDetailsOpen && !profileEditorOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
     const previousBodyOverflow = document.body.style.overflow;
     const previousRootOverflow = document.documentElement.style.overflow;
@@ -1572,7 +1572,7 @@ export default function Home() {
       document.documentElement.style.overflow = previousRootOverflow;
       if (appScroller) appScroller.style.overflow = previousAppOverflow;
     };
-  }, [settingsOpen]);
+  }, [moneyDetailsOpen, profileEditorOpen, settingsOpen]);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -6595,7 +6595,7 @@ export default function Home() {
         document.body,
       )}
 
-      {profileEditorOpen && accountUser && accountProfile && (
+      {profileEditorOpen && accountUser && accountProfile && createPortal(
         <div className="delete-account-backdrop profile-editor-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !profileEditorBusy) setProfileEditorOpen(false);
         }}>
@@ -6625,10 +6625,11 @@ export default function Home() {
               <button type="button" className="primary-button" onClick={() => void saveAccountProfileEdits()} disabled={profileEditorBusy}>{profileEditorBusy ? 'Saving…' : 'Save changes'}</button>
             </div>
           </dialog>
-        </div>
+        </div>,
+        document.body,
       )}
 
-      {moneyDetailsOpen && (
+      {moneyDetailsOpen && createPortal(
         <div className="money-details-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) closeMoneyDetails();
         }}>
@@ -6658,7 +6659,8 @@ export default function Home() {
               )}
             </div>
           </dialog>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {expensesOpen && expenseActor && (
@@ -7194,7 +7196,7 @@ export default function Home() {
           </section>
         </div>
       )}
-      {appEnvironmentReady && guestEventView && createPortal(
+      {appEnvironmentReady && guestEventView && !profileEditorOpen && createPortal(
         <div className="guest-event-dock" style={eventThemeStyle(menu)}>
           <div className="guest-cart-bar">
             <div className="mx-auto flex max-w-6xl items-center justify-between gap-4">
@@ -7281,7 +7283,7 @@ export default function Home() {
         </div>,
         document.body,
       )}
-      {appEnvironmentReady && guestHomeView && accountProfile && createPortal(
+      {appEnvironmentReady && guestHomeView && accountProfile && !profileEditorOpen && createPortal(
         <nav className="guest-event-nav guest-home-dock" aria-label="Home actions">
           <button type="button" onClick={createNewEvent} aria-label="Create a new event">
             <CalendarPlus size={20} /><span>Create new event</span>
@@ -7289,7 +7291,7 @@ export default function Home() {
         </nav>,
         document.body,
       )}
-      {appEnvironmentReady && mode === 'host' && createPortal(
+      {appEnvironmentReady && mode === 'host' && !profileEditorOpen && createPortal(
         <div className="host-event-dock">
           <nav className="guest-event-nav" aria-label="Host navigation">
             <button type="button" onClick={() => creatingEvent ? cancelCreatingEvent() : navigateBack()} aria-label="Back">
@@ -9796,7 +9798,7 @@ function HostWorkspace({
           </>
         )}
       </div>
-      {inviteOpen && (
+      {inviteOpen && createPortal(
         <div className="invite-dialog-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !inviteBusy) setInviteOpen(false);
         }}>
@@ -9896,7 +9898,8 @@ function HostWorkspace({
               ) : <p className="host-contact-empty">Your contacts will appear here after the first invitation.</p>}
             </section>
           </dialog>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
