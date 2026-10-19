@@ -377,7 +377,8 @@ The object must implement exactly:
 
 Available context only:
 - context.players.list() returns [{id,name}]
-- context.teams.randomize(count) returns [{id,name,players}]
+- context.host.id identifies the host
+- context.teams.randomize(count, optionalPlayerIds) returns [{id,name,players}]
 - context.random.pick(array)
 - context.random.shuffle(array)
 - context.clock.now()
@@ -397,7 +398,18 @@ Available UI constructors only:
 - ui.input(label, key, optionalPlaceholder)
 
 An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
+The strings "$viewer:id" and "$viewer:name" in button action objects are replaced with the current attendee's identity.
 When the host requests a board, tile layout, card matrix, or grid, use ui.grid with interactive ui.button children. For a 3x3 board, use ui.grid(3, nine button nodes). Never represent a board with ui.list or plain text rows.
+
+Universal lobby rules for EVERY game:
+- setup must begin in a lobby with no joined players and must preserve joinedPlayerIds in state.
+- An attendee must explicitly press a Join game button before appearing in joinedPlayerIds or taking any game action. Use "$viewer:id" and "$viewer:name" in that action.
+- Ignore gameplay actions from playerIds that are not in joinedPlayerIds.
+- Do not begin play until enough attendees have joined.
+- setup must save context.host.id as hostId in state. In view, the host is viewer.id === state.hostId.
+- The host must be offered both Random assignment and Manual assignment controls.
+- Random assignment must use only joinedPlayerIds. Manual assignment must let the host place each joined attendee onto a team.
+- Non-host attendees can see the lobby, joined players, team assignments, and game state, but cannot assign teams.
 
 Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
 The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
