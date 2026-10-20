@@ -8592,7 +8592,11 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
         void updateSession('state', { state: data.state, expectedRevision: data.revision })
           .then((saved) => saved && applySession(saved))
           .catch((error: Error & { session?: EventGameSession }) => {
-            if (error.session) applySession(error.session);
+            if (error.session) {
+              applySession(error.session);
+              setSyncError('');
+              return;
+            }
             setSyncError(error.message || 'That move could not be synchronized.');
           })
           .finally(() => setSyncing(false));
