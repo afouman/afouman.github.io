@@ -849,7 +849,7 @@ const callGameGenerator = async (
 const callGameSession = async (
   eventId: string,
   gameId: string,
-  operation: 'ensure' | 'join' | 'teams' | 'state',
+  operation: 'ensure' | 'read' | 'join' | 'teams' | 'state',
   authToken: string,
   payload: Record<string, unknown> = {},
 ) => {
@@ -8534,13 +8534,34 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     return () => stop();
   }, [eventId, game.id]);
 
-  const updateSession = useCallback(async (operation: 'ensure' | 'join' | 'teams' | 'state', payload: Record<string, unknown> = {}) => {
+  const updateSession = useCallback(async (operation: 'ensure' | 'read' | 'join' | 'teams' | 'state', payload: Record<string, unknown> = {}) => {
     if (!firebaseConfigured) return null;
     const [{ getApp }, authModule] = await Promise.all([import('firebase/app'), import('firebase/auth')]);
     const user = authModule.getAuth(getApp()).currentUser;
     if (!user) throw new Error('Sign in again to play.');
     return callGameSession(eventId, game.id, operation, await user.getIdToken(), payload);
   }, [eventId, game.id]);
+
+  useEffect(() => {
+    if (!firebaseConfigured || !viewer) return;
+    let active = true;
+    let timer = 0;
+    const refresh = async () => {
+      try {
+        const latest = await updateSession('read');
+        if (active) setSession((current) => !current || current.revision !== latest?.revision ? latest : current);
+      } catch {
+        // The Firestore listener initializes new sessions; polling is a resilience fallback.
+      } finally {
+        if (active) timer = window.setTimeout(refresh, 1000);
+      }
+    };
+    timer = window.setTimeout(refresh, 700);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [updateSession, viewer]);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
@@ -8550,6 +8571,7 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
         initializingRef.current = true;
         setSyncing(true);
         void updateSession('ensure', { state: event.data.state, expectedRevision: session?.revision || 0 })
+          .then((saved) => saved && setSession(saved))
           .catch((error) => setSyncError(error instanceof Error ? error.message : 'The shared game could not start.'))
           .finally(() => {
             initializingRef.current = false;
@@ -8559,7 +8581,11 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
       if (event.data.type === 'nights-game-state' && session) {
         setSyncing(true);
         void updateSession('state', { state: event.data.state, expectedRevision: event.data.revision })
-          .catch((error) => setSyncError(error instanceof Error ? error.message : 'That move could not be synchronized.'))
+          .then((saved) => saved && setSession(saved))
+          .catch((error: Error & { session?: EventGameSession }) => {
+            if (error.session) setSession(error.session);
+            setSyncError(error.message || 'That move could not be synchronized.');
+          })
           .finally(() => setSyncing(false));
       }
     };
@@ -8572,7 +8598,8 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     if (!session) return;
     setSyncing(true);
     try {
-      await updateSession('teams', { teams, expectedRevision: session.revision });
+      const saved = await updateSession('teams', { teams, expectedRevision: session.revision });
+      if (saved) setSession(saved);
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Teams could not be updated.');
     } finally {
@@ -8617,6 +8644,7 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
           {viewer && !joined && session && <button type="button" disabled={syncing} onClick={() => {
             setSyncing(true);
             void updateSession('join', { expectedRevision: session.revision })
+              .then((saved) => saved && setSession(saved))
               .catch((error) => setSyncError(error instanceof Error ? error.message : 'Could not join the game.'))
               .finally(() => setSyncing(false));
           }}><Plus size={15} /> Join game</button>}

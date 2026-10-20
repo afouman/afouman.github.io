@@ -716,6 +716,10 @@ async function updateGameSession(request, env) {
     const existingDocument = await adminFirestoreDocument(env, sessionPath);
     const existing = existingDocument?.data || null;
     const operation = String(body.operation || '');
+    if (operation === 'read') {
+      if (!existing) return json(request, { error: 'The shared game has not started yet.' }, 404);
+      return json(request, { ok: true, session: existing });
+    }
     if (!existing && operation !== 'ensure')
       return json(request, { error: 'The shared game is still starting. Try again.' }, 409);
 
