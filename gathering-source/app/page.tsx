@@ -8495,7 +8495,7 @@ const gameSandboxDocument = (game: EventGame, participants: GameParticipant[], c
   const draw=()=>{clearInterval(timerHandle);root.className='';root.replaceChildren(renderNode(view))};
   const fail=(error)=>{root.className='error';root.textContent=error.message||'The game could not start.'};
   const dispatch=async(action)=>{try{root.style.pointerEvents='none';const result=await run('action',action);state=result.state;view=result.view;draw();parent.postMessage({type:'nights-game-state',gameId,revision,state},'*')}catch(error){fail(error)}finally{root.style.pointerEvents=''}};
-  run(initialState?'render':'setup',null).then(result=>{state=result.state;view=result.view;draw();if(!initialState)parent.postMessage({type:'nights-game-ready',gameId,state},'*')}).catch(fail);
+  run(initialState?'render':'setup',null).then(result=>{state=result.state;view=result.view;draw();if(!initialState){let attempts=0;const announce=()=>{parent.postMessage({type:'nights-game-ready',gameId,state},'*');attempts+=1;if(attempts>=10)clearInterval(readyHandle)};announce();const readyHandle=setInterval(announce,500)}}).catch(fail);
   </script></body></html>`;
 };
 
@@ -8541,27 +8541,6 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     if (!user) throw new Error('Sign in again to play.');
     return callGameSession(eventId, game.id, operation, await user.getIdToken(), payload);
   }, [eventId, game.id]);
-
-  useEffect(() => {
-    if (!firebaseConfigured || !viewer) return;
-    let active = true;
-    let timer = 0;
-    const refresh = async () => {
-      try {
-        const latest = await updateSession('read');
-        if (active) setSession((current) => !current || current.revision !== latest?.revision ? latest : current);
-      } catch {
-        // The Firestore listener initializes new sessions; polling is a resilience fallback.
-      } finally {
-        if (active) timer = window.setTimeout(refresh, 1000);
-      }
-    };
-    timer = window.setTimeout(refresh, 700);
-    return () => {
-      active = false;
-      window.clearTimeout(timer);
-    };
-  }, [updateSession, viewer]);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
