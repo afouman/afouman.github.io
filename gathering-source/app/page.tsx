@@ -3394,6 +3394,7 @@ export default function Home() {
         : `RSVP: ${myRsvp.status === 'yes' ? 'Going' : myRsvp.status === 'maybe' ? 'Maybe' : 'Not Going'}`
     : 'RSVP';
   const canManageCurrentEvent = mode === 'host' && accountManagesCurrentEvent;
+  const canManageGame = canManageCurrentEvent || (hostPreview && accountManagesCurrentEvent);
   const chatActor: ChatActor | null = useMemo(() => mode === 'host'
     ? ((hostUser && canManageCurrentEvent) || !firebaseConfigured)
       ? { uid: hostUser || 'host', name: 'Host', role: 'host' }
@@ -6820,7 +6821,7 @@ export default function Home() {
         <GamePanel
           key={menu.id}
           menu={menu}
-          canManage={canManageCurrentEvent}
+          canManage={canManageGame}
           accountUid={accountUser?.uid || ''}
           participants={gameParticipants}
           viewer={gameViewer}
@@ -8510,7 +8511,7 @@ const gameSandboxDocument = (game: EventGame, participants: GameParticipant[], c
   const fail=(error)=>{root.className='error';root.textContent=error.message||'The game could not start.'};
   const dispatch=async(action)=>{try{if(!bridge||!state)throw new Error('The shared game is not connected yet.');root.style.pointerEvents='none';const before=JSON.stringify(state);const result=await run('action',action);if(JSON.stringify(result.state)===before){showNotice(blockedMessage(action));return}clearNotice();state=result.state;view=result.view;draw();bridge.postMessage({type:'state',gameId,revision,state})}catch(error){fail(error)}finally{root.style.pointerEvents=''}};
   const initialize=async()=>{try{const result=await run('setup',null);state=result.state;view=result.view;draw();bridge.postMessage({type:'ready',gameId,state})}catch(error){fail(error)}};
-  const synchronize=async(message)=>{try{state=message.state;revision=Number(message.revision)||0;if(controller)state={...state,hostId:viewer.id};const hasTeams=Array.isArray(state?.teams)&&state.teams.some(team=>Array.isArray(team?.players)&&team.players.length);const lobby=/^(?:lobby|setup|waiting)$/i.test(String(state?.phase||''));if(controller&&hasTeams&&lobby){const orderedIds=state.teams.flatMap(team=>(team.players||[]).map(player=>String(player.id||player)));if(orderedIds.length)state={...state,joinedPlayerIds:orderedIds};const actions=[{type:'NIGHTS_TEAMS_ASSIGNED',teams:state.teams},{type:'MANUAL_ASSIGN'},{type:'RANDOM_ASSIGN'}];for(const action of actions){const before=JSON.stringify(state);const result=await run('action',action);if(JSON.stringify(result.state)!==before){state=result.state;view=result.view;draw();bridge.postMessage({type:'state',gameId,revision,state});return}}}const result=await run('render',null);state=result.state;view=result.view;draw()}catch(error){fail(error)}};
+  const synchronize=async(message)=>{try{state=message.state;revision=Number(message.revision)||0;if(controller)state={...state,hostId:viewer.id};const hasTeams=Array.isArray(state?.teams)&&state.teams.some(team=>Array.isArray(team?.players)&&team.players.length);const orderedIds=hasTeams?state.teams.flatMap(team=>(team.players||[]).map(player=>String(player.id||player))):[];const lobby=/^(?:lobby|setup|waiting)$/i.test(String(state?.phase||''));const mappedIds=Object.keys(state?.playerMarks||{});const rosterChanged=orderedIds.some(id=>!mappedIds.includes(id))||mappedIds.some(id=>!orderedIds.includes(id));if(controller&&hasTeams&&(lobby||rosterChanged)){if(orderedIds.length)state={...state,joinedPlayerIds:orderedIds};const actions=[{type:'NIGHTS_TEAMS_ASSIGNED',teams:state.teams},{type:'MANUAL_ASSIGN'},{type:'RANDOM_ASSIGN'}];for(const action of actions){const before=JSON.stringify(state);const result=await run('action',action);if(JSON.stringify(result.state)!==before){state=result.state;view=result.view;draw();bridge.postMessage({type:'state',gameId,revision,state});return}}}const result=await run('render',null);state=result.state;view=result.view;draw()}catch(error){fail(error)}};
   addEventListener('message',event=>{if(event.data?.type!=='nights-game-connect'||event.data.gameId!==gameId||!event.ports[0])return;if(bridge)bridge.close();bridge=event.ports[0];bridge.onmessage=({data})=>{if(data?.type==='initialize')void initialize();if(data?.type==='sync')void synchronize(data)};bridge.start();bridge.postMessage({type:'connected',gameId})});
   </script></body></html>`;
 };
