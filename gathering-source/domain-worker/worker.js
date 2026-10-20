@@ -90,6 +90,43 @@ async function firestoreDocument(path, token = '') {
   return firestoreFields(document.fields);
 }
 
+async function authenticatedFirestoreDocument(path, token) {
+  const response = await fetch(
+    `${FIRESTORE_ROOT}/${path.split('/').map(encodeURIComponent).join('/')}`,
+    { headers: { accept: 'application/json', authorization: `Bearer ${token}` } },
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Firebase game read failed (${response.status}): ${detail.slice(0, 300)}`);
+  }
+  const document = await response.json();
+  return {
+    data: firestoreFields(document.fields || {}),
+    updateTime: document.updateTime || '',
+  };
+}
+
+async function writeAuthenticatedFirestoreDocument(path, data, token, updateTime = '') {
+  const url = new URL(`${FIRESTORE_ROOT}/${path.split('/').map(encodeURIComponent).join('/')}`);
+  if (updateTime) url.searchParams.set('currentDocument.updateTime', updateTime);
+  else url.searchParams.set('currentDocument.exists', 'false');
+  const response = await fetch(url.href, {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ fields: toFirestoreFields(data) }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Firebase game write failed (${response.status}): ${detail.slice(0, 300)}`);
+  }
+  const document = await response.json();
+  return {
+    data: firestoreFields(document.fields || {}),
+    updateTime: document.updateTime || '',
+  };
+}
+
 function decodeBase64Url(value) {
   const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
@@ -449,13 +486,12 @@ When the host requests a board, tile layout, card matrix, or grid, use ui.grid w
 
 Universal lobby rules for EVERY game:
 - setup must begin in a lobby with no joined players and must preserve joinedPlayerIds in state.
-- An attendee must explicitly press a Join game button before appearing in joinedPlayerIds or taking any game action. Use "$viewer:id" and "$viewer:name" in that action.
+- Nights, outside the sandbox, owns joining and team assignment. It injects joinedPlayerIds, joinedPlayers, joinedPlayerNames, and teams into state. Do not render Join, Random assignment, or Manual assignment buttons inside the generated game.
+- onAction must handle {type:'NIGHTS_TEAMS_ASSIGNED', teams:[...]} by preserving the supplied teams and transitioning from the lobby into playable state once enough attendees have joined.
 - Ignore gameplay actions from playerIds that are not in joinedPlayerIds.
 - Do not begin play until enough attendees have joined.
 - setup must save context.host.id as hostId in state. In view, the host is viewer.id === state.hostId.
-- The host must be offered both Random assignment and Manual assignment controls.
-- Random assignment must use only joinedPlayerIds. Manual assignment must let the host place each joined attendee onto a team.
-- Non-host attendees can see the lobby, joined players, team assignments, and game state, but cannot assign teams.
+- Team membership comes from state.teams. The host controls those teams in the trusted Nights frame; every attendee may view them in the game.
 
 Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
 The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
@@ -652,6 +688,9 @@ function cleanGameTeams(value, joinedPlayers) {
 
 function sessionStateWithRoster(state, session) {
   const playersById = new Map((session.joinedPlayers || []).map(player => [player.id, player]));
+  const joinedPlayerNames = Object.fromEntries(
+    (session.joinedPlayers || []).map(player => [player.id, player.name]),
+  );
   const teams = (session.teams || []).map(team => ({
     id: team.id,
     name: team.name,
@@ -662,19 +701,20 @@ function sessionStateWithRoster(state, session) {
     ...cleanGameState(state),
     hostId: session.hostId,
     joinedPlayerIds: (session.joinedPlayers || []).map(player => player.id),
+    joinedPlayerNames,
     joinedPlayers: session.joinedPlayers || [],
     teams,
   };
 }
 
 async function gameSessionAccess(request, env, body) {
-  const { claims } = await verifyFirebaseToken(request);
+  const { claims, token } = await verifyFirebaseToken(request);
   if (!body || !safeSegment(body.eventId) || !safeSegment(body.gameId))
     throw new Error('Invalid game session.');
   const [eventDocument, gameDocument, profileDocument] = await Promise.all([
-    adminFirestoreDocument(env, `events/${body.eventId}`),
-    adminFirestoreDocument(env, `events/${body.eventId}/games/${body.gameId}`),
-    adminFirestoreDocument(env, `users/${claims.sub}`),
+    authenticatedFirestoreDocument(`events/${body.eventId}`, token),
+    authenticatedFirestoreDocument(`events/${body.eventId}/games/${body.gameId}`, token),
+    authenticatedFirestoreDocument(`users/${claims.sub}`, token),
   ]);
   const event = eventDocument?.data;
   const game = gameDocument?.data;
@@ -687,12 +727,13 @@ async function gameSessionAccess(request, env, body) {
     game,
     actor: { id: claims.sub, name: 'Host' },
     host: true,
+    token,
   };
   const profile = profileDocument?.data;
   if (!profile?.guestUid) throw new Error('Complete your Nights account before joining.');
   const [rsvpDocument, invitationDocument] = await Promise.all([
-    adminFirestoreDocument(env, `events/${body.eventId}/rsvps/${profile.guestUid}`),
-    adminFirestoreDocument(env, `users/${claims.sub}/invitations/${body.eventId}`),
+    authenticatedFirestoreDocument(`events/${body.eventId}/rsvps/${profile.guestUid}`, token),
+    authenticatedFirestoreDocument(`users/${claims.sub}/invitations/${body.eventId}`, token),
   ]);
   const rsvp = rsvpDocument?.data;
   const invited = invitationDocument?.data?.recipientGuestUid === profile.guestUid;
@@ -705,6 +746,7 @@ async function gameSessionAccess(request, env, body) {
     game,
     actor: { id: profile.guestUid, name: String(rsvp.guestName || profile.displayName || profile.firstName || 'Guest').slice(0, 80) },
     host: false,
+    token,
   };
 }
 
@@ -713,7 +755,7 @@ async function updateGameSession(request, env) {
     const body = await request.json().catch(() => null);
     const access = await gameSessionAccess(request, env, body);
     const sessionPath = `events/${body.eventId}/games/${body.gameId}/sessions/live`;
-    const existingDocument = await adminFirestoreDocument(env, sessionPath);
+    const existingDocument = await authenticatedFirestoreDocument(sessionPath, access.token);
     const existing = existingDocument?.data || null;
     const operation = String(body.operation || '');
     if (operation === 'read') {
@@ -772,11 +814,16 @@ async function updateGameSession(request, env) {
     }
 
     try {
-      const saved = await writeAdminFirestoreDocument(env, sessionPath, next, existingDocument?.updateTime || '');
+      const saved = await writeAuthenticatedFirestoreDocument(
+        sessionPath,
+        next,
+        access.token,
+        existingDocument?.updateTime || '',
+      );
       return json(request, { ok: true, session: saved.data });
     } catch (writeError) {
       if (String(writeError).includes('(409)') || String(writeError).includes('FAILED_PRECONDITION')) {
-        const latest = await adminFirestoreDocument(env, sessionPath);
+        const latest = await authenticatedFirestoreDocument(sessionPath, access.token);
         return json(request, { error: 'The game changed on another device.', session: latest?.data || null }, 409);
       }
       throw writeError;

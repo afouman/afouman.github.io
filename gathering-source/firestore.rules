@@ -123,6 +123,18 @@ service cloud.firestore {
         && guestRsvp(eventId, guestUid).data.status == 'yes'
         && guestIsApprovedForEvent(eventId, guestUid);
     }
+    function canPlayGame(eventId, gameId) {
+      return canManageEvent(eventId) || (
+        hasCompleteAccount()
+        && guestCanChat(eventId, accountProfile().data.guestUid)
+        && get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.status == 'published'
+      );
+    }
+    function gameActorId(eventId) {
+      return canManageEvent(eventId)
+        ? request.auth.uid
+        : accountProfile().data.guestUid;
+    }
     function guestCanUseExpenses(eventId) {
       let guestUid = accountProfile().data.guestUid;
       return hasCompleteAccount()
@@ -1051,9 +1063,40 @@ service cloud.firestore {
             && guestCanChat(eventId, accountProfile().data.guestUid)
             && get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.status == 'published'
           );
-          // Shared game mutations are validated and serialized by the authenticated
-          // Cloudflare game endpoint. Browser clients only receive realtime snapshots.
-          allow create, update, delete: if false;
+          // The Cloudflare endpoint verifies the Firebase ID token, validates every
+          // operation and serializes revisions. It writes with that same user's token,
+          // so no Firebase Admin credential is required for live multiplayer.
+          allow create: if canPlayGame(eventId, gameId)
+            && request.resource.data.keys().hasOnly([
+              'gameId', 'gameVersion', 'hostId', 'revision', 'joinedPlayers',
+              'teams', 'state', 'updatedBy', 'updatedAt'
+            ])
+            && request.resource.data.gameId == gameId
+            && request.resource.data.hostId
+              == get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid
+            && request.resource.data.revision == 1
+            && request.resource.data.joinedPlayers is list
+            && request.resource.data.teams is list
+            && request.resource.data.state is map
+            && request.resource.data.updatedBy == gameActorId(eventId);
+          allow update: if canPlayGame(eventId, gameId)
+            && request.resource.data.keys().hasOnly([
+              'gameId', 'gameVersion', 'hostId', 'revision', 'joinedPlayers',
+              'teams', 'state', 'updatedBy', 'updatedAt'
+            ])
+            && request.resource.data.gameId == resource.data.gameId
+            && request.resource.data.hostId == resource.data.hostId
+            && request.resource.data.gameVersion == resource.data.gameVersion
+            && request.resource.data.revision == resource.data.revision + 1
+            && request.resource.data.joinedPlayers is list
+            && request.resource.data.teams is list
+            && request.resource.data.state is map
+            && request.resource.data.updatedBy == gameActorId(eventId)
+            && (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['teams'])
+              || canManageEvent(eventId)
+            );
+          allow delete: if canManageEvent(eventId);
         }
       }
 
