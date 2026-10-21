@@ -602,7 +602,9 @@ function stableGameSeed(definition) {
     hash ^= text.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return hash >>> 0;
+  // Gemini's generationConfig.seed is TYPE_INT32, not uint32. Keep the
+  // deterministic FNV-1a value inside its accepted positive range.
+  return (hash >>> 0) & 0x7fffffff;
 }
 
 async function requestGeminiGame(env, model, prompt, seed) {
