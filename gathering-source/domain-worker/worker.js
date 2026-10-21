@@ -800,6 +800,13 @@ async function updateGameSession(request, env) {
         if (!joinedPlayers.some(player => player.id === access.actor.id)) joinedPlayers.push(access.actor);
         next.joinedPlayers = joinedPlayers;
         next.state = sessionStateWithRoster(existing.state || {}, next);
+      } else if (operation === 'leave') {
+        next.joinedPlayers = (existing.joinedPlayers || []).filter(player => player.id !== access.actor.id);
+        next.teams = (existing.teams || []).map(team => ({
+          ...team,
+          playerIds: (team.playerIds || []).filter(id => id !== access.actor.id),
+        }));
+        next.state = sessionStateWithRoster(existing.state || {}, next);
       } else if (operation === 'teams') {
         if (!access.host) return json(request, { error: 'Only the host can assign teams.' }, 403);
         next.teams = cleanGameTeams(body.teams, existing.joinedPlayers || []);

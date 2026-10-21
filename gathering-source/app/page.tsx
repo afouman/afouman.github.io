@@ -849,7 +849,7 @@ const callGameGenerator = async (
 const callGameSession = async (
   eventId: string,
   gameId: string,
-  operation: 'ensure' | 'read' | 'join' | 'teams' | 'state',
+  operation: 'ensure' | 'read' | 'join' | 'leave' | 'teams' | 'state',
   authToken: string,
   payload: Record<string, unknown> = {},
 ) => {
@@ -8507,7 +8507,7 @@ const gameSandboxDocument = (game: EventGame, participants: GameParticipant[], c
   const run=(task,action)=>new Promise((resolve,reject)=>{if(typeof source!=='string'||forbidden.test(source)){reject(new Error('This game requested a capability that Nights does not allow.'));return}const workerSource=workerTemplate.replace('/*__NIGHTS_GAME__*/ null',source);const blob=new Blob([workerSource],{type:'text/javascript'});const url=URL.createObjectURL(blob);const worker=new Worker(url);const timeout=setTimeout(()=>{worker.terminate();URL.revokeObjectURL(url);reject(new Error('This game took too long and was stopped safely.'))},350);worker.onmessage=({data})=>{clearTimeout(timeout);worker.terminate();URL.revokeObjectURL(url);data.ok?resolve(data):reject(new Error(data.error||'Game runtime failed.'))};worker.onerror=()=>{clearTimeout(timeout);worker.terminate();URL.revokeObjectURL(url);reject(new Error('The isolated game worker could not load the generated module.'))};worker.postMessage({task,action,state,players,viewer,hostId})});
   const node=(tag,className,text)=>{const element=document.createElement(tag);if(className)element.className=className;if(text!==undefined)element.textContent=String(text);return element};
   const renderNode=(item)=>{if(!item||typeof item!=='object')return node('div','text',item??'');const type=item.type; if(type==='screen'){const el=node('div','screen');(item.children||[]).forEach(child=>el.append(renderNode(child)));return el}if(type==='heading')return node('div','heading',item.text);if(type==='text')return node('div','text',item.text);if(type==='card'){const el=node('section','card');if(item.title)el.append(node('h3','',item.title));const children=item.children||[];const possibleCells=children.length===1&&children[0]&&children[0].type==='list'?(children[0].items||[]):children;const columns=Math.sqrt(possibleCells.length);const isBoard=/board|grid|tiles|matrix/i.test(String(item.title||''))&&Number.isInteger(columns)&&possibleCells.length>=4&&possibleCells.every(child=>child&&child.type==='button');if(isBoard){const grid=node('div','grid');grid.style.setProperty('--columns',String(columns));possibleCells.forEach(child=>grid.append(renderNode(child)));el.append(grid)}else children.forEach(child=>el.append(renderNode(child)));return el}if(type==='button'){const el=node('button','button '+(item.tone==='secondary'?'secondary':''),item.label);el.type='button';el.onclick=()=>dispatch(resolveInputs(item.action||{}));return el}if(type==='timer'){const el=node('div','timer');el.append(node('span','',item.label||'Time remaining'));const remaining=node('b','','');const update=()=>{const seconds=Math.max(0,Math.ceil((Number(item.deadline||0)-Date.now())/1000));remaining.textContent=Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')};update();timerHandle=setInterval(update,250);el.append(remaining);return el}if(type==='teams'){const el=node('div','teams');(item.teams||[]).forEach(team=>{const teamEl=node('div','team');teamEl.append(node('strong','',team.name));(team.players||[]).forEach(player=>teamEl.append(node('span','',player.name||player)));el.append(teamEl)});return el}if(type==='scoreboard'){const el=node('div','scoreboard');Object.entries(item.scores||{}).forEach(([label,score])=>{const scoreEl=node('div','score');scoreEl.append(node('strong','',label),node('b','',score));el.append(scoreEl)});return el}if(type==='list'){const el=node('ul','list');(item.items||[]).forEach(value=>{const row=node('li','');row.append(typeof value==='object'?renderNode(value):document.createTextNode(String(value)));el.append(row)});return el}if(type==='grid'){const el=node('div','grid');el.style.setProperty('--columns',String(Math.max(1,Math.min(8,Number(item.columns)||3))));(item.children||[]).forEach(child=>el.append(renderNode(child)));return el}if(type==='secret'){const el=node('div','secret');el.append(node('small','',item.label||'Private'),node('strong','',item.value));return el}if(type==='input'){const label=node('label','input');label.append(node('span','',item.label));const input=node('input','','');input.placeholder=item.placeholder||'';input.value=inputs[item.key]||'';input.oninput=event=>{inputs[item.key]=event.target.value};label.append(input);return label}return node('div','text','Unsupported game element')};
-  const fit=()=>{root.style.transform='';root.style.width='';const available=Math.max(1,innerHeight-root.offsetTop-2);const scale=Math.min(1,available/Math.max(1,root.scrollHeight));if(scale<1){root.style.transformOrigin='top left';root.style.transform='scale('+scale+')';root.style.width=(100/scale)+'%'}};
+  const fit=()=>{root.style.transform='';const available=Math.max(1,innerHeight-root.offsetTop-2);const scale=Math.min(1,available/Math.max(1,root.scrollHeight));if(scale<1){root.style.transformOrigin='top center';root.style.transform='scale('+scale+')'}};
   const draw=()=>{clearInterval(timerHandle);root.className='';root.replaceChildren(renderNode(view));requestAnimationFrame(fit)};
   const fail=(error)=>{root.className='error';root.textContent=error.message||'The game could not start.'};
   const dispatch=async(action)=>{try{if(!bridge||!state)throw new Error('The shared game is not connected yet.');root.style.pointerEvents='none';const before=JSON.stringify(state);const result=await run('action',action);if(JSON.stringify(result.state)===before){showNotice(blockedMessage(action));return}clearNotice();state=result.state;view=result.view;draw();bridge.postMessage({type:'state',gameId,revision,state})}catch(error){fail(error)}finally{root.style.pointerEvents=''}};
@@ -8533,7 +8533,7 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     [canManage, game, hostId, participants, viewer],
   );
 
-  const updateSession = useCallback(async (operation: 'ensure' | 'read' | 'join' | 'teams' | 'state', payload: Record<string, unknown> = {}) => {
+  const updateSession = useCallback(async (operation: 'ensure' | 'read' | 'join' | 'leave' | 'teams' | 'state', payload: Record<string, unknown> = {}) => {
     if (!firebaseConfigured) return null;
     const [{ getApp }, authModule] = await Promise.all([import('firebase/app'), import('firebase/auth')]);
     const user = authModule.getAuth(getApp()).currentUser;
@@ -8683,7 +8683,14 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
               .catch((error) => setSyncError(error instanceof Error ? error.message : 'Could not join the game.'))
               .finally(() => setSyncing(false));
           }}><Plus size={15} /> Join game</button>}
-          {joined && <span className="game-joined"><Check size={14} /> Joined</span>}
+          {joined && <button type="button" className="game-leave" disabled={syncing} onClick={() => {
+            if (!session) return;
+            setSyncing(true);
+            void updateSession('leave', { expectedRevision: session.revision })
+              .then((saved) => saved && applySession(saved))
+              .catch((error) => setSyncError(error instanceof Error ? error.message : 'Could not leave the game.'))
+              .finally(() => setSyncing(false));
+          }}>Leave game</button>}
           {canManage && session && <div className="game-team-controls">
             <label><span>Teams</span><select value={teamCount} onChange={(event) => setTeamCount(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
             <button type="button" disabled={syncing || !session.joinedPlayers.length} onClick={randomizeTeams}><Sparkles size={14} /> Assign randomly</button>

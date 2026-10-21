@@ -5904,6 +5904,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-session-bar > button, .game-team-controls > button { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 0.35rem; border-radius: 999px; background: #98dbc7; color: #092421; padding: 0.5rem 0.85rem; font-size: 0.7rem; font-weight: 900; }
 .game-session-bar button:disabled { opacity: 0.5; }
 .game-joined { display: inline-flex; align-items: center; gap: 0.3rem; color: #9ce6cf; font-size: 0.72rem; font-weight: 900; }
+.game-session-bar > .game-leave { border: 1px solid rgb(255 255 255 / 0.18); background: rgb(255 255 255 / 0.08); color: #f7f2e8; }
 .game-team-controls { display: flex; flex: 1 0 100%; flex-wrap: wrap; align-items: end; gap: 0.55rem; border-top: 1px solid rgb(255 255 255 / 0.08); padding-top: 0.65rem; }
 .game-team-controls > label, .game-manual-assignments label { display: grid; gap: 0.22rem; color: rgb(255 255 255 / 0.68); font-size: 0.58rem; font-weight: 800; }
 .game-team-controls select { min-height: 34px; border: 1px solid rgb(255 255 255 / 0.16); border-radius: 0.6rem; background: #122f30; color: #fff; padding: 0.35rem 1.7rem 0.35rem 0.55rem; font: inherit; }
