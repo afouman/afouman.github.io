@@ -10,7 +10,7 @@ const ALLOWED_ORIGINS = new Set(['https://gaemaj.tech', 'https://www.gaemaj.tech
 const LEGACY_HOST_EMAIL = 'alaki.dolaki.holholaki@gmail.com';
 const LEGACY_HOST_UID = 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
 const GAME_SOURCE_FORBIDDEN = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|globalThis|self|postMessage|close|Worker|Blob|URL|WebAssembly|Atomics|SharedArrayBuffer|navigator|caches|indexedDB|document|window|parent|top|opener|localStorage|sessionStorage|constructor|__proto__|prototype|setTimeout|setInterval|queueMicrotask|crypto|performance|Date|Promise|async|await|while)\b/;
-const GAME_UI_SOURCE_FORBIDDEN = /(?:\b(importScripts|require|eval|Function|postMessage|MessageChannel|BroadcastChannel|Worker|SharedWorker|ServiceWorker|WebAssembly)\s*\(|\b(import)\s*(?:\(|["'])|\b(globalThis|parent|top|opener|SharedArrayBuffer|Atomics)\b|\b(constructor|__proto__|prototype)\s*(?:\.|\[)|\b(location)\s*(?:=|\.))/;
+const GAME_UI_SOURCE_FORBIDDEN = /(?:\b(importScripts|require|eval|Function|postMessage|MessageChannel|BroadcastChannel|Worker|SharedWorker|ServiceWorker|WebAssembly)\s*\(|\b(import)\s*(?:\(|["'])|(?<![\w$.'"])(globalThis|parent|top|opener)\s*(?:\.|\[)|\b(SharedArrayBuffer)\s*\(|\b(Atomics)\s*\.|\b(constructor|__proto__|prototype)\s*(?:\.|\[)|\b(location)\s*(?:=|\.))/;
 
 const APP_ASSETS = new Set([
   '/favicon.svg', '/manifest.webmanifest', '/manifest-guest.webmanifest',
@@ -501,6 +501,7 @@ snapshot contains {model, view, viewer, players, teams, hostId, canManage}. mode
 - api.random(), api.now(), api.setTimeout(), api.setInterval(), and matching clear functions
 
 The UI sandbox provides controlled replacements for fetch, XMLHttpRequest, localStorage, sessionStorage, Audio, timers, Math.random, window.open, navigator.vibrate, WebSocket, and EventSource. fetch only serves nights://state, nights://viewer, nights://players, nights://teams, and nights://storage/<key>; external requests receive a controlled 403 response and are reported to Nights. Do not import libraries or contact external services.
+Normal DOM layout and CSS positioning are allowed, including the CSS properties top, right, bottom, and left. Do not access frame globals such as top, parent, opener, or globalThis.
 
 Use semantic DOM and responsive CSS. Render the exact requested interface from snapshot.model rather than reducing it to generic vertical buttons. Keep the entire playable surface within the viewport; boards must use CSS grid, and a 3x3 board must visibly have three equal columns and three equal rows. Use event listeners that call api.action. Never implement joining or team management inside uiSource; the trusted Nights frame owns those controls.
 
