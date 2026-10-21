@@ -1086,7 +1086,15 @@ service cloud.firestore {
             ])
             && request.resource.data.gameId == resource.data.gameId
             && request.resource.data.hostId == resource.data.hostId
-            && request.resource.data.gameVersion == resource.data.gameVersion
+            && (
+              request.resource.data.gameVersion == resource.data.gameVersion
+              || (
+                canManageEvent(eventId)
+                && request.resource.data.gameVersion
+                  == get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.version
+                && request.resource.data.gameVersion > resource.data.gameVersion
+              )
+            )
             && request.resource.data.revision == resource.data.revision + 1
             && request.resource.data.joinedPlayers is list
             && request.resource.data.teams is list
