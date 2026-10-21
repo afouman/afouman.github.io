@@ -10,6 +10,7 @@ const ALLOWED_ORIGINS = new Set(['https://gaemaj.tech', 'https://www.gaemaj.tech
 const LEGACY_HOST_EMAIL = 'alaki.dolaki.holholaki@gmail.com';
 const LEGACY_HOST_UID = 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
 const GAME_SOURCE_FORBIDDEN = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|globalThis|self|postMessage|close|Worker|Blob|URL|WebAssembly|Atomics|SharedArrayBuffer|navigator|caches|indexedDB|document|window|parent|top|opener|localStorage|sessionStorage|constructor|__proto__|prototype|setTimeout|setInterval|queueMicrotask|crypto|performance|Date|Promise|async|await|while)\b/;
+const GAME_UI_SOURCE_FORBIDDEN = /(?:\b(importScripts|require|eval|Function|postMessage|MessageChannel|BroadcastChannel|Worker|SharedWorker|ServiceWorker|WebAssembly)\s*\(|\b(import)\s*(?:\(|["'])|\b(globalThis|parent|top|opener|SharedArrayBuffer|Atomics)\b|\b(constructor|__proto__|prototype)\s*(?:\.|\[)|\b(location)\s*(?:=|\.))/;
 
 const APP_ASSETS = new Set([
   '/favicon.svg', '/manifest.webmanifest', '/manifest-guest.webmanifest',
@@ -437,13 +438,15 @@ function cleanGameDefinition(value) {
 function gameResponseSchema() {
   return {
     type: 'object',
-    required: ['instructions', 'setupBody', 'onActionBody', 'viewBody', 'uiNotes'],
+    required: ['instructions', 'setupBody', 'onActionBody', 'viewBody', 'uiNotes', 'uiSource', 'styles'],
     properties: {
       instructions: { type: 'string', description: 'A short host-facing explanation of how to start and test the game.' },
       uiNotes: { type: 'string', description: 'A short description of the generated player interface.' },
       setupBody: { type: 'string', description: 'Only the JavaScript statements inside setup(context), including an explicit return.' },
       onActionBody: { type: 'string', description: 'Only the JavaScript statements inside onAction(state, action, context), including an explicit return.' },
       viewBody: { type: 'string', description: 'Only the JavaScript statements inside view(state, viewer, ui), including an explicit return.' },
+      uiSource: { type: 'string', description: 'Classic browser JavaScript that calls Nights.mount(renderFunction) and renders the game with DOM APIs.' },
+      styles: { type: 'string', description: 'Responsive CSS scoped beneath #game-root. It must fit phone, tablet, and desktop without page scrolling.' },
     },
   };
 }
@@ -466,7 +469,7 @@ Available context only:
 - context.random.shuffle(array)
 - context.clock.now()
 
-Available UI constructors only:
+The reducer view function has these fallback UI constructors:
 - ui.screen(children)
 - ui.heading(text)
 - ui.text(text)
@@ -479,10 +482,27 @@ Available UI constructors only:
 - ui.grid(numberOfColumns, arrayOfUiNodes)
 - ui.secret(label, value)
 - ui.input(label, key, optionalPlaceholder)
+- ui.model(serializableViewerSafeObject)
 
 An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
 The strings "$viewer:id" and "$viewer:name" in button action objects are replaced with the current attendee's identity.
 When the host requests a board, tile layout, card matrix, or grid, use ui.grid with interactive ui.button children. For a 3x3 board, use ui.grid(3, nine button nodes). Never represent a board with ui.list or plain text rows.
+
+Also create a rich browser UI in uiSource and styles. uiSource is loaded as a classic script inside a null-origin iframe and must call:
+
+Nights.mount(function render(snapshot, api) { ... });
+
+snapshot contains {model, view, viewer, players, teams, hostId, canManage}. model is the viewer-safe value returned through ui.model(...) by view(). The canonical reducer state is deliberately unavailable to presentation code. api contains:
+- api.root: the #game-root element
+- api.action(type, optionalPayload) or api.action(actionObject): sends an authenticated shared-game action. Nights overwrites actorId, playerId, and playerName with the signed-in viewer.
+- api.el(tag, optionalProperties, optionalChildren): safe DOM creation helper; normal document.createElement and DOM event listeners are also available.
+- api.storage: isolated per-frame Storage-compatible data
+- api.effects.sound('tap'|'success'|'error'), api.effects.haptic(), api.effects.confetti()
+- api.random(), api.now(), api.setTimeout(), api.setInterval(), and matching clear functions
+
+The UI sandbox provides controlled replacements for fetch, XMLHttpRequest, localStorage, sessionStorage, Audio, timers, Math.random, window.open, navigator.vibrate, WebSocket, and EventSource. fetch only serves nights://state, nights://viewer, nights://players, nights://teams, and nights://storage/<key>; external requests receive a controlled 403 response and are reported to Nights. Do not import libraries or contact external services.
+
+Use semantic DOM and responsive CSS. Render the exact requested interface from snapshot.model rather than reducing it to generic vertical buttons. Keep the entire playable surface within the viewport; boards must use CSS grid, and a 3x3 board must visibly have three equal columns and three equal rows. Use event listeners that call api.action. Never implement joining or team management inside uiSource; the trusted Nights frame owns those controls.
 
 Universal lobby rules for EVERY game:
 - setup must begin in a lobby with no joined players and must preserve joinedPlayerIds in state.
@@ -492,8 +512,9 @@ Universal lobby rules for EVERY game:
 - Do not begin play until enough attendees have joined.
 - setup must save context.host.id as hostId in state. In view, the host is viewer.id === state.hostId.
 - Team membership comes from state.teams. The host controls those teams in the trusted Nights frame; every attendee may view them in the game.
+- view must return ui.model({...}) containing only what this viewer is allowed to see. Never put a hidden word, secret role, private hand, or answer in another viewer's model.
 
-Never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies randomness and time. Keep the source under 12,000 characters.
+Reducer bodies must never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies reducer randomness and time. Keep the reducer source under 16,000 characters and uiSource plus styles under 40,000 characters.
 The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
 
 Host definition:
@@ -542,7 +563,18 @@ function generatedRuntimeValidation(value) {
   const missing = ['setup', 'onAction', 'view'].filter(name => !new RegExp(`\\b${name}\\s*(?:\\(|:)`).test(source));
   if (missing.length)
     return { valid: false, error: `Gemini omitted the required ${missing.join(', ')} game function${missing.length === 1 ? '' : 's'}. Generate again.` };
-  return { valid: true, error: '', source };
+  if (!/\bui\.model\s*\(/.test(source))
+    return { valid: false, error: 'The game must return a viewer-safe ui.model(...) projection from view().' };
+  const uiSource = String(value.uiSource || '').trim();
+  const styles = String(value.styles || '').trim();
+  if (!uiSource || !/\bNights\.mount\s*\(/.test(uiSource))
+    return { valid: false, error: 'Gemini omitted the rich Nights.mount interface.' };
+  if (uiSource.length > 28_000 || styles.length > 16_000)
+    return { valid: false, error: 'Gemini generated an interface that is too large for the isolated player.' };
+  const uiForbidden = uiSource.match(GAME_UI_SOURCE_FORBIDDEN);
+  if (uiForbidden)
+    return { valid: false, error: `Gemini used the UI escape capability “${uiForbidden.slice(1).find(Boolean) || uiForbidden[0]}”. Use the controlled Nights API instead.` };
+  return { valid: true, error: '', source, uiSource, styles };
 }
 
 function validGeneratedRuntime(value) {
@@ -554,13 +586,26 @@ function assembleGeneratedGame(value) {
   const bodies = ['setupBody', 'onActionBody', 'viewBody'];
   if (!bodies.every(name => typeof value[name] === 'string' && value[name].trim())) return value;
   return {
+    runtimeVersion: 2,
     instructions: String(value.instructions || ''),
     uiNotes: String(value.uiNotes || ''),
+    uiSource: String(value.uiSource || ''),
+    styles: String(value.styles || ''),
     logicSource: `({\nsetup(context) {\n${value.setupBody.trim()}\n},\nonAction(state, action, context) {\n${value.onActionBody.trim()}\n},\nview(state, viewer, ui) {\n${value.viewBody.trim()}\n}\n})`,
   };
 }
 
-async function requestGeminiGame(env, model, prompt) {
+function stableGameSeed(definition) {
+  const text = JSON.stringify(definition);
+  let hash = 2166136261;
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+async function requestGeminiGame(env, model, prompt, seed) {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
@@ -571,6 +616,7 @@ async function requestGeminiGame(env, model, prompt) {
         responseSchema: gameResponseSchema(),
         temperature: 0.2,
         maxOutputTokens: 8192,
+        seed,
       },
     }),
   });
@@ -596,10 +642,10 @@ function configuredGameModels(env) {
   ].filter(Boolean))];
 }
 
-async function requestGeminiGameWithFallback(env, models, prompt) {
+async function requestGeminiGameWithFallback(env, models, prompt, seed) {
   let lastFailure = { game: null, error: 'No Gemini model is configured.', status: 503, model: '' };
   for (const model of models) {
-    const result = await requestGeminiGame(env, model, prompt);
+    const result = await requestGeminiGame(env, model, prompt, seed);
     if (result.game) return { ...result, model };
     lastFailure = { ...result, model };
     if (result.status !== 429 && result.status !== 502 && result.status !== 503) break;
@@ -632,12 +678,13 @@ async function generateEventGame(request, env) {
       return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
 
     const models = configuredGameModels(env);
-    let generation = await requestGeminiGameWithFallback(env, models, gameGenerationPrompt(definition));
+    const seed = stableGameSeed(definition);
+    let generation = await requestGeminiGameWithFallback(env, models, gameGenerationPrompt(definition), seed);
     if (!generation.game) return json(request, { error: generation.error }, generation.status);
     let game = generation.game;
     let validation = generatedRuntimeValidation(game);
     if (!validation.valid) {
-      generation = await requestGeminiGameWithFallback(env, models, `${gameGenerationPrompt(definition)}\n\nA previous attempt failed Nights validation: ${validation.error}\nRegenerate from scratch. Return only the required JSON fields, with statements for setupBody, onActionBody, and viewBody.`);
+      generation = await requestGeminiGameWithFallback(env, models, `${gameGenerationPrompt(definition)}\n\nRepair the previous draft instead of redesigning it. The validator reported: ${validation.error}\nPrevious draft:\n${JSON.stringify(game)}\nReturn all required JSON fields with only the smallest necessary corrections.`, seed);
       if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
       game = generation.game;
       validation = generatedRuntimeValidation(game);
@@ -648,9 +695,12 @@ async function generateEventGame(request, env) {
     await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
     return json(request, {
       game: {
+        runtimeVersion: 2,
         instructions: game.instructions.slice(0, 1000),
         uiNotes: game.uiNotes.slice(0, 1000),
         logicSource: validation.source,
+        uiSource: validation.uiSource,
+        styles: validation.styles,
       },
       remainingToday: Math.max(0, dailyLimit - used - 1),
       model: generation.model,

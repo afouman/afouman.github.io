@@ -63,10 +63,17 @@ uses Gemini structured output to turn that description into the constrained
 Nights game contract. Drafts remain private to the host; published games are
 available to approved Going guests.
 
-Generated logic never runs in the Nights page. Each operation runs in a fresh,
-time-limited Web Worker inside a sandboxed opaque-origin iframe with networking,
-storage, navigation, forms, popups, camera, and microphone disabled. The game
-receives only the approved players/teams/random/clock functions and renders
-through Nights UI constructors. This first release provides isolated local play
-and preview; synchronized host-authoritative sessions will build on the same
-saved game contract.
+Generated logic never runs in the Nights page. Each state transition runs in a
+fresh, time-limited Web Worker. New v2 games render their responsive DOM/CSS UI
+inside a null-origin iframe with no Firebase credentials, account token, parent
+access, or external network access. A controlled compatibility layer provides
+virtual storage, bounded timers, deterministic UI randomness, audio/effects,
+virtual `nights://` reads, and authenticated game actions while intercepting
+standard browser APIs that could otherwise leave the sandbox. Existing v1 games
+remain playable through the original declarative renderer.
+
+Live sessions are synchronized between devices through the authenticated
+Cloudflare session endpoint and Firestore snapshot listener. Nights owns event
+eligibility, joining, leaving, team membership, actor identity, revision checks,
+and state-size limits; generated UI code receives only the game snapshot and
+display-safe participant names.

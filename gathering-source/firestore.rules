@@ -1012,13 +1012,26 @@ service cloud.firestore {
             request.resource.data.runtime == null
             || (
               request.resource.data.runtime is map
-              && request.resource.data.runtime.keys().hasOnly(['instructions', 'logicSource', 'uiNotes'])
+              && request.resource.data.runtime.keys().hasOnly([
+                'runtimeVersion', 'instructions', 'logicSource', 'uiNotes',
+                'uiSource', 'styles'
+              ])
               && request.resource.data.runtime.instructions is string
               && request.resource.data.runtime.instructions.size() <= 1000
               && request.resource.data.runtime.logicSource is string
               && request.resource.data.runtime.logicSource.size() <= 16000
               && request.resource.data.runtime.uiNotes is string
               && request.resource.data.runtime.uiNotes.size() <= 1000
+              && (
+                !request.resource.data.runtime.keys().hasAny(['runtimeVersion'])
+                || (
+                  request.resource.data.runtime.runtimeVersion == 2
+                  && request.resource.data.runtime.uiSource is string
+                  && request.resource.data.runtime.uiSource.size() <= 28000
+                  && request.resource.data.runtime.styles is string
+                  && request.resource.data.runtime.styles.size() <= 16000
+                )
+              )
             )
           )
           && (request.resource.data.status == 'draft' || request.resource.data.runtime != null)
