@@ -751,12 +751,15 @@ function sessionStateWithRoster(state, session) {
   const joinedPlayerNames = Object.fromEntries(
     (session.joinedPlayers || []).map(player => [player.id, player.name]),
   );
-  const teams = (session.teams || []).map(team => ({
-    id: team.id,
-    name: team.name,
-    playerIds: team.playerIds,
-    players: team.playerIds.map(id => playersById.get(id)).filter(Boolean),
-  }));
+  const teams = (session.teams || []).map(team => {
+    const playerIds = (team.playerIds || []).filter(id => playersById.has(id));
+    return {
+      id: team.id,
+      name: team.name,
+      playerIds,
+      players: playerIds.map(id => playersById.get(id)).filter(Boolean),
+    };
+  });
   return {
     ...cleanGameState(state),
     hostId: session.hostId,
@@ -872,7 +875,11 @@ async function updateGameSession(request, env) {
         next.state = sessionStateWithRoster(existing.state || {}, next);
       } else if (operation === 'leave') {
         next.joinedPlayers = (existing.joinedPlayers || []).filter(player => player.id !== access.actor.id);
-        next.teams = (existing.teams || []).map(team => ({
+        // Firestore deliberately reserves the canonical team assignment for the host.
+        // A guest leave therefore updates only the roster; sessionStateWithRoster removes
+        // departed players from the live game state immediately. The next host assignment
+        // persists the cleaned canonical teams through the host-authorized path.
+        if (access.host) next.teams = (existing.teams || []).map(team => ({
           ...team,
           playerIds: (team.playerIds || []).filter(id => id !== access.actor.id),
         }));
