@@ -309,6 +309,11 @@ type EventGameSession = {
   updatedBy: string;
   updatedAt: string;
 };
+type GameReviewMessage = {
+  id: string;
+  role: 'host' | 'designer';
+  text: string;
+};
 type MoneyDetail = {
   id: string;
   direction: 'owed' | 'owes';
@@ -831,6 +836,7 @@ const callGameGenerator = async (
     'title' | 'summary' | 'playerArrangement' | 'interfaceDescription' | 'rules'
     | 'scoring' | 'timing' | 'hiddenInformation' | 'winCondition' | 'minPlayers' | 'maxPlayers'>,
   authToken: string,
+  refinement?: { previousGame: GeneratedGameRuntime; feedback: string[] },
 ) => {
   const response = await fetch(`${GAME_API_URL}/generate`, {
     method: 'POST',
@@ -838,7 +844,7 @@ const callGameGenerator = async (
       'content-type': 'application/json',
       authorization: `Bearer ${authToken}`,
     },
-    body: JSON.stringify({ eventId, definition }),
+    body: JSON.stringify({ eventId, definition, ...refinement }),
   });
   const result = await response.json().catch(() => null) as {
     game?: GeneratedGameRuntime;
@@ -8580,7 +8586,26 @@ const gameSandboxDocument = (game: EventGame, participants: GameParticipant[], c
     ? gameSandboxV2Document(game, participants, currentViewer, hostId, canManage)
     : gameSandboxV1Document(game, participants, currentViewer, hostId, canManage);
 
-function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, onClose }: { eventId: string; game: EventGame; participants: GameParticipant[]; viewer: GameParticipant | null; hostId: string; canManage: boolean; onClose: () => void }) {
+type GameSandboxReview = {
+  messages: GameReviewMessage[];
+  value: string;
+  busy: boolean;
+  error: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+};
+
+function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, previewMode = false, review, onClose }: {
+  eventId: string;
+  game: EventGame;
+  participants: GameParticipant[];
+  viewer: GameParticipant | null;
+  hostId: string;
+  canManage: boolean;
+  previewMode?: boolean;
+  review?: GameSandboxReview;
+  onClose: () => void;
+}) {
   const [session, setSession] = useState<EventGameSession | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [syncError, setSyncError] = useState('');
@@ -8590,9 +8615,24 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
   const bridgeRef = useRef<MessagePort | null>(null);
   const sessionRef = useRef<EventGameSession | null>(null);
   const initializingRef = useRef(false);
+  const reviewMessagesRef = useRef<HTMLDivElement>(null);
+  const sandboxParticipants = useMemo(() => {
+    if (!previewMode) return participants;
+    const unique = new Map<string, GameParticipant>();
+    if (viewer) unique.set(viewer.id, viewer);
+    participants.forEach((participant) => unique.set(participant.id, participant));
+    const desired = Math.min(8, Math.max(2, game.minPlayers || 2));
+    while (unique.size < desired) {
+      const number = unique.size + 1;
+      unique.set(`preview-player-${number}`, { id: `preview-player-${number}`, name: `Guest ${number}` });
+    }
+    return [...unique.values()].slice(0, Math.max(desired, Math.min(8, unique.size)));
+  }, [game.minPlayers, participants, previewMode, viewer]);
+  const sandboxViewer = previewMode ? (viewer || sandboxParticipants[0] || null) : viewer;
+  const sandboxHostId = previewMode ? (sandboxViewer?.id || hostId) : hostId;
   const documentSource = useMemo(
-    () => gameSandboxDocument(game, participants, viewer, hostId, canManage),
-    [canManage, game, hostId, participants, viewer],
+    () => gameSandboxDocument(game, sandboxParticipants, sandboxViewer, sandboxHostId, canManage),
+    [canManage, game, sandboxHostId, sandboxParticipants, sandboxViewer],
   );
 
   const updateSession = useCallback(async (operation: 'ensure' | 'read' | 'join' | 'leave' | 'teams' | 'state', payload: Record<string, unknown> = {}) => {
@@ -8611,7 +8651,7 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
   }, [game.version]);
 
   useEffect(() => {
-    if (!firebaseConfigured) {
+    if (previewMode || !firebaseConfigured || !game.id) {
       queueMicrotask(() => setSessionReady(true));
       return;
     }
@@ -8629,7 +8669,12 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
       });
     })();
     return () => stop();
-  }, [applySession, eventId, game.id]);
+  }, [applySession, eventId, game.id, previewMode]);
+
+  useEffect(() => {
+    const container = reviewMessagesRef.current;
+    if (container) container.scrollTop = container.scrollHeight;
+  }, [review?.busy, review?.messages]);
 
   const connectSandbox = useCallback(() => {
     const target = iframeRef.current?.contentWindow;
@@ -8640,6 +8685,10 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     channel.port1.onmessage = ({ data }) => {
       if (!data || data.gameId !== game.id) return;
       if (data.type === 'connected') {
+        if (previewMode) {
+          channel.port1.postMessage({ type: 'initialize' });
+          return;
+        }
         const current = sessionRef.current;
         channel.port1.postMessage(current && current.gameVersion === game.version
           ? { type: 'sync', state: current.state, revision: current.revision }
@@ -8647,6 +8696,37 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
         return;
       }
       if (data.type === 'ready') {
+        if (previewMode) {
+          const joinedPlayers = sandboxParticipants;
+          const previewTeamCount = Math.min(2, Math.max(1, joinedPlayers.length));
+          const teams = Array.from({ length: previewTeamCount }, (_, index) => ({
+            id: `team-${index + 1}`,
+            name: `Team ${index + 1}`,
+            playerIds: joinedPlayers.filter((_, playerIndex) => playerIndex % previewTeamCount === index).map((player) => player.id),
+          }));
+          const playersById = new Map(joinedPlayers.map((player) => [player.id, player]));
+          const state = {
+            ...(data.state || {}),
+            hostId: sandboxHostId,
+            joinedPlayerIds: joinedPlayers.map((player) => player.id),
+            joinedPlayerNames: Object.fromEntries(joinedPlayers.map((player) => [player.id, player.name])),
+            joinedPlayers,
+            teams: teams.map((team) => ({ ...team, players: team.playerIds.map((id) => playersById.get(id)).filter(Boolean) })),
+          };
+          applySession({
+            gameId: game.id || 'design-preview',
+            gameVersion: game.version,
+            hostId: sandboxHostId,
+            revision: 1,
+            joinedPlayers,
+            teams,
+            state,
+            updatedBy: sandboxHostId,
+            updatedAt: new Date().toISOString(),
+          });
+          setSessionReady(true);
+          return;
+        }
         const current = sessionRef.current;
         if (current && current.gameVersion === game.version) {
           channel.port1.postMessage({ type: 'sync', state: current.state, revision: current.revision });
@@ -8667,6 +8747,10 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
       if (data.type === 'state') {
         const current = sessionRef.current;
         if (!current) return;
+        if (previewMode) {
+          applySession({ ...current, revision: current.revision + 1, state: data.state, updatedAt: new Date().toISOString() });
+          return;
+        }
         setSyncing(true);
         void updateSession('state', { state: data.state, expectedRevision: data.revision, reason: data.reason === 'teams' ? 'teams' : 'action' })
           .then((saved) => saved && applySession(saved))
@@ -8683,7 +8767,7 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     };
     channel.port1.start();
     target.postMessage({ type: 'nights-game-connect', gameId: game.id }, '*', [channel.port2]);
-  }, [applySession, game.id, game.version, updateSession]);
+  }, [applySession, game.id, game.version, previewMode, sandboxHostId, sandboxParticipants, updateSession]);
 
   useEffect(() => () => {
     bridgeRef.current?.close();
@@ -8727,13 +8811,15 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
     <div className="game-sandbox-backdrop" role="presentation" onPointerDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
-      <div className="game-sandbox-shell" role="dialog" aria-modal="true" aria-label={`Play ${game.title}`}>
-        <header><div><p className="eyebrow">Live game</p><h3 className="font-display">{game.title}</h3></div><button type="button" onPointerDown={(event) => {
+      <div className={`game-sandbox-shell ${review ? 'reviewing' : ''}`} role="dialog" aria-modal="true" aria-label={`${previewMode ? 'Preview' : 'Play'} ${game.title}`}>
+        <header><div><p className="eyebrow">{previewMode ? 'Design preview' : 'Live game'}</p><h3 className="font-display">{game.title}</h3></div><button type="button" onPointerDown={(event) => {
           event.preventDefault();
           event.stopPropagation();
           onClose();
         }} aria-label="Close game"><XCircle size={22} /></button></header>
-        <section className="game-session-bar">
+        {previewMode ? <section className="game-session-bar game-preview-session">
+          <div className="game-session-status"><strong>Safe sample game</strong><span>Try the interface, then tell the designer what to improve.</span></div>
+        </section> : <section className="game-session-bar">
           <div className="game-session-status">
             <strong>{session?.joinedPlayers?.length || 0} joined</strong>
             <span>{syncing ? 'Synchronizing…' : session ? 'Live on every device' : sessionReady ? 'Starting shared game…' : 'Connecting…'}</span>
@@ -8759,9 +8845,26 @@ function GameSandbox({ eventId, game, participants, viewer, hostId, canManage, o
             <div className="game-manual-assignments">{session.joinedPlayers.map((player) => <label key={player.id}><span>{player.name}</span><select value={session.teams.find((team) => team.playerIds.includes(player.id))?.id || ''} onChange={(event) => manuallyAssign(player.id, event.target.value)}><option value="">Unassigned</option>{(session.teams.length ? session.teams : Array.from({ length: teamCount }, (_, index) => ({ id: `team-${index + 1}`, name: `Team ${index + 1}`, playerIds: [] }))).map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>)}</div>
           </div>}
           {syncError && <p>{syncError}</p>}
-        </section>
+        </section>}
         <iframe ref={iframeRef} title={`${game.title} game`} sandbox="allow-scripts" allow="camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'; clipboard-read 'none'; clipboard-write 'none'; fullscreen 'none'" referrerPolicy="no-referrer" srcDoc={documentSource} onLoad={connectSandbox} />
-        <footer><ShieldCheck size={15} /><span>The game interface is isolated; Nights securely synchronizes players, teams, and moves.</span></footer>
+        {review && <aside className="game-review-panel" aria-label="Game design feedback">
+          <header><div><MessageCircle size={17} /><span><strong>Design feedback</strong><small>Revise this draft without starting over</small></span></div></header>
+          <div ref={reviewMessagesRef} className="game-review-messages" aria-live="polite">
+            {review.messages.map((message) => <div key={message.id} className={`game-review-message ${message.role}`}><small>{message.role === 'host' ? 'You' : 'Nights designer'}</small><p>{message.text}</p></div>)}
+            {review.busy && <div className="game-review-message designer thinking"><small>Nights designer</small><p>Applying your feedback…</p></div>}
+          </div>
+          <form onSubmit={(event) => { event.preventDefault(); review.onSubmit(); }}>
+            <textarea value={review.value} onChange={(event) => review.onChange(event.target.value)} onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                review.onSubmit();
+              }
+            }} rows={3} maxLength={1500} placeholder="Make the board larger, simplify the score area…" disabled={review.busy} />
+            <button type="submit" disabled={review.busy || !review.value.trim()} aria-label="Send design feedback"><Send size={16} /> Send</button>
+          </form>
+          {review.error && <p className="game-review-error">{review.error}</p>}
+        </aside>}
+        <footer><ShieldCheck size={15} /><span>{previewMode ? 'Preview data stays local. Publishing creates the shared event game.' : 'The game interface is isolated; Nights securely synchronizes players, teams, and moves.'}</span></footer>
       </div>
     </div>
   );
@@ -8790,6 +8893,11 @@ function GamePanel({
   const [editorOpen, setEditorOpen] = useState(false);
   const [draft, setDraft] = useState<EventGame>(() => newGameDraft(accountUid));
   const [playing, setPlaying] = useState<EventGame | null>(null);
+  const [designPreview, setDesignPreview] = useState(false);
+  const [designRevision, setDesignRevision] = useState(0);
+  const [reviewMessages, setReviewMessages] = useState<GameReviewMessage[]>([]);
+  const [reviewInput, setReviewInput] = useState('');
+  const [reviewError, setReviewError] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -8839,24 +8947,37 @@ function GamePanel({
   }, [canManage, menu.id]);
 
   const visibleGames = canManage ? games : games.filter((game) => game.status === 'published');
-  const updateDraft = <K extends keyof EventGame>(key: K, value: EventGame[K]) =>
+  const updateDraft = <K extends keyof EventGame>(key: K, value: EventGame[K]) => {
+    const invalidatesRuntime = ['playerArrangement', 'interfaceDescription', 'rules', 'scoring', 'timing', 'hiddenInformation', 'winCondition', 'minPlayers', 'maxPlayers'].includes(key);
+    if (invalidatesRuntime) {
+      setReviewMessages([]);
+      setReviewInput('');
+      setReviewError('');
+    }
     setDraft((current) => ({
       ...current,
       [key]: value,
       runtime: key === 'runtime'
         ? value as EventGame['runtime']
-        : ['playerArrangement', 'interfaceDescription', 'rules', 'scoring', 'timing', 'hiddenInformation', 'winCondition', 'minPlayers', 'maxPlayers'].includes(key)
+        : invalidatesRuntime
           ? null
           : current.runtime,
     }));
+  };
   const beginCreate = () => {
     setDraft(newGameDraft(accountUid));
     setError('');
+    setReviewMessages([]);
+    setReviewInput('');
+    setReviewError('');
     setEditorOpen(true);
   };
   const beginEdit = (game: EventGame) => {
     setDraft({ ...game });
     setError('');
+    setReviewMessages(game.runtime ? [{ id: crypto.randomUUID(), role: 'designer', text: `This is the current published design. ${game.runtime.uiNotes}` }] : []);
+    setReviewInput('');
+    setReviewError('');
     setEditorOpen(true);
   };
   const validateDraft = () => {
@@ -8883,10 +9004,49 @@ function GamePanel({
       const result = await callGameGenerator(menu.id, draft, await user.getIdToken());
       const generatedDraft: EventGame = { ...draft, runtime: result.game || null };
       setDraft(generatedDraft);
+      setDesignPreview(true);
+      setDesignRevision((current) => current + 1);
+      setReviewMessages([{ id: crypto.randomUUID(), role: 'designer', text: `The first playable draft is ready. ${result.game?.uiNotes || 'Try it and tell me what should change.'}` }]);
+      setReviewInput('');
+      setReviewError('');
       setPlaying(generatedDraft);
       notify(`Playable draft generated${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} AI generations left today` : ''}.`);
     } catch (generationError) {
       setError(generationError instanceof Error ? generationError.message : 'Game generation failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const refine = async () => {
+    const feedback = reviewInput.trim();
+    if (!feedback || !draft.runtime || busy) return;
+    const hostMessage: GameReviewMessage = { id: crypto.randomUUID(), role: 'host', text: feedback };
+    const nextMessages = [...reviewMessages, hostMessage];
+    setReviewMessages(nextMessages);
+    setReviewInput('');
+    setReviewError('');
+    setBusy(true);
+    try {
+      if (!firebaseConfigured) throw new Error('Connect the production backend to revise a game.');
+      const [{ getApp }, authModule] = await Promise.all([import('firebase/app'), import('firebase/auth')]);
+      const user = authModule.getAuth(getApp()).currentUser;
+      if (!user) throw new Error('Sign in again before revising the game.');
+      const result = await callGameGenerator(menu.id, draft, await user.getIdToken(), {
+        previousGame: draft.runtime,
+        feedback: nextMessages.filter((message) => message.role === 'host').map((message) => message.text),
+      });
+      const revisedDraft: EventGame = { ...draft, runtime: result.game || draft.runtime };
+      setDraft(revisedDraft);
+      setDesignRevision((current) => current + 1);
+      setPlaying(revisedDraft);
+      setReviewMessages((current) => [...current, {
+        id: crypto.randomUUID(),
+        role: 'designer',
+        text: `Updated without starting over. ${result.game?.uiNotes || 'Review the new preview and send another note if needed.'}`,
+      }]);
+      notify(`Preview refined${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} AI generations left today` : ''}.`);
+    } catch (generationError) {
+      setReviewError(generationError instanceof Error ? generationError.message : 'The preview could not be revised.');
     } finally {
       setBusy(false);
     }
@@ -8986,7 +9146,7 @@ function GamePanel({
                 <div className="game-card-art"><Gamepad2 size={27} /><span>{game.minPlayers}–{game.maxPlayers} players</span></div>
                 <div className="game-card-copy"><div><span className={`game-status ${game.status}`}>{game.status}</span><small>v{game.version}</small></div><h4 className="font-display">{game.title}</h4><p>{game.summary || game.rules}</p></div>
                 <footer>
-                  <button type="button" className="game-play" disabled={!game.runtime?.logicSource} onClick={() => setPlaying(game)}><Play size={15} /> Play</button>
+                  <button type="button" className="game-play" disabled={!game.runtime?.logicSource} onClick={() => { setDesignPreview(false); setPlaying(game); }}><Play size={15} /> Play</button>
                   {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete" onClick={() => void removeGame(game)} disabled={busy} aria-label={`Delete ${game.title}`}><Trash2 size={15} /></button></>}
                 </footer>
               </article>
@@ -9007,7 +9167,7 @@ function GamePanel({
             <label className="game-field"><span>Private or hidden information</span><textarea value={draft.hiddenInformation} onChange={(event) => updateDraft('hiddenInformation', event.target.value)} placeholder="The acting word is hidden from the guessing team until the turn ends." rows={4} /></label>
             <label className="game-field game-field-wide"><span>How the game ends</span><textarea value={draft.winCondition} onChange={(event) => updateDraft('winCondition', event.target.value)} placeholder="After five rounds, the team with the highest score wins. Ties go to one sudden-death round." rows={3} /></label>
           </div>
-          {draft.runtime && <div className="game-runtime-ready"><ShieldCheck size={19} /><div><strong>Playable sandbox ready</strong><span>{draft.runtime.instructions}</span></div><button type="button" onClick={() => setPlaying(draft)}><Play size={15} /> Preview</button></div>}
+          {draft.runtime && <div className="game-runtime-ready"><ShieldCheck size={19} /><div><strong>Playable sandbox ready</strong><span>{draft.runtime.instructions}</span></div><button type="button" onClick={() => { setDesignPreview(true); setPlaying(draft); }}><Play size={15} /> Preview & refine</button></div>}
           <footer className="game-editor-actions">
             <button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Cancel</button>
             <button type="button" className="game-generate" onClick={() => void generate()} disabled={busy}><Sparkles size={16} />{busy ? 'Designing…' : draft.runtime ? 'Regenerate' : 'Generate playable draft'}</button>
@@ -9016,7 +9176,25 @@ function GamePanel({
           </footer>
         </section>}
       </div>
-      {playing && <GameSandbox eventId={menu.id} game={playing} participants={participants} viewer={viewer} hostId={hostId} canManage={canManage} onClose={() => setPlaying(null)} />}
+      {playing && <GameSandbox
+        key={`${playing.id || 'draft'}:${playing.version}:${designPreview ? designRevision : 'live'}`}
+        eventId={menu.id}
+        game={playing}
+        participants={participants}
+        viewer={viewer}
+        hostId={hostId}
+        canManage={canManage}
+        previewMode={designPreview}
+        review={designPreview ? {
+          messages: reviewMessages,
+          value: reviewInput,
+          busy,
+          error: reviewError,
+          onChange: setReviewInput,
+          onSubmit: () => void refine(),
+        } : undefined}
+        onClose={() => { setPlaying(null); setDesignPreview(false); }}
+      />}
     </div>
   );
 }

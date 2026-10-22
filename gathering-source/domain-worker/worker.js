@@ -522,6 +522,40 @@ Host definition:
 ${JSON.stringify(definition, null, 2)}`;
 }
 
+function gameRefinementPrompt(definition, previousGame, feedback) {
+  return `${gameGenerationPrompt(definition)}
+
+This is an ITERATIVE REVISION, not a new design. Preserve every working rule, action, state field, safety constraint, and visual choice from the existing draft unless the host feedback specifically asks you to change it. Make the smallest coherent changes needed, and return the complete replacement for every required response field.
+
+Existing playable draft:
+${JSON.stringify(previousGame, null, 2)}
+
+Host design feedback, oldest to newest:
+${feedback.map((message, index) => `${index + 1}. ${message}`).join('\n')}`;
+}
+
+function cleanGameFeedback(value) {
+  const messages = Array.isArray(value) ? value : [value];
+  return messages
+    .map(message => String(message || '').trim())
+    .filter(Boolean)
+    .slice(-12)
+    .map(message => message.slice(0, 1500));
+}
+
+function cleanPreviousGame(value) {
+  const validation = generatedRuntimeValidation(value);
+  if (!validation.valid) throw new Error('The current playable draft is not valid enough to revise. Generate a new draft once.');
+  return {
+    runtimeVersion: 2,
+    instructions: String(value.instructions || '').slice(0, 1000),
+    uiNotes: String(value.uiNotes || '').slice(0, 1000),
+    logicSource: validation.source,
+    uiSource: validation.uiSource,
+    styles: validation.styles,
+  };
+}
+
 function normalizeGeneratedGameSource(value) {
   let source = String(value || '').trim();
   source = source
@@ -673,6 +707,10 @@ async function generateEventGame(request, env) {
     if (!env.GEMINI_API_KEY) return json(request, { error: 'Game generation is not configured yet.' }, 503);
 
     const definition = cleanGameDefinition(body.definition);
+    const feedback = cleanGameFeedback(body.feedback);
+    const previousGame = body.previousGame ? cleanPreviousGame(body.previousGame) : null;
+    if ((feedback.length > 0) !== Boolean(previousGame))
+      return json(request, { error: 'Game feedback must include the playable draft being revised.' }, 400);
     const day = new Date().toISOString().slice(0, 10);
     const quotaKey = `game-ai:${claims.sub}:${day}`;
     const used = Number(await env.PUSH_SUBSCRIPTIONS.get(quotaKey)) || 0;
@@ -681,13 +719,16 @@ async function generateEventGame(request, env) {
       return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
 
     const models = configuredGameModels(env);
-    const seed = stableGameSeed(definition);
-    let generation = await requestGeminiGameWithFallback(env, models, gameGenerationPrompt(definition), seed);
+    const prompt = previousGame
+      ? gameRefinementPrompt(definition, previousGame, feedback)
+      : gameGenerationPrompt(definition);
+    const seed = stableGameSeed(previousGame ? { definition, previousGame, feedback } : definition);
+    let generation = await requestGeminiGameWithFallback(env, models, prompt, seed);
     if (!generation.game) return json(request, { error: generation.error }, generation.status);
     let game = generation.game;
     let validation = generatedRuntimeValidation(game);
     if (!validation.valid) {
-      generation = await requestGeminiGameWithFallback(env, models, `${gameGenerationPrompt(definition)}\n\nRepair the previous draft instead of redesigning it. The validator reported: ${validation.error}\nPrevious draft:\n${JSON.stringify(game)}\nReturn all required JSON fields with only the smallest necessary corrections.`, seed);
+      generation = await requestGeminiGameWithFallback(env, models, `${prompt}\n\nRepair the returned draft instead of redesigning it. The validator reported: ${validation.error}\nInvalid returned draft:\n${JSON.stringify(game)}\nReturn all required JSON fields with only the smallest necessary corrections.`, seed);
       if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
       game = generation.game;
       validation = generatedRuntimeValidation(game);
@@ -707,6 +748,7 @@ async function generateEventGame(request, env) {
       },
       remainingToday: Math.max(0, dailyLimit - used - 1),
       model: generation.model,
+      refined: Boolean(previousGame),
     });
   } catch (error) {
     return json(request, { error: error instanceof Error ? error.message : 'Game generation failed.' }, 400);
