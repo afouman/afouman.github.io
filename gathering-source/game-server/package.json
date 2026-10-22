@@ -1,0 +1,9 @@
+{
+  "name": "nights-game-server",
+  "private": true,
+  "type": "module",
+  "description": "Server referee for on-the-go event games (Cloudflare Worker + Durable Object + QuickJS).",
+  "dependencies": {
+    "quickjs-emscripten": "0.32.0"
+  }
+}

@@ -9,8 +9,6 @@ const VAPID_PUBLIC_KEY = 'BBLVoXFRiUDSV72gImtZXfRgu92qgCEmBY-nByHqKDiaQrB7uEkvAW
 const ALLOWED_ORIGINS = new Set(['https://gaemaj.tech', 'https://www.gaemaj.tech', 'https://afouman.github.io']);
 const LEGACY_HOST_EMAIL = 'alaki.dolaki.holholaki@gmail.com';
 const LEGACY_HOST_UID = 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
-const GAME_SOURCE_FORBIDDEN = /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|globalThis|self|postMessage|close|Worker|Blob|URL|WebAssembly|Atomics|SharedArrayBuffer|navigator|caches|indexedDB|document|window|parent|top|opener|localStorage|sessionStorage|constructor|__proto__|prototype|setTimeout|setInterval|queueMicrotask|crypto|performance|Date|Promise|async|await|while)\b/;
-const GAME_UI_SOURCE_FORBIDDEN = /(?:\b(importScripts|require|eval|Function|postMessage|MessageChannel|BroadcastChannel|Worker|SharedWorker|ServiceWorker|WebAssembly)\s*\(|\b(import)\s*(?:\(|["'])|(?<![\w$.'"])(globalThis|parent|top|opener)\s*(?:\.|\[)|\b(SharedArrayBuffer)\s*\(|\b(Atomics)\s*\.|\b(constructor|__proto__|prototype)\s*(?:\.|\[)|\b(location)\s*(?:=|\.))/;
 
 const APP_ASSETS = new Set([
   '/favicon.svg', '/manifest.webmanifest', '/manifest-guest.webmanifest',
@@ -415,6 +413,20 @@ async function verifyFirebaseToken(request) {
   return { token, claims };
 }
 
+// ---------------------------------------------------------------------------
+// On-the-go game generation.
+//
+// Gemini writes a small game module (pure logic + DOM renderer). The Worker only
+// generates and shape-checks it; the module never runs here. It runs in the
+// guest's browser inside a sandboxed, network-less iframe (see app/games.tsx),
+// which is the security boundary. Live play is stored as an ordered move log in
+// Firestore and replayed deterministically on every device, so no device acts
+// as a referee and any number of tables can play the same game independently.
+// ---------------------------------------------------------------------------
+
+const GAME_RUNTIME_VERSION = 3;
+const GAME_LIMITS = { logicSource: 20_000, uiSource: 30_000, styles: 12_000, tests: 8_000, instructions: 1_000, uiNotes: 1_000 };
+
 function cleanGameDefinition(value) {
   if (!value || typeof value !== 'object') throw new Error('Game definition is required.');
   const textFields = [
@@ -438,211 +450,192 @@ function cleanGameDefinition(value) {
 function gameResponseSchema() {
   return {
     type: 'object',
-    required: ['instructions', 'setupBody', 'onActionBody', 'viewBody', 'uiNotes', 'uiSource', 'styles'],
+    required: ['instructions', 'uiNotes', 'logicSource', 'uiSource', 'styles', 'tests'],
     properties: {
-      instructions: { type: 'string', description: 'A short host-facing explanation of how to start and test the game.' },
-      uiNotes: { type: 'string', description: 'A short description of the generated player interface.' },
-      setupBody: { type: 'string', description: 'Only the JavaScript statements inside setup(context), including an explicit return.' },
-      onActionBody: { type: 'string', description: 'Only the JavaScript statements inside onAction(state, action, context), including an explicit return.' },
-      viewBody: { type: 'string', description: 'Only the JavaScript statements inside view(state, viewer, ui), including an explicit return.' },
-      uiSource: { type: 'string', description: 'Classic browser JavaScript that calls Nights.mount(renderFunction) and renders the game with DOM APIs.' },
-      styles: { type: 'string', description: 'Responsive CSS scoped beneath #game-root. It must fit phone, tablet, and desktop without page scrolling.' },
+      instructions: { type: 'string', description: 'One or two sentences telling players how to play.' },
+      uiNotes: { type: 'string', description: 'One or two sentences describing the screen you built.' },
+      logicSource: { type: 'string', description: 'Plain JavaScript declaring function setup(ctx), function move(state, action, ctx) and function view(state, player).' },
+      uiSource: { type: 'string', description: 'Plain JavaScript declaring function render(root, model, ctx).' },
+      styles: { type: 'string', description: 'CSS for the game screen. Scope every rule under #game.' },
+      tests: { type: 'string', description: 'A JSON array of test scenarios, as described in the instructions.' },
     },
   };
 }
 
+const GAME_CONTRACT = `
+THE NIGHTS GAME CONTRACT
+
+A game is two plain JavaScript sources. No imports, no modules, no network, no storage. Both run in an isolated sandbox.
+
+1. logicSource — pure, deterministic game rules. Declare exactly these three top-level functions:
+
+   function setup(ctx) -> state
+     ctx.players : [{id, name}] in seat order. ids are 'p1', 'p2', ... Use ids for everything; names are only for display.
+     ctx.rng     : seeded random source. ctx.rng() -> [0,1). ctx.rng.int(n) -> 0..n-1. ctx.rng.pick(array). ctx.rng.shuffle(array) -> new array.
+     Return the complete initial state as plain JSON (objects, arrays, strings, numbers, booleans, null).
+     Do team assignment, dealing, role selection, etc. here with ctx.rng.
+
+   function move(state, action, ctx) -> nextState
+     action      : the plain JSON object a player sent from the UI.
+     ctx.player  : id of the player who sent it ('p1', ...). This is trusted; never read the sender from action.
+     ctx.players : same list as in setup.
+     ctx.now     : the move's timestamp in milliseconds. This is the ONLY clock.
+     ctx.rng     : seeded random source for this move.
+     Return the full next state. To refuse an illegal move (not your turn, square taken, game over...), throw new Error('short reason players can read').
+     Validate everything: the action comes from a player's device.
+     Restarting / "new game" / "play again" is just another action handled here.
+
+   function view(state, player) -> model
+     player: the viewer's id ('p1', ...) or null for a spectator.
+     Return a plain JSON model of what THIS viewer may see. Include whose turn it is, scores, the board, and booleans
+     the UI needs (for example canAct, isMyTurn, myTeam, mySymbol). Leave out other players' secrets.
+
+   Math.random, Date.now and new Date() are disabled in logic (they would make devices disagree). Use ctx.rng and ctx.now.
+   Never use loops that might not terminate. Keep the state small.
+
+2. uiSource — the screen. Declare exactly one top-level function:
+
+   function render(root, model, ctx)
+     Called every time the model changes. root (the #game element) is already EMPTY when render is called:
+     build the whole screen and append it to root every time. Never cache elements between calls.
+     model    : the value view() returned for this viewer.
+     ctx.me   : this viewer's id or null (spectator).
+     ctx.players : [{id, name}].
+     ctx.send(action) : send a plain JSON action object (under 1500 characters) to move(). Returns a Promise of
+                {ok:true} or {ok:false, error}. Nights already shows refusals to the player; you may also show them.
+     ctx.now() : local clock in ms, only for displaying countdowns.
+     ctx.effects.confetti(), ctx.effects.sound('tap'|'success'|'error'), ctx.effects.vibrate()
+     These are the only ctx members; do not call anything else on ctx.
+     Use document.createElement / textContent / addEventListener. Never use innerHTML with player-provided text.
+     Every tappable control MUST be a <button> element. Disable buttons the viewer cannot use right now.
+     setTimeout/setInterval are allowed only for countdown displays; time-based rules must go through ctx.send.
+     Timers: to end a timed turn, the UI sends an action such as {type:'timeUp'} when its countdown reaches zero, and
+     move() checks ctx.now against a deadline stored in state.
+
+3. styles — CSS. Scope every selector under #game. The game area fills the viewport (100vw x 100vh, no page
+   scrolling). Make the main play area as large as possible, use CSS grid for boards (a 3x3 board is
+   grid-template-columns: repeat(3, 1fr) with square cells), and keep it readable on a phone held upright.
+
+4. tests — a JSON array (as a string) of 2 to 5 scenarios that prove the rules work:
+   [{"name": "...", "players": 2,
+     "steps": [{"player": "p1", "action": {...}, "expect": "accept"}, {"player": "p2", "action": {...}, "expect": "reject"}],
+     "expectText": {"player": "p1", "includes": ["wins"]}}]
+   Each step is checked with move(); "expect" says whether it must succeed or throw. expectText (optional) renders the
+   final screen for that player and checks the visible text contains each string (case-insensitive).
+   Scenarios must not depend on random outcomes: choose actions that are legal whatever ctx.rng decided, or read
+   the setup through moves that are always legal. Include a win (or end) scenario and an illegal-move scenario.
+
+Teams: if the host asks for teams, form them in setup() from ctx.players with ctx.rng (for random assignment)
+and show each player's team and mark in the view. Any number of players between the limits may sit at a table.
+
+WORKED EXAMPLE (a different game, for shape only):
+
+logicSource:
+function setup(ctx) {
+  return { order: ctx.rng.shuffle(ctx.players.map(p => p.id)), turn: 0, total: 0, target: 21, winner: null };
+}
+function move(state, action, ctx) {
+  if (action.type === 'restart') return setup(ctx);
+  if (state.winner) throw new Error('The game is over.');
+  if (state.order[state.turn % state.order.length] !== ctx.player) throw new Error('It is not your turn.');
+  if (action.type !== 'add' || ![1, 2, 3].includes(action.amount)) throw new Error('Add 1, 2 or 3.');
+  const total = state.total + action.amount;
+  return { ...state, total, turn: state.turn + 1, winner: total >= state.target ? ctx.player : null };
+}
+function view(state, player) {
+  const current = state.order[state.turn % state.order.length];
+  return { total: state.total, target: state.target, current, winner: state.winner, isMyTurn: !state.winner && current === player };
+}
+
+uiSource:
+function render(root, model, ctx) {
+  const name = id => (ctx.players.find(p => p.id === id) || {}).name || id;
+  const status = document.createElement('p');
+  status.className = 'status';
+  status.textContent = model.winner ? name(model.winner) + ' wins!' : (model.isMyTurn ? 'Your turn' : name(model.current) + ' is playing');
+  const total = document.createElement('div');
+  total.className = 'total';
+  total.textContent = model.total + ' / ' + model.target;
+  const row = document.createElement('div');
+  row.className = 'row';
+  [1, 2, 3].forEach(amount => {
+    const button = document.createElement('button');
+    button.textContent = '+' + amount;
+    button.disabled = !model.isMyTurn;
+    button.addEventListener('click', () => ctx.send({ type: 'add', amount }));
+    row.append(button);
+  });
+  const again = document.createElement('button');
+  again.textContent = 'New game';
+  again.addEventListener('click', () => ctx.send({ type: 'restart' }));
+  root.append(status, total, row, again);
+  if (model.winner) ctx.effects.confetti();
+}
+`;
+
 function gameGenerationPrompt(definition) {
-  return `You are the game designer for Nights, a gathering app. Convert the host's description into a small deterministic party-game module.
-
-Return JSON matching the response schema. Return function BODIES only: setupBody is inserted inside setup(context), onActionBody inside onAction(state, action, context), and viewBody inside view(state, viewer, ui). Each body must include an explicit return statement. Do not return function declarations, an object wrapper, Markdown fences, or explanatory text in these fields.
-
-The object must implement exactly:
-- setup(context) -> serializable initial state
-- onAction(state, action, context) -> serializable next state
-- view(state, viewer, ui) -> one serializable UI node
-
-Available context only:
-- context.players.list() returns [{id,name}]
-- context.host.id identifies the host
-- context.teams.randomize(count, optionalPlayerIds) returns [{id,name,players}]
-- context.random.pick(array)
-- context.random.shuffle(array)
-- context.clock.now()
-
-The reducer view function has these fallback UI constructors:
-- ui.screen(children)
-- ui.heading(text)
-- ui.text(text)
-- ui.card(title, children)
-- ui.button(label, actionObject, optionalTone)
-- ui.timer(deadlineMilliseconds, optionalLabel)
-- ui.teams(teams)
-- ui.scoreboard(objectOfLabelToNumber)
-- ui.list(array)
-- ui.grid(numberOfColumns, arrayOfUiNodes)
-- ui.secret(label, value)
-- ui.input(label, key, optionalPlaceholder)
-- ui.model(serializableViewerSafeObject)
-
-An input value can be inserted into a later button action with the string "$input:key". Keep all game state JSON-serializable. Every button action must have a type string. Handle every emitted action in onAction. Prefer immutable state updates.
-The strings "$viewer:id" and "$viewer:name" in button action objects are replaced with the current attendee's identity.
-When the host requests a board, tile layout, card matrix, or grid, use ui.grid with interactive ui.button children. For a 3x3 board, use ui.grid(3, nine button nodes). Never represent a board with ui.list or plain text rows.
-
-Also create a rich browser UI in uiSource and styles. uiSource is loaded as a classic script inside a null-origin iframe and must call:
-
-Nights.mount(function render(snapshot, api) { ... });
-
-snapshot contains {model, view, viewer, players, joinedPlayers, teams, hostId, canManage}. model is the viewer-safe value returned through ui.model(...) by view(). The canonical reducer state is deliberately unavailable to presentation code. players contains the event attendees eligible to participate, joinedPlayers contains only the people who tapped Join for this live game, and teams contains the host-controlled live team assignments. Always render participant identity and team membership from these snapshot values; never invent or cache player identities. api contains:
-- api.root: the #game-root element
-- api.action(type, optionalPayload) or api.action(actionObject): sends an authenticated shared-game action. Nights overwrites actorId, playerId, and playerName with the signed-in viewer.
-- api.el(tag, optionalProperties, optionalChildren): safe DOM creation helper; normal document.createElement and DOM event listeners are also available.
-- api.storage: isolated per-frame Storage-compatible data
-- api.effects.sound('tap'|'success'|'error'), api.effects.haptic(), api.effects.confetti()
-- api.random(), api.now(), api.setTimeout(), api.setInterval(), and matching clear functions
-
-The UI sandbox provides controlled replacements for fetch, XMLHttpRequest, localStorage, sessionStorage, Audio, timers, Math.random, window.open, navigator.vibrate, WebSocket, and EventSource. fetch only serves nights://state, nights://viewer, nights://players, nights://joined-players, nights://teams, and nights://storage/<key>; external requests receive a controlled 403 response and are reported to Nights. Do not import libraries or contact external services.
-Normal DOM layout and CSS positioning are allowed, including the CSS properties top, right, bottom, and left. Do not access frame globals such as top, parent, opener, or globalThis.
-
-Use semantic DOM and responsive CSS. Render the exact requested interface from snapshot.model rather than reducing it to generic vertical buttons. Keep the entire playable surface within the viewport; boards must use CSS grid, and a 3x3 board must visibly have three equal columns and three equal rows. Use event listeners that call api.action. Never implement joining or team management inside uiSource; the trusted Nights frame owns those controls.
-
-Universal lobby rules for EVERY game:
-- setup must begin in a lobby with no joined players and must preserve joinedPlayerIds in state.
-- Nights, outside the sandbox, owns joining and team assignment. It injects joinedPlayerIds, joinedPlayers, joinedPlayerNames, and teams into state. Do not render Join, Random assignment, or Manual assignment buttons inside the generated game.
-- onAction must handle {type:'NIGHTS_TEAMS_ASSIGNED', teams:[...]} by preserving the supplied teams and transitioning from the lobby into playable state once enough attendees have joined.
-- Ignore gameplay actions from playerIds that are not in joinedPlayerIds.
-- Do not begin play until enough attendees have joined.
-- setup must save context.host.id as hostId in state. In view, the host is viewer.id === state.hostId.
-- Team membership comes from state.teams. The host controls those teams in the trusted Nights frame; every attendee may view them in the game.
-- view must return ui.model({...}) containing only what this viewer is allowed to see. Never put a hidden word, secret role, private hand, or answer in another viewer's model.
-
-Reducer bodies must never use networking, browser APIs, storage, imports, code generation, constructors, prototypes, global objects, workers, blobs, timers, recursion, while loops, asynchronous code, or nondeterministic side effects. The runtime supplies reducer randomness and time. Keep the reducer source under 16,000 characters and uiSource plus styles under 40,000 characters.
-The safety validator rejects these names anywhere in the returned function bodies, including labels, comments, action names, and string values: fetch, XMLHttpRequest, WebSocket, EventSource, importScripts, import, require, eval, Function, globalThis, self, postMessage, close, Worker, Blob, URL, WebAssembly, Atomics, SharedArrayBuffer, navigator, caches, indexedDB, document, window, parent, top, opener, localStorage, sessionStorage, constructor, __proto__, prototype, setTimeout, setInterval, queueMicrotask, crypto, performance, Date, Promise, async, await, while. For all deadlines use context.clock.now(); never use Date.
-
-Host definition:
+  return `You write small multiplayer party games for Nights, a gathering app. Players use their phones at the same event.
+Turn the host's description into a game that follows the contract below exactly, and return JSON matching the response schema.
+Implement what the host asked for — their layout, controls, teams and rules — rather than a generic version.
+${GAME_CONTRACT}
+The host's game (player limits: ${definition.minPlayers} to ${definition.maxPlayers}):
 ${JSON.stringify(definition, null, 2)}`;
 }
 
-function gameRefinementPrompt(definition, previousGame, feedback) {
-  return `${gameGenerationPrompt(definition)}
-
-This is an ITERATIVE REVISION, not a new design. Preserve every working rule, action, state field, safety constraint, and visual choice from the existing draft unless the host feedback specifically asks you to change it. Make the smallest coherent changes needed, and return the complete replacement for every required response field.
-
-Existing playable draft:
-${JSON.stringify(previousGame, null, 2)}
-
-Host design feedback, oldest to newest:
-${feedback.map((message, index) => `${index + 1}. ${message}`).join('\n')}`;
+function gameRevisionPrompt(definition, previousGame, feedback, failures) {
+  const parts = [gameGenerationPrompt(definition), '', 'You are REVISING an existing draft. Keep everything that works; change only what is needed. Return the complete replacement for every field.', '', 'Current draft:', JSON.stringify(previousGame, null, 2)];
+  if (failures.length) parts.push('', 'Nights ran this draft in its test harness and it FAILED. Fix every problem:', ...failures.map((failure, index) => `${index + 1}. ${failure}`));
+  if (feedback.length) parts.push('', 'Host feedback, oldest to newest. Apply all of it:', ...feedback.map((message, index) => `${index + 1}. ${message}`));
+  return parts.join('\n');
 }
 
-function cleanGameFeedback(value) {
-  const messages = Array.isArray(value) ? value : [value];
-  return messages
-    .map(message => String(message || '').trim())
+function cleanTextList(value, maxItems, maxLength) {
+  return (Array.isArray(value) ? value : [value])
+    .map(item => String(item || '').trim())
     .filter(Boolean)
-    .slice(-12)
-    .map(message => message.slice(0, 1500));
+    .slice(-maxItems)
+    .map(item => item.slice(0, maxLength));
+}
+
+function stripCodeFence(value) {
+  return String(value || '').trim().replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/, '').trim();
+}
+
+// Shape checks only. Safety comes from the sandbox, not from scanning code.
+function generatedGameValidation(value) {
+  if (!value || typeof value !== 'object') return { valid: false, error: 'Gemini did not return a game.' };
+  const game = {
+    runtimeVersion: GAME_RUNTIME_VERSION,
+    instructions: String(value.instructions || '').trim().slice(0, GAME_LIMITS.instructions),
+    uiNotes: String(value.uiNotes || '').trim().slice(0, GAME_LIMITS.uiNotes),
+    logicSource: stripCodeFence(value.logicSource),
+    uiSource: stripCodeFence(value.uiSource),
+    styles: stripCodeFence(value.styles),
+    tests: stripCodeFence(value.tests) || '[]',
+  };
+  for (const name of ['setup', 'move', 'view'])
+    if (!new RegExp(`function\\s+${name}\\s*\\(`).test(game.logicSource))
+      return { valid: false, error: `logicSource must declare function ${name}(...).`, game };
+  if (!/function\s+render\s*\(/.test(game.uiSource))
+    return { valid: false, error: 'uiSource must declare function render(root, model, ctx).', game };
+  for (const field of ['logicSource', 'uiSource', 'styles', 'tests'])
+    if (game[field].length > GAME_LIMITS[field])
+      return { valid: false, error: `${field} is longer than ${GAME_LIMITS[field]} characters; make it shorter.`, game };
+  try {
+    if (!Array.isArray(JSON.parse(game.tests))) throw new Error('not an array');
+  } catch {
+    return { valid: false, error: 'tests must be a JSON array of scenarios.', game };
+  }
+  return { valid: true, error: '', game };
 }
 
 function cleanPreviousGame(value) {
-  const validation = generatedRuntimeValidation(value);
-  if (!validation.valid) throw new Error('The current playable draft is not valid enough to revise. Generate a new draft once.');
-  return {
-    runtimeVersion: 2,
-    instructions: String(value.instructions || '').slice(0, 1000),
-    uiNotes: String(value.uiNotes || '').slice(0, 1000),
-    logicSource: validation.source,
-    uiSource: validation.uiSource,
-    styles: validation.styles,
-  };
+  if (!value || typeof value !== 'object') return null;
+  const result = generatedGameValidation(value);
+  return result.game || null;
 }
 
-function normalizeGeneratedGameSource(value) {
-  let source = String(value || '').trim();
-  source = source
-    .replace(/^```(?:javascript|js)?\s*/i, '')
-    .replace(/\s*```$/, '')
-    .replace(/^(?:javascript|js)\s*\n/i, '')
-    .trim()
-    .replace(/;\s*$/, '')
-    .trim();
-  const assignment = source.match(/^(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*([\s\S]+)$/);
-  if (assignment) source = assignment[1].trim().replace(/;\s*$/, '').trim();
-  if (!source.startsWith('{') && !source.startsWith('({')) {
-    const firstBrace = source.indexOf('{');
-    const lastBrace = source.lastIndexOf('}');
-    if (firstBrace >= 0 && lastBrace > firstBrace) source = source.slice(firstBrace, lastBrace + 1).trim();
-  }
-  if (source.startsWith('{') && source.endsWith('}')) source = `(${source})`;
-  return source;
-}
-
-function generatedRuntimeValidation(value) {
-  if (!value || typeof value !== 'object') return { valid: false, error: 'Gemini did not return a game object.' };
-  if (typeof value.instructions !== 'string' || typeof value.uiNotes !== 'string' || typeof value.logicSource !== 'string')
-    return { valid: false, error: 'Gemini omitted part of the playable game.' };
-  const source = normalizeGeneratedGameSource(value.logicSource);
-  if (!source.startsWith('({') || !source.endsWith('})'))
-    return { valid: false, error: 'Gemini returned code that could not be converted into a safe Nights game. Generate again.' };
-  if (source.length > 16_000)
-    return { valid: false, error: 'Gemini generated a game that is too large for the safe player.' };
-  const forbiddenMatch = source.match(GAME_SOURCE_FORBIDDEN);
-  if (forbiddenMatch) {
-    const replacement = ['Date', 'performance', 'setTimeout', 'setInterval'].includes(forbiddenMatch[0])
-      ? ' It must use Nights’ built-in game clock instead.'
-      : '';
-    return {
-      valid: false,
-      error: `Gemini used the blocked capability “${forbiddenMatch[0]}”. Your game description is valid; generate again.${replacement}`,
-    };
-  }
-  const missing = ['setup', 'onAction', 'view'].filter(name => !new RegExp(`\\b${name}\\s*(?:\\(|:)`).test(source));
-  if (missing.length)
-    return { valid: false, error: `Gemini omitted the required ${missing.join(', ')} game function${missing.length === 1 ? '' : 's'}. Generate again.` };
-  if (!/\bui\.model\s*\(/.test(source))
-    return { valid: false, error: 'The game must return a viewer-safe ui.model(...) projection from view().' };
-  const uiSource = String(value.uiSource || '').trim();
-  const styles = String(value.styles || '').trim();
-  if (!uiSource || !/\bNights\.mount\s*\(/.test(uiSource))
-    return { valid: false, error: 'Gemini omitted the rich Nights.mount interface.' };
-  if (uiSource.length > 28_000 || styles.length > 16_000)
-    return { valid: false, error: 'Gemini generated an interface that is too large for the isolated player.' };
-  const uiForbidden = uiSource.match(GAME_UI_SOURCE_FORBIDDEN);
-  if (uiForbidden)
-    return { valid: false, error: `Gemini used the UI escape capability “${uiForbidden.slice(1).find(Boolean) || uiForbidden[0]}”. Use the controlled Nights API instead.` };
-  return { valid: true, error: '', source, uiSource, styles };
-}
-
-function validGeneratedRuntime(value) {
-  return generatedRuntimeValidation(value).valid;
-}
-
-function assembleGeneratedGame(value) {
-  if (!value || typeof value !== 'object') return value;
-  const bodies = ['setupBody', 'onActionBody', 'viewBody'];
-  if (!bodies.every(name => typeof value[name] === 'string' && value[name].trim())) return value;
-  return {
-    runtimeVersion: 2,
-    instructions: String(value.instructions || ''),
-    uiNotes: String(value.uiNotes || ''),
-    uiSource: String(value.uiSource || ''),
-    styles: String(value.styles || ''),
-    logicSource: `({\nsetup(context) {\n${value.setupBody.trim()}\n},\nonAction(state, action, context) {\n${value.onActionBody.trim()}\n},\nview(state, viewer, ui) {\n${value.viewBody.trim()}\n}\n})`,
-  };
-}
-
-function stableGameSeed(definition) {
-  const text = JSON.stringify(definition);
-  let hash = 2166136261;
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  // Gemini's generationConfig.seed is TYPE_INT32, not uint32. Keep the
-  // deterministic FNV-1a value inside its accepted positive range.
-  return (hash >>> 0) & 0x7fffffff;
-}
-
-async function requestGeminiGame(env, model, prompt, seed) {
+async function requestGeminiGame(env, model, prompt) {
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
@@ -651,46 +644,45 @@ async function requestGeminiGame(env, model, prompt, seed) {
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: gameResponseSchema(),
-        temperature: 0.2,
-        maxOutputTokens: 8192,
-        seed,
+        temperature: 0.4,
+        maxOutputTokens: 32768,
       },
     }),
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = result?.error?.message || 'Gemini could not generate this game.';
-    return { game: null, error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message, status: response.status === 429 ? 429 : 502 };
+    const message = result?.error?.message || `Gemini returned HTTP ${response.status}.`;
+    return { game: null, error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message, retryable: response.status === 429 || response.status === 404 || response.status >= 500 };
   }
-  const text = (result?.candidates?.[0]?.content?.parts || []).map(part => part.text || '').join('').trim();
+  const candidate = result?.candidates?.[0];
+  const text = (candidate?.content?.parts || []).map(part => part.text || '').join('').trim();
+  if (candidate?.finishReason === 'MAX_TOKENS')
+    return { game: null, error: 'Gemini ran out of space before finishing the game. Simplify the description or try again.', retryable: true };
   try {
-    return { game: assembleGeneratedGame(JSON.parse(text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, ''))), error: '', status: 200 };
+    return { game: JSON.parse(stripCodeFence(text)), error: '', retryable: false };
   } catch {
-    return { game: null, error: 'Gemini returned an invalid JSON game draft.', status: 502 };
+    return { game: null, error: 'Gemini returned an unreadable draft.', retryable: true };
   }
 }
 
 function configuredGameModels(env) {
   return [...new Set([
-    String(env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim(),
-    ...String(env.GEMINI_FALLBACK_MODELS || 'gemini-3.8-flash,gemini-2.5-flash-lite')
+    String(env.GEMINI_MODEL || 'gemini-2.5-flash').trim(),
+    ...String(env.GEMINI_FALLBACK_MODELS || 'gemini-2.5-flash-lite')
       .split(',')
       .map(value => value.trim()),
   ].filter(Boolean))];
 }
 
-async function requestGeminiGameWithFallback(env, models, prompt, seed) {
-  let lastFailure = { game: null, error: 'No Gemini model is configured.', status: 503, model: '' };
-  for (const model of models) {
-    const result = await requestGeminiGame(env, model, prompt, seed);
+async function requestGeminiGameWithFallback(env, prompt) {
+  const failures = [];
+  for (const model of configuredGameModels(env)) {
+    const result = await requestGeminiGame(env, model, prompt);
     if (result.game) return { ...result, model };
-    lastFailure = { ...result, model };
-    if (result.status !== 429 && result.status !== 502 && result.status !== 503) break;
+    failures.push(`${model}: ${result.error}`);
+    if (!result.retryable) break;
   }
-  return {
-    ...lastFailure,
-    error: `All configured Gemini models are temporarily unavailable. ${lastFailure.error}`,
-  };
+  return { game: null, error: failures.join(' · ') || 'No Gemini model is configured.', model: '' };
 }
 
 async function generateEventGame(request, env) {
@@ -707,258 +699,40 @@ async function generateEventGame(request, env) {
     if (!env.GEMINI_API_KEY) return json(request, { error: 'Game generation is not configured yet.' }, 503);
 
     const definition = cleanGameDefinition(body.definition);
-    const feedback = cleanGameFeedback(body.feedback);
-    const previousGame = body.previousGame ? cleanPreviousGame(body.previousGame) : null;
-    if ((feedback.length > 0) !== Boolean(previousGame))
-      return json(request, { error: 'Game feedback must include the playable draft being revised.' }, 400);
+    const feedback = cleanTextList(body.feedback, 12, 1500);
+    const failures = cleanTextList(body.failures, 15, 600);
+    const previousGame = cleanPreviousGame(body.previousGame);
+    if ((feedback.length || failures.length) && !previousGame)
+      return json(request, { error: 'A revision must include the draft being revised.' }, 400);
+
     const day = new Date().toISOString().slice(0, 10);
     const quotaKey = `game-ai:${claims.sub}:${day}`;
     const used = Number(await env.PUSH_SUBSCRIPTIONS.get(quotaKey)) || 0;
-    const dailyLimit = Math.max(1, Math.min(100, Number(env.GAME_GENERATION_DAILY_LIMIT) || 15));
+    const dailyLimit = Math.max(1, Math.min(200, Number(env.GAME_GENERATION_DAILY_LIMIT) || 30));
     if (used >= dailyLimit)
-      return json(request, { error: 'Today’s free game-generation allowance has been used. Try again tomorrow.' }, 429);
-
-    const models = configuredGameModels(env);
-    const prompt = previousGame
-      ? gameRefinementPrompt(definition, previousGame, feedback)
-      : gameGenerationPrompt(definition);
-    const seed = stableGameSeed(previousGame ? { definition, previousGame, feedback } : definition);
-    let generation = await requestGeminiGameWithFallback(env, models, prompt, seed);
-    if (!generation.game) return json(request, { error: generation.error }, generation.status);
-    let game = generation.game;
-    let validation = generatedRuntimeValidation(game);
-    if (!validation.valid) {
-      generation = await requestGeminiGameWithFallback(env, models, `${prompt}\n\nRepair the returned draft instead of redesigning it. The validator reported: ${validation.error}\nInvalid returned draft:\n${JSON.stringify(game)}\nReturn all required JSON fields with only the smallest necessary corrections.`, seed);
-      if (!generation.game) return json(request, { error: `${generation.error} The first generated draft also failed: ${validation.error}` }, generation.status);
-      game = generation.game;
-      validation = generatedRuntimeValidation(game);
-    }
-    if (!validation.valid)
-      return json(request, { error: `Gemini could not produce a safe playable module after two attempts. Last issue: ${validation.error}` }, 422);
-
+      return json(request, { error: 'Today’s game-generation allowance has been used. Try again tomorrow.' }, 429);
     await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
+
+    const prompt = previousGame
+      ? gameRevisionPrompt(definition, previousGame, feedback, failures)
+      : gameGenerationPrompt(definition);
+    let generation = await requestGeminiGameWithFallback(env, prompt);
+    if (!generation.game) return json(request, { error: generation.error }, 502);
+    let validation = generatedGameValidation(generation.game);
+    if (!validation.valid) {
+      const repairPrompt = `${prompt}\n\nYour previous answer was rejected: ${validation.error}\nPrevious answer:\n${JSON.stringify(validation.game || generation.game)}\nReturn the corrected complete game.`;
+      generation = await requestGeminiGameWithFallback(env, repairPrompt);
+      if (!generation.game) return json(request, { error: generation.error }, 502);
+      validation = generatedGameValidation(generation.game);
+      if (!validation.valid) return json(request, { error: `Gemini’s draft was incomplete: ${validation.error}` }, 422);
+    }
     return json(request, {
-      game: {
-        runtimeVersion: 2,
-        instructions: game.instructions.slice(0, 1000),
-        uiNotes: game.uiNotes.slice(0, 1000),
-        logicSource: validation.source,
-        uiSource: validation.uiSource,
-        styles: validation.styles,
-      },
-      remainingToday: Math.max(0, dailyLimit - used - 1),
+      game: validation.game,
       model: generation.model,
-      refined: Boolean(previousGame),
+      remainingToday: Math.max(0, dailyLimit - used - 1),
     });
   } catch (error) {
     return json(request, { error: error instanceof Error ? error.message : 'Game generation failed.' }, 400);
-  }
-}
-
-function cleanGameState(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value))
-    throw new Error('The game returned an invalid shared state.');
-  const serialized = JSON.stringify(value);
-  if (serialized.length > 80_000) throw new Error('The shared game state is too large.');
-  return JSON.parse(serialized);
-}
-
-function stableGameJson(value) {
-  if (Array.isArray(value)) return `[${value.map(stableGameJson).join(',')}]`;
-  if (value && typeof value === 'object')
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableGameJson(value[key])}`).join(',')}}`;
-  return JSON.stringify(value);
-}
-
-function cleanGameTeams(value, joinedPlayers) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > 8)
-    throw new Error('Choose between one and eight teams.');
-  const joinedIds = new Set(joinedPlayers.map(player => player.id));
-  const assigned = new Set();
-  return value.map((team, index) => {
-    const playerIds = Array.isArray(team?.playerIds)
-      ? team.playerIds.filter(id => joinedIds.has(id) && !assigned.has(id)).slice(0, 100)
-      : [];
-    playerIds.forEach(id => assigned.add(id));
-    return {
-      id: safeSegment(team?.id) ? team.id : `team-${index + 1}`,
-      name: String(team?.name || `Team ${index + 1}`).trim().slice(0, 60),
-      playerIds,
-    };
-  });
-}
-
-function sessionStateWithRoster(state, session) {
-  const playersById = new Map((session.joinedPlayers || []).map(player => [player.id, player]));
-  const joinedPlayerNames = Object.fromEntries(
-    (session.joinedPlayers || []).map(player => [player.id, player.name]),
-  );
-  const teams = (session.teams || []).map(team => {
-    const playerIds = (team.playerIds || []).filter(id => playersById.has(id));
-    return {
-      id: team.id,
-      name: team.name,
-      playerIds,
-      players: playerIds.map(id => playersById.get(id)).filter(Boolean),
-    };
-  });
-  return {
-    ...cleanGameState(state),
-    hostId: session.hostId,
-    joinedPlayerIds: (session.joinedPlayers || []).map(player => player.id),
-    joinedPlayerNames,
-    joinedPlayers: session.joinedPlayers || [],
-    teams,
-  };
-}
-
-async function gameSessionAccess(request, env, body, verifiedIdentity = null) {
-  const { claims, token } = verifiedIdentity || await verifyFirebaseToken(request);
-  if (!body || !safeSegment(body.eventId) || !safeSegment(body.gameId))
-    throw new Error('Invalid game session.');
-  const [eventDocument, gameDocument, profileDocument] = await Promise.all([
-    authenticatedFirestoreDocument(`events/${body.eventId}`, token),
-    authenticatedFirestoreDocument(`events/${body.eventId}/games/${body.gameId}`, token),
-    authenticatedFirestoreDocument(`users/${claims.sub}`, token),
-  ]);
-  const event = eventDocument?.data;
-  const game = gameDocument?.data;
-  if (!event || !game) throw new Error('Game not found.');
-  const host = event.ownerUid === claims.sub
-    || (claims.email === LEGACY_HOST_EMAIL && event.ownerUid === LEGACY_HOST_UID);
-  if (host) return {
-    claims,
-    event,
-    game,
-    actor: { id: claims.sub, name: 'Host' },
-    host: true,
-    token,
-  };
-  const profile = profileDocument?.data;
-  if (!profile?.guestUid) throw new Error('Complete your Nights account before joining.');
-  const [rsvpDocument, invitationDocument] = await Promise.all([
-    authenticatedFirestoreDocument(`events/${body.eventId}/rsvps/${profile.guestUid}`, token),
-    authenticatedFirestoreDocument(`users/${claims.sub}/invitations/${body.eventId}`, token),
-  ]);
-  const rsvp = rsvpDocument?.data;
-  const invited = invitationDocument?.data?.recipientGuestUid === profile.guestUid;
-  const approved = !event.requireGuestApproval || invited || !rsvp?.approvalStatus || rsvp.approvalStatus === 'approved';
-  if (game.status !== 'published' || rsvp?.status !== 'yes' || !approved)
-    throw new Error('Only approved attendees who are going can play.');
-  return {
-    claims,
-    event,
-    game,
-    actor: { id: profile.guestUid, name: String(rsvp.guestName || profile.displayName || profile.firstName || 'Guest').slice(0, 80) },
-    host: false,
-    token,
-  };
-}
-
-async function updateGameSession(request, env) {
-  try {
-    const body = await request.json().catch(() => null);
-    const verifiedIdentity = await verifyFirebaseToken(request);
-    if (body?.operation === 'state' && safeSegment(body.eventId) && safeSegment(body.gameId)) {
-      const throttleKey = `game-state-throttle:${body.eventId}:${body.gameId}:${verifiedIdentity.claims.sub}`;
-      const now = Date.now();
-      const lastWrite = Number(await env.PUSH_SUBSCRIPTIONS.get(throttleKey)) || 0;
-      const cooldown = body.reason === 'teams' ? 2000 : 750;
-      if (now - lastWrite < cooldown)
-        return json(request, { error: 'The previous game update is still synchronizing.' }, 429);
-      await env.PUSH_SUBSCRIPTIONS.put(throttleKey, String(now), { expirationTtl: 60 });
-    }
-    const access = await gameSessionAccess(request, env, body, verifiedIdentity);
-    const sessionPath = `events/${body.eventId}/games/${body.gameId}/sessions/live`;
-    const existingDocument = await authenticatedFirestoreDocument(sessionPath, access.token);
-    const existing = existingDocument?.data || null;
-    const operation = String(body.operation || '');
-    if (operation === 'read') {
-      if (!existing) return json(request, { error: 'The shared game has not started yet.' }, 404);
-      return json(request, { ok: true, session: existing });
-    }
-    if (!existing && operation !== 'ensure')
-      return json(request, { error: 'The shared game is still starting. Try again.' }, 409);
-
-    let next;
-    if (!existing) {
-      const baseState = cleanGameState(body.state);
-      next = {
-        gameId: body.gameId,
-        gameVersion: Number(access.game.version) || 1,
-        hostId: access.event.ownerUid,
-        revision: 1,
-        joinedPlayers: [],
-        teams: [],
-        state: sessionStateWithRoster(baseState, {
-          hostId: access.event.ownerUid,
-          joinedPlayers: [],
-          teams: [],
-        }),
-        updatedBy: access.actor.id,
-        updatedAt: new Date().toISOString(),
-      };
-    } else {
-      const expectedRevision = Number(body.expectedRevision);
-      if (!Number.isInteger(expectedRevision) || expectedRevision !== Number(existing.revision))
-        return json(request, { error: 'The game changed on another device.', session: existing }, 409);
-      next = { ...existing, revision: expectedRevision + 1, updatedBy: access.actor.id, updatedAt: new Date().toISOString() };
-      if (operation === 'ensure') {
-        if (Number(existing.gameVersion) === Number(access.game.version))
-          return json(request, { ok: true, session: existing });
-        next.gameVersion = Number(access.game.version) || 1;
-        next.joinedPlayers = [];
-        next.teams = [];
-        next.state = sessionStateWithRoster(body.state, next);
-      } else if (operation === 'join') {
-        const joinedPlayers = Array.isArray(existing.joinedPlayers) ? [...existing.joinedPlayers] : [];
-        if (!joinedPlayers.some(player => player.id === access.actor.id)) joinedPlayers.push(access.actor);
-        next.joinedPlayers = joinedPlayers;
-        next.state = sessionStateWithRoster(existing.state || {}, next);
-      } else if (operation === 'leave') {
-        next.joinedPlayers = (existing.joinedPlayers || []).filter(player => player.id !== access.actor.id);
-        // Firestore deliberately reserves the canonical team assignment for the host.
-        // A guest leave therefore updates only the roster; sessionStateWithRoster removes
-        // departed players from the live game state immediately. The next host assignment
-        // persists the cleaned canonical teams through the host-authorized path.
-        if (access.host) next.teams = (existing.teams || []).map(team => ({
-          ...team,
-          playerIds: (team.playerIds || []).filter(id => id !== access.actor.id),
-        }));
-        next.state = sessionStateWithRoster(existing.state || {}, next);
-      } else if (operation === 'teams') {
-        if (!access.host) return json(request, { error: 'Only the host can assign teams.' }, 403);
-        next.teams = cleanGameTeams(body.teams, existing.joinedPlayers || []);
-        next.state = sessionStateWithRoster(existing.state || {}, next);
-      } else if (operation === 'state') {
-        if (!(existing.joinedPlayers || []).some(player => player.id === access.actor.id))
-          return json(request, { error: 'Join the game before playing.' }, 403);
-        const synchronizedState = sessionStateWithRoster(body.state, existing);
-        if (stableGameJson(synchronizedState) === stableGameJson(existing.state || {}))
-          return json(request, { ok: true, session: existing });
-        next.state = synchronizedState;
-      } else {
-        return json(request, { error: 'Unknown game operation.' }, 400);
-      }
-    }
-
-    try {
-      const saved = await writeAuthenticatedFirestoreDocument(
-        sessionPath,
-        next,
-        access.token,
-        existingDocument?.updateTime || '',
-      );
-      return json(request, { ok: true, session: saved.data });
-    } catch (writeError) {
-      if (String(writeError).includes('(409)') || String(writeError).includes('FAILED_PRECONDITION')) {
-        const latest = await authenticatedFirestoreDocument(sessionPath, access.token);
-        return json(request, { error: 'The game changed on another device.', session: latest?.data || null }, 409);
-      }
-      throw writeError;
-    }
-  } catch (error) {
-    return json(request, { error: error instanceof Error ? error.message : 'Shared game update failed.' }, 401);
   }
 }
 
@@ -1286,14 +1060,11 @@ export {
   eventExpenseUrl,
   expiredUnverifiedProfiles,
   gameGenerationPrompt,
-  assembleGeneratedGame,
   configuredGameModels,
   requestGeminiGameWithFallback,
-  generatedRuntimeValidation,
-  normalizeGeneratedGameSource,
+  generatedGameValidation,
   purgeExpiredUnverifiedAccounts,
   upstreamPath,
-  validGeneratedRuntime,
 };
 
 export default {
@@ -1305,8 +1076,6 @@ export default {
       if (origin && !ALLOWED_ORIGINS.has(origin)) return json(request, { error: 'Origin not allowed.' }, 403);
       if (incomingUrl.pathname === '/api/games/generate' && request.method === 'POST')
         return generateEventGame(request, env);
-      if (incomingUrl.pathname === '/api/games/session' && request.method === 'POST')
-        return updateGameSession(request, env);
       return json(request, { error: 'Not found.' }, 404);
     }
     if (incomingUrl.pathname.startsWith('/api/push/')) {

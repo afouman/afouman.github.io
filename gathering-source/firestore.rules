@@ -130,10 +130,20 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.status == 'published'
       );
     }
-    function gameActorId(eventId) {
-      return canManageEvent(eventId)
-        ? request.auth.uid
-        : accountProfile().data.guestUid;
+    function validGameRuntime(runtime) {
+      return runtime == null || (
+        runtime is map
+        && runtime.keys().hasOnly([
+          'runtimeVersion', 'instructions', 'uiNotes', 'logicSource', 'uiSource', 'styles', 'tests'
+        ])
+        && runtime.runtimeVersion == 3
+        && runtime.instructions is string && runtime.instructions.size() <= 1000
+        && runtime.uiNotes is string && runtime.uiNotes.size() <= 1000
+        && runtime.logicSource is string && runtime.logicSource.size() <= 20000
+        && runtime.uiSource is string && runtime.uiSource.size() <= 30000
+        && runtime.styles is string && runtime.styles.size() <= 12000
+        && runtime.tests is string && runtime.tests.size() <= 8000
+      );
     }
     function guestCanUseExpenses(eventId) {
       let guestUid = accountProfile().data.guestUid;
@@ -1008,32 +1018,7 @@ service cloud.firestore {
           && request.resource.data.maxPlayers is int
           && request.resource.data.maxPlayers >= request.resource.data.minPlayers
           && request.resource.data.maxPlayers <= 100
-          && (
-            request.resource.data.runtime == null
-            || (
-              request.resource.data.runtime is map
-              && request.resource.data.runtime.keys().hasOnly([
-                'runtimeVersion', 'instructions', 'logicSource', 'uiNotes',
-                'uiSource', 'styles'
-              ])
-              && request.resource.data.runtime.instructions is string
-              && request.resource.data.runtime.instructions.size() <= 1000
-              && request.resource.data.runtime.logicSource is string
-              && request.resource.data.runtime.logicSource.size() <= 16000
-              && request.resource.data.runtime.uiNotes is string
-              && request.resource.data.runtime.uiNotes.size() <= 1000
-              && (
-                !request.resource.data.runtime.keys().hasAny(['runtimeVersion'])
-                || (
-                  request.resource.data.runtime.runtimeVersion == 2
-                  && request.resource.data.runtime.uiSource is string
-                  && request.resource.data.runtime.uiSource.size() <= 28000
-                  && request.resource.data.runtime.styles is string
-                  && request.resource.data.runtime.styles.size() <= 16000
-                )
-              )
-            )
-          )
+          && validGameRuntime(request.resource.data.runtime)
           && (request.resource.data.status == 'draft' || request.resource.data.runtime != null)
           && request.resource.data.version is int
           && request.resource.data.version >= 1
@@ -1067,58 +1052,12 @@ service cloud.firestore {
           && request.resource.data.maxPlayers is int
           && request.resource.data.maxPlayers >= request.resource.data.minPlayers
           && request.resource.data.maxPlayers <= 100
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['runtime'])
+            || validGameRuntime(request.resource.data.runtime)
+          )
           && (request.resource.data.status == 'draft' || request.resource.data.runtime != null);
         allow delete: if canManageEvent(eventId);
-
-        match /sessions/{sessionId} {
-          allow get, list: if canManageEvent(eventId) || (
-            hasCompleteAccount()
-            && guestCanChat(eventId, accountProfile().data.guestUid)
-            && get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.status == 'published'
-          );
-          // The Cloudflare endpoint verifies the Firebase ID token, validates every
-          // operation and serializes revisions. It writes with that same user's token,
-          // so no Firebase Admin credential is required for live multiplayer.
-          allow create: if canPlayGame(eventId, gameId)
-            && request.resource.data.keys().hasOnly([
-              'gameId', 'gameVersion', 'hostId', 'revision', 'joinedPlayers',
-              'teams', 'state', 'updatedBy', 'updatedAt'
-            ])
-            && request.resource.data.gameId == gameId
-            && request.resource.data.hostId
-              == get(/databases/$(database)/documents/events/$(eventId)).data.ownerUid
-            && request.resource.data.revision == 1
-            && request.resource.data.joinedPlayers is list
-            && request.resource.data.teams is list
-            && request.resource.data.state is map
-            && request.resource.data.updatedBy == gameActorId(eventId);
-          allow update: if canPlayGame(eventId, gameId)
-            && request.resource.data.keys().hasOnly([
-              'gameId', 'gameVersion', 'hostId', 'revision', 'joinedPlayers',
-              'teams', 'state', 'updatedBy', 'updatedAt'
-            ])
-            && request.resource.data.gameId == resource.data.gameId
-            && request.resource.data.hostId == resource.data.hostId
-            && (
-              request.resource.data.gameVersion == resource.data.gameVersion
-              || (
-                canManageEvent(eventId)
-                && request.resource.data.gameVersion
-                  == get(/databases/$(database)/documents/events/$(eventId)/games/$(gameId)).data.version
-                && request.resource.data.gameVersion > resource.data.gameVersion
-              )
-            )
-            && request.resource.data.revision == resource.data.revision + 1
-            && request.resource.data.joinedPlayers is list
-            && request.resource.data.teams is list
-            && request.resource.data.state is map
-            && request.resource.data.updatedBy == gameActorId(eventId)
-            && (
-              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['teams'])
-              || canManageEvent(eventId)
-            );
-          allow delete: if canManageEvent(eventId);
-        }
       }
 
       match /chat/{messageId} {
