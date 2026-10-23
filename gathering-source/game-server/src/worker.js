@@ -221,6 +221,7 @@ export class GameRoom extends DurableObject {
       if (message.type === 'start') return await this.start(session, message.tableId);
       if (message.type === 'lobby') return await this.toLobby(session, message.tableId);
       if (message.type === 'close') return await this.closeTable(session, message.tableId);
+      if (message.type === 'rename') return await this.renameTable(session, message.tableId, message.name);
       throw new Error('Unknown request.');
     } catch (error) {
       reply({ type: 'error', message: error instanceof Error ? error.message : 'Request failed.' });
@@ -269,6 +270,7 @@ export class GameRoom extends DurableObject {
       count: members.length,
       joined: Boolean(table.players[session.uid]),
       creator: table.createdBy === session.uid,
+      canEdit: table.createdBy === session.uid || Boolean(session.host),
     };
   }
 
@@ -373,9 +375,13 @@ export class GameRoom extends DurableObject {
   async createTable(socket, session) {
     if (Object.keys(this.tables).length >= MAX_TABLES) throw new Error('This game already has many tables. Join one of them.');
     const id = newId();
+    const used = new Set(Object.values(this.tables).map((table) => table.number || 0));
+    let number = 1;
+    while (used.has(number)) number += 1;
     this.tables[id] = {
       id,
-      name: `${session.name}’s table`.slice(0, 60),
+      number,
+      name: `${this.game?.title || 'Game'} · Table ${number}`.slice(0, 60),
       createdBy: session.uid,
       creatorName: session.name,
       createdAt: Date.now(),
@@ -455,6 +461,17 @@ export class GameRoom extends DurableObject {
     Object.assign(table, { status: 'open', seats: [], seatNames: [], seed: 0, state: null, count: 0 });
     this.referees.get(table.id)?.referee.dispose();
     this.referees.delete(table.id);
+    await this.save();
+    this.broadcastTables();
+    await this.broadcastTable(table);
+  }
+
+  async renameTable(session, tableId, name) {
+    const table = this.table(tableId);
+    if (table.createdBy !== session.uid && !session.host) throw new Error('Only the table creator or the host can rename a table.');
+    const clean = String(name || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!clean) throw new Error('Give the table a name.');
+    table.name = clean;
     await this.save();
     this.broadcastTables();
     await this.broadcastTable(table);

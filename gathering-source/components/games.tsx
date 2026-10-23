@@ -65,6 +65,7 @@ type TableSummary = {
   count: number;
   joined: boolean;
   creator: boolean;
+  canEdit: boolean;
 };
 
 type TableDetail = TableSummary & {
@@ -349,6 +350,7 @@ function LiveTables({ eventId, game, viewer }: {
   const [table, setTable] = useState<TableDetail | null>(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ id: number; message: string } | null>(null);
+  const [nameDraft, setNameDraft] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const watchingRef = useRef('');
   const [watching, setWatching] = useState('');
@@ -433,7 +435,18 @@ function LiveTables({ eventId, game, viewer }: {
   const backToTables = () => {
     watch('');
     setTable(null);
+    setNameDraft(null);
     setError('');
+  };
+  const saveName = () => {
+    if (!table || nameDraft === null) return;
+    const name = nameDraft.trim();
+    if (!name) {
+      setError('Give the table a name.');
+      return;
+    }
+    send({ type: 'rename', tableId: table.id, name: name.slice(0, 60) });
+    setNameDraft(null);
   };
   const sendMove = useCallback((action: Record<string, unknown>) => {
     if (watching) send({ type: 'move', tableId: watching, action });
@@ -449,7 +462,7 @@ function LiveTables({ eventId, game, viewer }: {
   if (!watching || !table) {
     return <>
       <section className="game-session-bar">
-        <div className="game-session-status"><strong>Tables</strong><span>{connection || `${game.minPlayers}–${game.maxPlayers} players per table. Several tables can play at once.`}</span></div>
+        <div className="game-session-status"><strong>{game.title} tables</strong><span>{connection || `Only tables for this game. ${game.minPlayers}–${game.maxPlayers} players each.`}</span></div>
         <button type="button" disabled={status !== 'ready'} onClick={() => send({ type: 'create' })}><Plus size={15} /> New table</button>
         {error && <p>{error}</p>}
       </section>
@@ -460,7 +473,7 @@ function LiveTables({ eventId, game, viewer }: {
             <span>{entry.count} {entry.count === 1 ? 'player' : 'players'} · {entry.status === 'playing' ? 'Playing' : 'Waiting to start'}{entry.joined ? ' · You joined' : ''}</span>
             <small>{entry.players.join(', ')}</small>
           </button>
-        )) : <p className="game-table-empty">No tables yet. Start one and invite people to join.</p>}
+        )) : <p className="game-table-empty">No {game.title} tables yet. Start one and invite people to join.</p>}
       </div>
     </>;
   }
@@ -468,17 +481,25 @@ function LiveTables({ eventId, game, viewer }: {
   const seated = table.status === 'playing' && table.me !== null;
   return <>
     <section className="game-session-bar">
-      <div className="game-session-status">
-        <strong>{table.name}</strong>
-        <span>{connection || `${table.count} joined · ${table.status === 'playing' ? (seated ? `You are ${table.me}` : 'Watching') : 'Waiting to start'}`}</span>
-      </div>
+      {nameDraft !== null ? (
+        <form className="game-table-rename" onSubmit={(event) => { event.preventDefault(); saveName(); }}>
+          <input value={nameDraft} onChange={(event) => setNameDraft(event.target.value)} maxLength={60} aria-label="Table name" />
+          <button type="submit"><Check size={14} /> Save</button>
+          <button type="button" className="game-secondary" onClick={() => setNameDraft(null)}>Cancel</button>
+        </form>
+      ) : (
+        <div className="game-session-status">
+          <strong>{table.name}{table.canEdit && <button type="button" className="game-rename" onClick={() => setNameDraft(table.name)} aria-label="Rename table"><Pencil size={13} /></button>}</strong>
+          <span>{connection || `${game.title} · ${table.count} joined · ${table.status === 'playing' ? (seated ? `You are ${table.me}` : 'Watching') : 'Waiting to start'}`}</span>
+        </div>
+      )}
       <button type="button" className="game-secondary" onClick={backToTables}>All tables</button>
       {!table.joined && <button type="button" onClick={() => send({ type: 'join', tableId: table.id })}><Plus size={15} /> Join</button>}
       {table.joined && !seated && <button type="button" className="game-secondary" onClick={() => { send({ type: 'leave', tableId: table.id }); backToTables(); }}><LogOut size={14} /> Leave</button>}
       {table.creator && table.status === 'open' && <button type="button" disabled={table.count < table.minPlayers} onClick={() => send({ type: 'start', tableId: table.id })}><Play size={15} /> Start</button>}
       {table.creator && table.status === 'playing' && <button type="button" disabled={table.count < table.minPlayers} onClick={() => send({ type: 'start', tableId: table.id })}><RotateCcw size={14} /> New round</button>}
       {table.creator && table.status === 'playing' && <button type="button" className="game-secondary" onClick={() => send({ type: 'lobby', tableId: table.id })}>Lobby</button>}
-      {table.creator && <button type="button" className="game-secondary game-danger" onClick={() => { if (window.confirm(`Close “${table.name}” for everyone?`)) send({ type: 'close', tableId: table.id }); }} aria-label="Close table"><Trash2 size={14} /></button>}
+      {table.canEdit && <button type="button" className="game-secondary game-danger" onClick={() => { if (window.confirm(`Close “${table.name}” for everyone?`)) send({ type: 'close', tableId: table.id }); }} aria-label="Close table"><Trash2 size={14} /></button>}
       {error && <p>{error}</p>}
     </section>
     {table.status === 'open' ? (
@@ -819,10 +840,11 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
             <label className="game-field game-field-wide"><span>How the game ends</span><textarea value={draft.winCondition} onChange={(event) => updateDraft('winCondition', event.target.value)} placeholder="After five rounds, the team with the highest score wins." rows={3} /></label>
           </div>
           {busy && progress && <div className="game-runtime-ready game-progress"><Sparkles size={19} /><div><strong>{progress}</strong><span>This usually takes under a minute.</span></div></div>}
-          {!busy && isPlayableRuntime(draft.runtime) && <div className="game-runtime-ready"><ShieldCheck size={19} /><div><strong>Tested and playable</strong><span>{draft.runtime.instructions}</span></div><button type="button" onClick={() => { setDesignPreview(true); setPlaying(draft); }}><Play size={15} /> Preview & refine</button></div>}
+          {!busy && isPlayableRuntime(draft.runtime) && <div className="game-runtime-ready game-progress"><ShieldCheck size={19} /><div><strong>Tested and playable</strong><span>{draft.runtime.instructions}</span></div></div>}
           <footer className="game-editor-actions">
             <button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Cancel</button>
             <button type="button" className="game-generate" onClick={() => void generate()} disabled={busy}><Sparkles size={16} />{busy ? 'Working…' : draft.runtime ? 'Regenerate' : 'Generate playable draft'}</button>
+            {isPlayableRuntime(draft.runtime) && <button type="button" className="game-preview-refine" onClick={() => { setDesignPreview(true); setPlaying(draft); }} disabled={busy}><Play size={16} /> Preview & refine</button>}
             <button type="button" onClick={() => void persist('draft')} disabled={busy}><Save size={16} /> Save draft</button>
             <button type="button" className="game-publish" onClick={() => void persist('published')} disabled={busy || !isPlayableRuntime(draft.runtime)}><Check size={16} /> Publish</button>
           </footer>

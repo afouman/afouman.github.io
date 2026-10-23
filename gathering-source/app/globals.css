@@ -5959,6 +5959,12 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-test-failures strong { display: block; margin-bottom: 0.35rem; font-size: 0.7rem; }
 .game-test-failures ul { display: grid; gap: 0.3rem; margin: 0; padding-left: 1.1rem; line-height: 1.4; }
 .game-progress { grid-template-columns: auto minmax(0, 1fr); }
+.game-rename { display: inline-grid; place-items: center; width: 26px; height: 26px; margin-left: 0.35rem; border-radius: 50%; background: rgb(255 255 255 / 0.1); color: #9ce6cf; vertical-align: middle; }
+.game-table-rename { display: flex; flex: 1 1 260px; align-items: center; gap: 0.45rem; margin-right: auto; }
+.game-table-rename input { min-width: 0; flex: 1; min-height: 38px; border: 1px solid rgb(255 255 255 / 0.2); border-radius: 0.7rem; background: #122f30; color: #fff; padding: 0.4rem 0.7rem; font: inherit; font-size: 16px; }
+.game-table-rename button { display: inline-flex; min-height: 38px; align-items: center; gap: 0.3rem; border-radius: 999px; background: #98dbc7; color: #092421; padding: 0.5rem 0.85rem; font-size: 0.7rem; font-weight: 900; }
+.game-table-rename .game-secondary { border: 1px solid rgb(255 255 255 / 0.18); background: rgb(255 255 255 / 0.08); color: #f7f2e8; }
+.game-editor-actions .game-preview-refine { background: #176d64; color: #fff; }
 
 @media (max-width: 700px) {
   .game-panel-backdrop { align-items: end; padding: 0; }
