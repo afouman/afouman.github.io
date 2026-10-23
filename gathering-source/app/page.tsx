@@ -6715,6 +6715,7 @@ export default function Home() {
           canManage={canManageGame}
           accountUid={accountUser?.uid || ''}
           viewer={gameViewer}
+          otherEvents={canManageGame ? events.filter((event) => event.id !== menu.id).map((event) => ({ id: event.id, title: event.title })) : []}
           onClose={() => {
             setEventMenuOpen(false);
             setGamesOpen(false);

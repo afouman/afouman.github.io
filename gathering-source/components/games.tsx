@@ -9,7 +9,7 @@
 // view over a WebSocket. Phones draw that view in the sandbox and send actions.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Gamepad2, LogOut, MessageCircle, Pencil, Play, Plus, RotateCcw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
+import { Check, Copy, Gamepad2, LogOut, MessageCircle, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
 import {
   isPlayableRuntime,
   readFrameMessage,
@@ -199,6 +199,31 @@ const millis = (value: unknown) => {
   return candidate?.toMillis?.() ?? 0;
 };
 
+export type GameEventOption = { id: string; title: string };
+
+// In-app confirmation. window.confirm() is silently refused inside some app
+// web views (for example the iOS app), which made destructive buttons do nothing.
+function ConfirmSheet({ title, detail, action, onConfirm, onCancel }: {
+  title: string;
+  detail?: string;
+  action: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+      <div className="game-confirm" role="alertdialog" aria-modal="true" aria-label={title}>
+        <strong>{title}</strong>
+        {detail && <p>{detail}</p>}
+        <div>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="game-confirm-danger" onClick={onConfirm}>{action}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Hosts one sandboxed game frame. In local mode the frame runs the rules itself
 // (design preview); in remote mode it only draws the view the server sent.
 function GameFrame({ runtime, title, local, remote, notice, onSend }: {
@@ -351,6 +376,7 @@ function LiveTables({ eventId, game, viewer }: {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState<{ id: number; message: string } | null>(null);
   const [nameDraft, setNameDraft] = useState<string | null>(null);
+  const [confirmClose, setConfirmClose] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
   const watchingRef = useRef('');
   const [watching, setWatching] = useState('');
@@ -499,7 +525,7 @@ function LiveTables({ eventId, game, viewer }: {
       {table.creator && table.status === 'open' && <button type="button" disabled={table.count < table.minPlayers} onClick={() => send({ type: 'start', tableId: table.id })}><Play size={15} /> Start</button>}
       {table.creator && table.status === 'playing' && <button type="button" disabled={table.count < table.minPlayers} onClick={() => send({ type: 'start', tableId: table.id })}><RotateCcw size={14} /> New round</button>}
       {table.creator && table.status === 'playing' && <button type="button" className="game-secondary" onClick={() => send({ type: 'lobby', tableId: table.id })}>Lobby</button>}
-      {table.canEdit && <button type="button" className="game-secondary game-danger" onClick={() => { if (window.confirm(`Close “${table.name}” for everyone?`)) send({ type: 'close', tableId: table.id }); }} aria-label="Close table"><Trash2 size={14} /></button>}
+      {table.canEdit && <button type="button" className="game-secondary game-danger" onClick={() => setConfirmClose(true)} aria-label="Close table"><Trash2 size={14} /></button>}
       {error && <p>{error}</p>}
     </section>
     {table.status === 'open' ? (
@@ -515,6 +541,13 @@ function LiveTables({ eventId, game, viewer }: {
     ) : (
       <GameFrame runtime={game.runtime as GameRuntime} title={game.title} remote={remote} notice={notice} onSend={sendMove} />
     )}
+    {confirmClose && <ConfirmSheet
+      title={`Close “${table.name}”?`}
+      detail="The table and its round end for everyone at it."
+      action="Close table"
+      onCancel={() => setConfirmClose(false)}
+      onConfirm={() => { setConfirmClose(false); send({ type: 'close', tableId: table.id }); }}
+    />}
   </>;
 }
 
@@ -547,10 +580,11 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
   );
 }
 
-export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, onClose, notify }: {
+export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, otherEvents = [], onClose, notify }: {
   eventId: string;
   eventTitle: string;
   canManage: boolean;
+  otherEvents?: GameEventOption[];
   accountUid: string;
   viewer: GameViewer | null;
   onClose: () => void;
@@ -570,6 +604,9 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [testFailures, setTestFailures] = useState<string[]>([]);
+  const [menuGameId, setMenuGameId] = useState('');
+  const [exporting, setExporting] = useState<EventGame | null>(null);
+  const [deleting, setDeleting] = useState<EventGame | null>(null);
 
   useEffect(() => {
     if (!firebaseConfigured) {
@@ -769,8 +806,46 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setBusy(false);
     }
   };
+  // Copies a game into another event this host manages. Older-engine games are
+  // copied without their runtime, as drafts, so they can be regenerated there.
+  const exportGame = async (game: EventGame, target: GameEventOption) => {
+    setExporting(null);
+    setBusy(true);
+    setError('');
+    try {
+      if (!firebaseConfigured) throw new Error('Connect the production backend to copy games between events.');
+      const { app, store } = await firebase();
+      const playable = isPlayableRuntime(game.runtime);
+      const gameId = `game-${crypto.randomUUID()}`;
+      await store.setDoc(store.doc(store.getFirestore(app), 'events', target.id, 'games', gameId), {
+        id: gameId,
+        title: game.title,
+        summary: game.summary,
+        status: playable ? game.status : 'draft',
+        playerArrangement: game.playerArrangement,
+        interfaceDescription: game.interfaceDescription,
+        rules: game.rules,
+        scoring: game.scoring,
+        timing: game.timing,
+        hiddenInformation: game.hiddenInformation,
+        winCondition: game.winCondition,
+        minPlayers: game.minPlayers,
+        maxPlayers: game.maxPlayers,
+        runtime: playable ? game.runtime : null,
+        createdBy: accountUid,
+        createdAt: store.serverTimestamp(),
+        updatedAt: store.serverTimestamp(),
+        version: 1,
+      });
+      notify(`“${game.title}” copied to ${target.title}${playable ? '' : ' as a draft to regenerate'}.`);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : 'The game could not be copied.');
+    } finally {
+      setBusy(false);
+    }
+  };
   const removeGame = async (game: EventGame) => {
-    if (!window.confirm(`Delete “${game.title}”? This cannot be undone.`)) return;
+    setDeleting(null);
     setBusy(true);
     try {
       if (firebaseConfigured) {
@@ -818,7 +893,11 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
                 <div className="game-card-copy"><div><span className={`game-status ${game.status}`}>{game.status}</span><small>v{game.version}</small></div><h4 className="font-display">{game.title}</h4><p>{game.summary || game.rules}</p></div>
                 <footer>
                   <button type="button" className="game-play" disabled={!playable} title={playable ? undefined : 'Regenerate this game to play it'} onClick={() => { setDesignPreview(false); setPlaying(game); }}><Play size={15} /> {playable ? 'Play' : 'Needs regenerating'}</button>
-                  {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete" onClick={() => void removeGame(game)} disabled={busy} aria-label={`Delete ${game.title}`}><Trash2 size={15} /></button></>}
+                  {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete game-more" onClick={() => setMenuGameId((current) => current === game.id ? '' : game.id)} disabled={busy} aria-label={`More actions for ${game.title}`} aria-expanded={menuGameId === game.id}><MoreHorizontal size={16} /></button></>}
+                  {canManage && menuGameId === game.id && <div className="game-card-menu" role="menu">
+                    <button type="button" role="menuitem" onClick={() => { setMenuGameId(''); setExporting(game); }}><Copy size={15} /> Copy to another event</button>
+                    <button type="button" role="menuitem" className="game-menu-danger" onClick={() => { setMenuGameId(''); setDeleting(game); }}><Trash2 size={15} /> Delete</button>
+                  </div>}
                 </footer>
               </article>;
             })}</div> : <div className="game-empty"><Gamepad2 size={29} /><strong>{canManage ? 'No games yet' : 'The host has not published a game yet'}</strong><span>{canManage ? 'Create one from the rules your group already has in mind.' : 'Published games will appear here.'}</span></div>}
@@ -850,6 +929,21 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
           </footer>
         </section>}
       </div>
+      {deleting && <ConfirmSheet
+        title={`Delete “${deleting.title}”?`}
+        detail="This removes the game from this event. It cannot be undone."
+        action="Delete game"
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => void removeGame(deleting)}
+      />}
+      {exporting && <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setExporting(null); }}>
+        <div className="game-confirm game-export" role="dialog" aria-modal="true" aria-label={`Copy ${exporting.title} to another event`}>
+          <strong>Copy “{exporting.title}” to…</strong>
+          {otherEvents.length ? <ul>{otherEvents.map((target) => <li key={target.id}><button type="button" onClick={() => void exportGame(exporting, target)}>{target.title || 'Untitled event'}</button></li>)}</ul>
+            : <p>You are not hosting any other events yet.</p>}
+          <div><button type="button" onClick={() => setExporting(null)}>Cancel</button></div>
+        </div>
+      </div>}
       {playing && isPlayableRuntime(playing.runtime) && <GamePlayer
         key={`${playing.id || 'draft'}:${playing.version}:${designPreview ? designRevision : 'live'}`}
         eventId={eventId}

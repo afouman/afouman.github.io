@@ -5965,6 +5965,21 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-table-rename button { display: inline-flex; min-height: 38px; align-items: center; gap: 0.3rem; border-radius: 999px; background: #98dbc7; color: #092421; padding: 0.5rem 0.85rem; font-size: 0.7rem; font-weight: 900; }
 .game-table-rename .game-secondary { border: 1px solid rgb(255 255 255 / 0.18); background: rgb(255 255 255 / 0.08); color: #f7f2e8; }
 .game-editor-actions .game-preview-refine { background: #176d64; color: #fff; }
+.game-card footer { position: relative; }
+.game-card-menu { position: absolute; z-index: 5; right: 0.6rem; bottom: calc(100% - 0.3rem); display: grid; min-width: 210px; overflow: hidden; border: 1px solid rgb(18 59 66 / 0.12); border-radius: 0.9rem; background: #fff; box-shadow: 0 18px 40px rgb(10 30 33 / 0.22); }
+.game-card footer .game-card-menu button { display: flex; justify-content: flex-start; width: 100%; min-height: 0; border: 0; align-items: center; gap: 0.5rem; border-radius: 0; background: transparent; padding: 0.8rem 0.95rem; color: #17363b; font-size: 0.68rem; font-weight: 800; text-align: left; }
+.game-card footer .game-card-menu button:hover { background: #eef3f0; }
+.game-card footer .game-card-menu .game-menu-danger { color: #a3343c; }
+.game-confirm-backdrop { position: fixed; z-index: 200; inset: 0; display: grid; place-items: center; background: rgb(2 10 12 / 0.55); padding: 1rem; }
+.game-confirm { display: grid; gap: 0.7rem; width: min(380px, 100%); border-radius: 1.2rem; background: #f5f1e9; padding: 1.1rem; color: #17363b; box-shadow: 0 30px 80px rgb(0 0 0 / 0.4); }
+.game-confirm strong { font-size: 0.85rem; }
+.game-confirm p { margin: 0; color: rgb(23 54 59 / 0.7); font-size: 0.7rem; line-height: 1.45; }
+.game-confirm > div { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.game-confirm > div button { border-radius: 0.75rem; background: #e4e9e5; padding: 0.65rem 0.9rem; color: #17363b; font-size: 0.66rem; font-weight: 900; }
+.game-confirm > div .game-confirm-danger { background: #a3343c; color: #fff; }
+.game-export ul { display: grid; gap: 0.4rem; max-height: 50dvh; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.game-export li button { width: 100%; border: 1px solid rgb(18 59 66 / 0.12); border-radius: 0.8rem; background: #fff; padding: 0.75rem 0.85rem; color: #17363b; font-size: 0.72rem; font-weight: 800; text-align: left; }
+.game-export li button:hover { border-color: #176d64; }
 
 @media (max-width: 700px) {
   .game-panel-backdrop { align-items: end; padding: 0; }
