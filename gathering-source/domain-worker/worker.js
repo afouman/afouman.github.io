@@ -521,7 +521,9 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
      Timers: to end a timed turn, the UI sends an action such as {type:'timeUp'} when its countdown reaches zero, and
      move() checks ctx.now against a deadline stored in state.
 
-3. styles — CSS. Scope every selector under #game. The game area fills the viewport (100vw x 100vh, no page
+3. styles — CSS. Scope every selector under #game. The page starts with a dark background (#0b2425) and light
+   text (#f7f2e8). Whenever you set a background on any element, also set a contrasting text color on it (and on
+   its inputs and buttons); Nights rejects drafts with hard-to-read text. The game area fills the viewport (100vw x 100vh, no page
    scrolling). Make the main play area as large as possible, use CSS grid for boards (a 3x3 board is
    grid-template-columns: repeat(3, 1fr) with square cells), and keep it readable on a phone held upright.
 

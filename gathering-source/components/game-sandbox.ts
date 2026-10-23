@@ -452,6 +452,52 @@ const FRAME_SOURCE = String.raw`
       field.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
+  // Readability: flag text whose colour barely differs from the background behind it.
+  function parseColor(value) {
+    var match = String(value || '').match(/rgba?\(([^)]+)\)/);
+    if (!match) return null;
+    var parts = match[1].split(/[ ,\/]+/).filter(Boolean).map(Number);
+    return { r: parts[0], g: parts[1], b: parts[2], a: parts.length > 3 ? parts[3] : 1 };
+  }
+  function luminance(color) {
+    var channel = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+  }
+  function backgroundOf(element) {
+    for (var node = element; node && node.nodeType === 1; node = node.parentElement) {
+      var style = getComputedStyle(node);
+      if (style.backgroundImage && style.backgroundImage !== 'none') return null;
+      var color = parseColor(style.backgroundColor);
+      if (color && color.a > 0.5) return color;
+    }
+    return parseColor(getComputedStyle(document.body).backgroundColor);
+  }
+  function unreadableText() {
+    var checked = 0;
+    var worst = null;
+    var poor = 0;
+    root.querySelectorAll('*').forEach(function (element) {
+      var ownText = Array.prototype.some.call(element.childNodes, function (node) { return node.nodeType === 3 && node.textContent.trim(); });
+      if (!ownText || element.offsetParent === null) return;
+      if (element.closest('button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled="true"]')) return;
+      var style = getComputedStyle(element);
+      if (style.visibility === 'hidden' || Number(style.opacity) < 0.4) return;
+      var fg = parseColor(style.color);
+      if (fg && fg.a < 0.6) return;
+      var bg = backgroundOf(element);
+      if (!fg || !bg) return;
+      checked += 1;
+      var a = luminance(fg);
+      var b = luminance(bg);
+      var ratio = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+      if (ratio < 2.5) {
+        poor += 1;
+        if (!worst || ratio < worst.ratio) worst = { ratio: ratio, text: element.textContent.trim().slice(0, 50), fg: style.color, bg: 'rgb(' + bg.r + ', ' + bg.g + ', ' + bg.b + ')' };
+      }
+    });
+    if (!worst || poor < Math.max(1, checked * 0.15)) return '';
+    return 'Text is hard to read: "' + worst.text + '" is ' + worst.fg + ' on ' + worst.bg + ' (contrast ' + worst.ratio.toFixed(1) + ':1). Always set an explicit text color that contrasts with each background you set.';
+  }
   async function tapAndCheck(viewer, index, fill, note) {
     await renderAs(viewer);
     if (fill) fillInputs();
@@ -509,6 +555,10 @@ const FRAME_SOURCE = String.raw`
       for (var v = 0; v < viewers.length; v += 1) {
         var problem = await renderAs(viewers[v]);
         if (problem) note(problem + ' (for example with ' + n + ' players, viewer ' + (viewers[v] || 'spectator') + ').', problem);
+        else {
+          var readability = unreadableText();
+          if (readability) note(readability, 'contrast');
+        }
       }
       for (var p = 0; p < Math.min(n, 4); p += 1) {
         if (await clickSmoke(list, 1000 + n, list[p].id, note)) anyAccepted = true;
@@ -544,6 +594,10 @@ const FRAME_SOURCE = String.raw`
       for (var r = 0; r < people.length; r += 1) {
         var endProblem = await renderAs(people[r].id);
         if (endProblem) note('Scenario "' + name + '": at the end, ' + endProblem + ' for ' + people[r].id + '.');
+        else {
+          var endReadability = unreadableText();
+          if (endReadability) note(endReadability, 'contrast');
+        }
       }
       var expectText = scenario.expectText;
       if (expectText && Array.isArray(expectText.includes)) {
