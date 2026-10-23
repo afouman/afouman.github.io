@@ -152,6 +152,39 @@ struct NightsWebView: UIViewRepresentable {
             return nil
         }
 
+        // WKWebView shows nothing for window.alert() and answers "no" to window.confirm()
+        // unless the app presents them, so present them as native alerts.
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptAlertPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping () -> Void
+        ) {
+            guard let presenter = presentingViewController() else {
+                completionHandler()
+                return
+            }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler() })
+            presenter.present(alert, animated: true)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            runJavaScriptConfirmPanelWithMessage message: String,
+            initiatedByFrame frame: WKFrameInfo,
+            completionHandler: @escaping (Bool) -> Void
+        ) {
+            guard let presenter = presentingViewController() else {
+                completionHandler(false)
+                return
+            }
+            let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { _ in completionHandler(false) })
+            alert.addAction(UIAlertAction(title: "OK", style: .default) { _ in completionHandler(true) })
+            presenter.present(alert, animated: true)
+        }
+
         private func isTrustedAppURL(_ url: URL?) -> Bool {
             guard let url, url.scheme == "https" else { return false }
             return url.host == "gaemaj.tech" || url.host == "www.gaemaj.tech"
