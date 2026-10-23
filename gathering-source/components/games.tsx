@@ -9,7 +9,7 @@
 // view over a WebSocket. Phones draw that view in the sandbox and send actions.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Gamepad2, LogOut, MessageCircle, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
+import { Check, Copy, Gamepad2, LogOut, MessageCircle, EllipsisVertical, Pencil, Play, Plus, RotateCcw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
 import {
   isPlayableRuntime,
   readFrameMessage,
@@ -28,6 +28,8 @@ const firebaseConfigured = Boolean(
 );
 const GAME_API_URL = 'https://gaemaj.tech/api/games';
 const GAME_LIVE_URL = 'wss://gaemaj.tech/api/games/live';
+const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
+const LEGACY_HOST_UID = process.env.NEXT_PUBLIC_LEGACY_HOST_UID?.trim() || 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
 const REPAIR_ATTEMPTS = 3;
 
 export type GameViewer = { id: string; name: string };
@@ -164,6 +166,22 @@ const requestGameDraft = async (
   if (!response.ok || !result?.game) throw new Error(result?.error || 'The game designer is unavailable right now.');
   return result as { game: GameRuntime; remainingToday?: number; model?: string };
 };
+
+// Events this account hosts, read directly so copying works from any view
+// (the guest view and the iOS app do not load the host's event list).
+async function loadHostedEvents(): Promise<GameEventOption[]> {
+  const { app, store, auth } = await firebase();
+  const user = auth.getAuth(app).currentUser;
+  if (!user) throw new Error('Sign in again to copy games.');
+  const owners = HOST_EMAIL && user.email?.trim().toLowerCase() === HOST_EMAIL && user.uid !== LEGACY_HOST_UID
+    ? [user.uid, LEGACY_HOST_UID]
+    : [user.uid];
+  const snapshot = await store.getDocs(store.query(
+    store.collection(store.getFirestore(app), 'events'),
+    store.where('ownerUid', 'in', owners),
+  ));
+  return snapshot.docs.map((document) => ({ id: document.id, title: String(document.data().title || 'Untitled event') }));
+}
 
 class GameTestFailure extends Error {
   failures: string[];
@@ -377,6 +395,7 @@ function LiveTables({ eventId, game, viewer }: {
   const [notice, setNotice] = useState<{ id: number; message: string } | null>(null);
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [newTableName, setNewTableName] = useState<string | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
   const watchingRef = useRef('');
   const [watching, setWatching] = useState('');
@@ -489,10 +508,30 @@ function LiveTables({ eventId, game, viewer }: {
     return <>
       <section className="game-session-bar">
         <div className="game-session-status"><strong>{game.title} tables</strong><span>{connection || `Only tables for this game. ${game.minPlayers}–${game.maxPlayers} players each.`}</span></div>
-        <button type="button" disabled={status !== 'ready'} onClick={() => send({ type: 'create' })}><Plus size={15} /> New table</button>
+        {newTableName === null && <button type="button" disabled={status !== 'ready'} onClick={() => { setError(''); setNewTableName(`${game.title} · Table ${tables.length + 1}`.slice(0, 60)); }}><Plus size={15} /> New table</button>}
         {error && <p>{error}</p>}
       </section>
-      <div className="game-stage game-table-list">
+      {newTableName !== null && (
+        <form className="game-stage game-new-table" onSubmit={(event) => {
+          event.preventDefault();
+          const name = newTableName.trim();
+          if (!name) {
+            setError('Give the table a name.');
+            return;
+          }
+          send({ type: 'create', name: name.slice(0, 60) });
+          setNewTableName(null);
+        }}>
+          <strong>New {game.title} table</strong>
+          <label><span>Table name</span><input value={newTableName} onChange={(event) => setNewTableName(event.target.value)} maxLength={60} /></label>
+          <p>The table is created only when you tap Create. You will be its first player.</p>
+          <div>
+            <button type="button" className="game-secondary" onClick={() => { setNewTableName(null); setError(''); }}>Cancel</button>
+            <button type="submit" disabled={status !== 'ready'}><Check size={15} /> Create table</button>
+          </div>
+        </form>
+      )}
+      {newTableName === null && <div className="game-stage game-table-list">
         {status !== 'ready' && !tables.length ? <p className="game-table-empty">{connection}</p> : tables.length ? tables.map((entry) => (
           <button type="button" key={entry.id} className="game-table-card" onClick={() => openTable(entry.id)}>
             <strong>{entry.name}</strong>
@@ -500,7 +539,7 @@ function LiveTables({ eventId, game, viewer }: {
             <small>{entry.players.join(', ')}</small>
           </button>
         )) : <p className="game-table-empty">No {game.title} tables yet. Start one and invite people to join.</p>}
-      </div>
+      </div>}
     </>;
   }
 
@@ -606,6 +645,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [testFailures, setTestFailures] = useState<string[]>([]);
   const [menuGameId, setMenuGameId] = useState('');
   const [exporting, setExporting] = useState<EventGame | null>(null);
+  const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
   const [deleting, setDeleting] = useState<EventGame | null>(null);
 
   useEffect(() => {
@@ -844,6 +884,22 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setBusy(false);
     }
   };
+  const openExport = (game: EventGame) => {
+    setExporting(game);
+    setExportTargets(null);
+    if (!firebaseConfigured) {
+      setExportTargets(otherEvents);
+      return;
+    }
+    void loadHostedEvents().then((events) => {
+      const merged = new Map([...otherEvents, ...events].map((event) => [event.id, event]));
+      merged.delete(eventId);
+      setExportTargets([...merged.values()].sort((left, right) => left.title.localeCompare(right.title)));
+    }, (loadError: unknown) => {
+      setExporting(null);
+      setError(loadError instanceof Error ? loadError.message : 'Your events could not be loaded.');
+    });
+  };
   const removeGame = async (game: EventGame) => {
     setDeleting(null);
     setBusy(true);
@@ -893,9 +949,9 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
                 <div className="game-card-copy"><div><span className={`game-status ${game.status}`}>{game.status}</span><small>v{game.version}</small></div><h4 className="font-display">{game.title}</h4><p>{game.summary || game.rules}</p></div>
                 <footer>
                   <button type="button" className="game-play" disabled={!playable} title={playable ? undefined : 'Regenerate this game to play it'} onClick={() => { setDesignPreview(false); setPlaying(game); }}><Play size={15} /> {playable ? 'Play' : 'Needs regenerating'}</button>
-                  {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete game-more" onClick={() => setMenuGameId((current) => current === game.id ? '' : game.id)} disabled={busy} aria-label={`More actions for ${game.title}`} aria-expanded={menuGameId === game.id}><MoreHorizontal size={16} /></button></>}
+                  {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete game-more" onClick={() => setMenuGameId((current) => current === game.id ? '' : game.id)} disabled={busy} aria-label={`More actions for ${game.title}`} aria-expanded={menuGameId === game.id}><EllipsisVertical size={18} /></button></>}
                   {canManage && menuGameId === game.id && <div className="game-card-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => { setMenuGameId(''); setExporting(game); }}><Copy size={15} /> Copy to another event</button>
+                    <button type="button" role="menuitem" onClick={() => { setMenuGameId(''); openExport(game); }}><Copy size={15} /> Copy to another event</button>
                     <button type="button" role="menuitem" className="game-menu-danger" onClick={() => { setMenuGameId(''); setDeleting(game); }}><Trash2 size={15} /> Delete</button>
                   </div>}
                 </footer>
@@ -939,7 +995,8 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       {exporting && <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setExporting(null); }}>
         <div className="game-confirm game-export" role="dialog" aria-modal="true" aria-label={`Copy ${exporting.title} to another event`}>
           <strong>Copy “{exporting.title}” to…</strong>
-          {otherEvents.length ? <ul>{otherEvents.map((target) => <li key={target.id}><button type="button" onClick={() => void exportGame(exporting, target)}>{target.title || 'Untitled event'}</button></li>)}</ul>
+          {exportTargets === null ? <p>Loading your events…</p>
+            : exportTargets.length ? <ul>{exportTargets.map((target) => <li key={target.id}><button type="button" onClick={() => void exportGame(exporting, target)}>{target.title || 'Untitled event'}</button></li>)}</ul>
             : <p>You are not hosting any other events yet.</p>}
           <div><button type="button" onClick={() => setExporting(null)}>Cancel</button></div>
         </div>

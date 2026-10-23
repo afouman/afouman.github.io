@@ -5966,6 +5966,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-table-rename .game-secondary { border: 1px solid rgb(255 255 255 / 0.18); background: rgb(255 255 255 / 0.08); color: #f7f2e8; }
 .game-editor-actions .game-preview-refine { background: #176d64; color: #fff; }
 .game-card footer { position: relative; }
+.game-card footer .game-more { color: #7d8a8c; }
 .game-card-menu { position: absolute; z-index: 5; right: 0.6rem; bottom: calc(100% - 0.3rem); display: grid; min-width: 210px; overflow: hidden; border: 1px solid rgb(18 59 66 / 0.12); border-radius: 0.9rem; background: #fff; box-shadow: 0 18px 40px rgb(10 30 33 / 0.22); }
 .game-card footer .game-card-menu button { display: flex; justify-content: flex-start; width: 100%; min-height: 0; border: 0; align-items: center; gap: 0.5rem; border-radius: 0; background: transparent; padding: 0.8rem 0.95rem; color: #17363b; font-size: 0.68rem; font-weight: 800; text-align: left; }
 .game-card footer .game-card-menu button:hover { background: #eef3f0; }
@@ -5980,6 +5981,14 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-export ul { display: grid; gap: 0.4rem; max-height: 50dvh; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
 .game-export li button { width: 100%; border: 1px solid rgb(18 59 66 / 0.12); border-radius: 0.8rem; background: #fff; padding: 0.75rem 0.85rem; color: #17363b; font-size: 0.72rem; font-weight: 800; text-align: left; }
 .game-export li button:hover { border-color: #176d64; }
+.game-new-table { display: grid; align-content: start; gap: 0.8rem; padding: 1.25rem; color: #f7f2e8; }
+.game-new-table strong { font-size: 1rem; }
+.game-new-table label { display: grid; gap: 0.35rem; color: rgb(255 255 255 / 0.7); font-size: 0.66rem; font-weight: 800; }
+.game-new-table input { min-height: 44px; border: 1px solid rgb(255 255 255 / 0.2); border-radius: 0.8rem; background: #122f30; color: #fff; padding: 0.5rem 0.8rem; font: inherit; font-size: 16px; }
+.game-new-table p { margin: 0; color: rgb(255 255 255 / 0.6); font-size: 0.66rem; }
+.game-new-table > div { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.game-new-table > div button { display: inline-flex; min-height: 40px; align-items: center; gap: 0.35rem; border-radius: 999px; background: #98dbc7; color: #092421; padding: 0.55rem 0.95rem; font-size: 0.72rem; font-weight: 900; }
+.game-new-table > div .game-secondary { border: 1px solid rgb(255 255 255 / 0.18); background: rgb(255 255 255 / 0.08); color: #f7f2e8; }
 
 @media (max-width: 700px) {
   .game-panel-backdrop { align-items: end; padding: 0; }

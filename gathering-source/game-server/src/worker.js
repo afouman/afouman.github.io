@@ -169,6 +169,7 @@ class Referee {
 
 // ----- Durable Object: all tables of one event game ----------------------------
 
+const cleanTableName = (value) => String(value || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
 const randomSeed = () => 1 + (crypto.getRandomValues(new Uint32Array(1))[0] % 2_000_000_000);
 const newId = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 
@@ -215,7 +216,7 @@ export class GameRoom extends DurableObject {
       socket.serializeAttachment(session);
       if (message.type === 'move') return await this.move(socket, session, message, reply);
       if (message.type === 'open') return await this.open(socket, session, message.tableId);
-      if (message.type === 'create') return await this.createTable(socket, session);
+      if (message.type === 'create') return await this.createTable(socket, session, message.name);
       if (message.type === 'join') return await this.join(session, message.tableId);
       if (message.type === 'leave') return await this.leave(socket, session, message.tableId);
       if (message.type === 'start') return await this.start(session, message.tableId);
@@ -372,7 +373,7 @@ export class GameRoom extends DurableObject {
     await this.sendTable(socket, session, table);
   }
 
-  async createTable(socket, session) {
+  async createTable(socket, session, requestedName) {
     if (Object.keys(this.tables).length >= MAX_TABLES) throw new Error('This game already has many tables. Join one of them.');
     const id = newId();
     const used = new Set(Object.values(this.tables).map((table) => table.number || 0));
@@ -381,7 +382,7 @@ export class GameRoom extends DurableObject {
     this.tables[id] = {
       id,
       number,
-      name: `${this.game?.title || 'Game'} · Table ${number}`.slice(0, 60),
+      name: cleanTableName(requestedName) || `${this.game?.title || 'Game'} · Table ${number}`.slice(0, 60),
       createdBy: session.uid,
       creatorName: session.name,
       createdAt: Date.now(),
@@ -469,7 +470,7 @@ export class GameRoom extends DurableObject {
   async renameTable(session, tableId, name) {
     const table = this.table(tableId);
     if (table.createdBy !== session.uid && !session.host) throw new Error('Only the table creator or the host can rename a table.');
-    const clean = String(name || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
+    const clean = cleanTableName(name);
     if (!clean) throw new Error('Give the table a name.');
     table.name = clean;
     await this.save();
