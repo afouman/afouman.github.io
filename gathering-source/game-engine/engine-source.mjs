@@ -47,15 +47,20 @@ function createEngine(game) {
   var seed = 1;
   var state = null;
   var count = 0;
+  var creator = null;
   function requireGame() {
     ['setup', 'move', 'view'].forEach(function (name) {
       if (!game || typeof game[name] !== 'function') throw new Error('The game rules do not declare function ' + name + '().');
     });
   }
   function roster() { return players.map(function (p) { return { id: p.id, name: p.name }; }); }
+  function seatOrNull(value) {
+    var id = value == null ? null : String(value);
+    return players.some(function (p) { return p.id === id; }) ? id : null;
+  }
   function step(action, player, at) {
     return nightsJson(game.move(nightsJson(state, 'The state'), nightsJson(action, 'The action'), {
-      player: player, players: roster(), now: at, rng: nightsRng(nightsMix(seed, count + 1)),
+      player: player, players: roster(), creator: creator, now: at, rng: nightsRng(nightsMix(seed, count + 1)),
     }), 'move()');
   }
   return {
@@ -63,9 +68,10 @@ function createEngine(game) {
       requireGame();
       players = (input.players || []).map(function (p) { return { id: String(p.id), name: String(p.name) }; });
       seed = input.seed >>> 0;
+      creator = seatOrNull(input.creator);
       count = 0;
       state = null;
-      state = nightsJson(game.setup({ players: roster(), rng: nightsRng(nightsMix(seed, 0)) }), 'setup()');
+      state = nightsJson(game.setup({ players: roster(), creator: creator, rng: nightsRng(nightsMix(seed, 0)) }), 'setup()');
       return true;
     },
     apply: function (input) {
@@ -84,6 +90,7 @@ function createEngine(game) {
       requireGame();
       players = (input.players || []).map(function (p) { return { id: String(p.id), name: String(p.name) }; });
       seed = input.seed >>> 0;
+      creator = seatOrNull(input.creator);
       count = Number(input.count) || 0;
       state = nightsJson(input.state, 'The saved state');
       return true;
@@ -94,7 +101,7 @@ function createEngine(game) {
       return true;
     },
     view: function (input) {
-      return nightsJson(game.view(nightsJson(state, 'The state'), input.player == null ? null : String(input.player)), 'view()');
+      return nightsJson(game.view(nightsJson(state, 'The state'), input.player == null ? null : String(input.player), { players: roster(), creator: creator }), 'view()');
     },
   };
 }

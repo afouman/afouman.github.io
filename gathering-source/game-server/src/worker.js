@@ -198,7 +198,8 @@ export class GameRoom extends DurableObject {
     const reply = (message) => { try { socket.send(JSON.stringify(message)); } catch { /* closed */ } };
     let message;
     try {
-      if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_LENGTH) throw new Error('Message too large.');
+      const limit = this.env.GAME_SERVER_TEST_MODE === 'true' ? 65_536 : MAX_MESSAGE_LENGTH;
+      if (typeof raw !== 'string' || raw.length > limit) throw new Error('Message too large.');
       message = JSON.parse(raw);
     } catch {
       reply({ type: 'error', message: 'Invalid message.' });
@@ -303,7 +304,7 @@ export class GameRoom extends DurableObject {
     if (existing) return existing;
     if (!this.game || this.game.version !== table.gameVersion) throw new Error('This round uses an older version of the game. Start a new round.');
     const referee = new Referee(await loadQuickJs(), this.game.logicSource);
-    referee.call('restore', { players: this.seatPlayers(table), seed: table.seed, state: table.state, count: table.count });
+    referee.call('restore', { players: this.seatPlayers(table), seed: table.seed, creator: this.seatOf(table, table.createdBy), state: table.state, count: table.count });
     this.referees.set(table.id, { referee, version: table.gameVersion, round: table.round });
     return referee;
   }
@@ -345,6 +346,7 @@ export class GameRoom extends DurableObject {
         round: table.round,
         seats: table.status === 'playing' ? this.seatPlayers(table) : [],
         me,
+        creatorSeat: table.status === 'playing' ? this.seatOf(table, table.createdBy) : null,
         outdated,
         problem,
         view,
@@ -433,7 +435,7 @@ export class GameRoom extends DurableObject {
     const draft = { ...table, seats, seatNames: seats.map((uid) => table.players[uid].name), seed, gameVersion: this.game.version };
     const referee = new Referee(await loadQuickJs(), this.game.logicSource);
     try {
-      referee.call('reset', { players: this.seatPlayers(draft), seed });
+      referee.call('reset', { players: this.seatPlayers(draft), seed, creator: this.seatOf(draft, draft.createdBy) });
     } catch (error) {
       referee.dispose();
       throw error;

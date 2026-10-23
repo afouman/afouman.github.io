@@ -41,6 +41,7 @@ export type SandboxTable = {
   seed: number;
   players: SandboxPlayer[];
   me: string | null;
+  creator: string | null;
   moves: SandboxMove[];
 };
 
@@ -94,6 +95,7 @@ const FRAME_SOURCE = String.raw`
   var uiErrors = [];
   var players = [];
   var me = null;
+  var creator = null;
   var epoch = '';
   var applied = [];
   var model = null;
@@ -294,17 +296,56 @@ const FRAME_SOURCE = String.raw`
   }
   var ctx = Object.freeze({
     get me() { return me; },
+    get creator() { return creator; },
     get players() { return players.map(function (p) { return { id: p.id, name: p.name }; }); },
     send: send,
     now: function () { return Date.now(); },
     effects: Object.freeze({ confetti: confetti, sound: sound, vibrate: function () { return false; } }),
   });
 
+  // Redraws replace the whole screen. Keep what the player was typing: fields are
+  // matched by name (or id) and get their text, checked state and focus back.
+  function fieldKey(field) { return field.getAttribute('name') || field.id || ''; }
+  function captureFields() {
+    var saved = { values: {}, focus: null };
+    root.querySelectorAll('input, textarea, select').forEach(function (field) {
+      var key = fieldKey(field);
+      if (!key || field.type === 'button' || field.type === 'submit') return;
+      saved.values[key] = { value: field.value, checked: field.checked, typed: field.dataset.nightsTyped === '1' };
+      if (document.activeElement === field) {
+        saved.focus = { key: key, start: field.selectionStart, end: field.selectionEnd };
+      }
+    });
+    return saved;
+  }
+  function restoreFields(saved) {
+    root.querySelectorAll('input, textarea, select').forEach(function (field) {
+      var key = fieldKey(field);
+      var previous = key && saved.values[key];
+      if (!previous || !previous.typed || field.disabled) return;
+      if (field.type === 'checkbox' || field.type === 'radio') field.checked = previous.checked;
+      else field.value = previous.value;
+      field.dataset.nightsTyped = '1';
+    });
+    if (saved.focus) {
+      var target = Array.prototype.find.call(root.querySelectorAll('input, textarea, select'), function (field) { return fieldKey(field) === saved.focus.key; });
+      if (target && !target.disabled) {
+        target.focus({ preventScroll: true });
+        try { if (saved.focus.start != null) target.setSelectionRange(saved.focus.start, saved.focus.end); } catch (error) { /* not a text field */ }
+      }
+    }
+  }
+  root.addEventListener('input', function (event) { if (event.target && event.target.dataset) event.target.dataset.nightsTyped = '1'; }, true);
+  root.addEventListener('change', function (event) { if (event.target && event.target.dataset) event.target.dataset.nightsTyped = '1'; }, true);
   function draw() {
     clearRenderTimers();
+    var saved = captureFields();
     while (root.firstChild) root.removeChild(root.firstChild);
     if (!renderFn) return;
-    try { renderFn(root, model == null ? null : JSON.parse(JSON.stringify(model)), ctx); }
+    try {
+      renderFn(root, model == null ? null : JSON.parse(JSON.stringify(model)), ctx);
+      restoreFields(saved);
+    }
     catch (error) {
       var message = 'The game screen crashed: ' + text(error);
       uiErrors.push(message);
@@ -317,6 +358,7 @@ const FRAME_SOURCE = String.raw`
   function syncTable(table) {
     queue = queue.then(function () {
       me = table.me == null ? null : String(table.me);
+      creator = table.creator == null ? null : String(table.creator);
       var incoming = Array.isArray(table.moves) ? table.moves : [];
       var continues = table.epoch === epoch && applied.length <= incoming.length
         && applied.every(function (entry, index) { return sameMove(entry, incoming[index]); });
@@ -325,7 +367,7 @@ const FRAME_SOURCE = String.raw`
         epoch = table.epoch;
         players = table.players || [];
         applied = [];
-        ready = engine.call('reset', { players: players, seed: table.seed });
+        ready = engine.call('reset', { players: players, seed: table.seed, creator: table.creator == null ? null : String(table.creator) });
       }
       return ready.then(function () {
         var fresh = incoming.slice(applied.length);
@@ -371,9 +413,12 @@ const FRAME_SOURCE = String.raw`
   function renderAs(viewer) {
     return engine.call('view', { player: viewer }).then(function (next) {
       me = viewer;
+      creator = 'p1';
       model = next;
       uiErrors = [];
       testSink = [];
+      // Start every test render from a blank screen so typed text never carries over.
+      while (root.firstChild) root.removeChild(root.firstChild);
       draw();
       testSink = null;
       return tick();
@@ -383,43 +428,59 @@ const FRAME_SOURCE = String.raw`
       return '';
     }, function (error) { return 'view() failed: ' + text(error); });
   }
-  // Give text fields, numbers and pickers a plausible value so "type, then submit" games can be exercised.
+  // Give EMPTY text fields, numbers and pickers a plausible value so "type, then
+  // submit" games can be exercised. Prefilled fields keep the value the game chose.
   function fillInputs() {
     root.querySelectorAll('input, textarea, select').forEach(function (field) {
       var kind = String(field.type || '').toLowerCase();
       if (field.disabled || kind === 'button' || kind === 'submit' || kind === 'hidden') return;
-      if (field.tagName === 'SELECT') { if (field.options.length) field.selectedIndex = field.options.length > 1 ? 1 : 0; }
-      else if (kind === 'checkbox' || kind === 'radio') field.checked = true;
-      else if (kind === 'number' || kind === 'range') field.value = String(field.min && !isNaN(Number(field.min)) ? Number(field.min) + 1 : 1);
-      else field.value = 'apple';
+      if (field.tagName === 'SELECT') {
+        if (field.selectedIndex <= 0 && field.options.length > 1) field.selectedIndex = 1;
+      } else if (kind === 'checkbox' || kind === 'radio') {
+        if (!field.checked) field.checked = true;
+      } else if (!field.value) {
+        if (kind === 'number' || kind === 'range') {
+          var low = field.min !== '' && !isNaN(Number(field.min)) ? Number(field.min) : 1;
+          var high = field.max !== '' && !isNaN(Number(field.max)) ? Number(field.max) : low + 10;
+          field.value = String(Math.min(high, Math.max(low, Math.round((low + high) / 2))));
+        } else {
+          var limit = field.maxLength > 0 ? field.maxLength : 40;
+          field.value = 'Apple'.slice(0, limit);
+        }
+      } else return;
       field.dispatchEvent(new Event('input', { bubbles: true }));
       field.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
+  async function tapAndCheck(viewer, index, fill, note) {
+    await renderAs(viewer);
+    if (fill) fillInputs();
+    var button = root.querySelectorAll('button')[index];
+    if (!button || button.disabled) return false;
+    uiErrors = [];
+    testSink = [];
+    button.click();
+    await tick();
+    await tick();
+    var sent = testSink || [];
+    testSink = null;
+    if (uiErrors.length) note('Tapping ' + label(button, index) + ' as ' + viewer + ' threw: ' + uiErrors[0], 'tap:' + uiErrors[0]);
+    for (var s = 0; s < sent.length; s += 1) {
+      try { await engine.call('check', { player: viewer, action: sent[s], at: 1700000000000 }); return true; }
+      catch (error) { /* refusals such as "not your turn" are expected */ }
+    }
+    return false;
+  }
   async function clickSmoke(list, seed, viewer, note) {
     var accepted = false;
-    await engine.call('reset', { players: list, seed: seed });
+    await engine.call('reset', { players: list, seed: seed, creator: 'p1' });
     players = list;
     var problem = await renderAs(viewer);
     if (problem) return false;
     var total = Math.min(root.querySelectorAll('button').length, 40);
     for (var index = 0; index < total; index += 1) {
-      await renderAs(viewer);
-      fillInputs();
-      var button = root.querySelectorAll('button')[index];
-      if (!button || button.disabled) continue;
-      uiErrors = [];
-      testSink = [];
-      button.click();
-      await tick();
-      await tick();
-      var sent = testSink || [];
-      testSink = null;
-      if (uiErrors.length) note('Tapping ' + label(button, index) + ' as ' + viewer + ' threw: ' + uiErrors[0], 'tap:' + uiErrors[0]);
-      for (var s = 0; s < sent.length; s += 1) {
-        try { await engine.call('check', { player: viewer, action: sent[s], at: 1700000000000 }); accepted = true; }
-        catch (error) { /* refusals such as "not your turn" are expected */ }
-      }
+      if (await tapAndCheck(viewer, index, false, note)) accepted = true;
+      else if (await tapAndCheck(viewer, index, true, note)) accepted = true;
     }
     return accepted;
   }
@@ -441,7 +502,7 @@ const FRAME_SOURCE = String.raw`
     for (var c = 0; c < counts.length; c += 1) {
       var n = counts[c];
       var list = seats(n);
-      try { await engine.call('reset', { players: list, seed: 1000 + n }); }
+      try { await engine.call('reset', { players: list, seed: 1000 + n, creator: 'p1' }); }
       catch (error) { note('setup() failed with ' + n + ' players: ' + text(error), 'setup:' + text(error)); continue; }
       players = list;
       var viewers = list.map(function (p) { return p.id; }).concat([null]);
@@ -462,7 +523,7 @@ const FRAME_SOURCE = String.raw`
       var name = String(scenario.name || 'Scenario ' + (t + 1)).slice(0, 80);
       var size = Math.min(max, Math.max(min, Number(scenario.players) || min));
       var people = seats(size);
-      try { await engine.call('reset', { players: people, seed: 7 }); }
+      try { await engine.call('reset', { players: people, seed: 7, creator: 'p1' }); }
       catch (error) { note('Scenario "' + name + '": setup() failed: ' + text(error)); continue; }
       players = people;
       var steps = Array.isArray(scenario.steps) ? scenario.steps : [];
@@ -508,6 +569,7 @@ const FRAME_SOURCE = String.raw`
       else if (input.type === 'view' && remote) {
         var update = input.view || {};
         me = update.me == null ? null : String(update.me);
+        creator = update.creator == null ? null : String(update.creator);
         players = Array.isArray(update.players) ? update.players : [];
         model = update.model === undefined ? null : update.model;
         if (banner.className === 'error') showBanner('', 'error');

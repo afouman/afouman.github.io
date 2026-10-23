@@ -471,6 +471,8 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
 
    function setup(ctx) -> state
      ctx.players : [{id, name}] in seat order. ids are 'p1', 'p2', ... Use ids for everything; names are only for display.
+     ctx.creator : id of the player who created this table, or null. When the host's description mentions the
+                   game's creator, host, moderator, judge, referee or game master, that role is ctx.creator.
      ctx.rng     : seeded random source. ctx.rng() -> [0,1). ctx.rng.int(n) -> 0..n-1. ctx.rng.pick(array). ctx.rng.shuffle(array) -> new array.
      Return the complete initial state as plain JSON (objects, arrays, strings, numbers, booleans, null).
      Do team assignment, dealing, role selection, etc. here with ctx.rng.
@@ -479,14 +481,16 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
      action      : the plain JSON object a player sent from the UI.
      ctx.player  : id of the player who sent it ('p1', ...). This is trusted; never read the sender from action.
      ctx.players : same list as in setup.
+     ctx.creator : same as in setup.
      ctx.now     : the move's timestamp in milliseconds. This is the ONLY clock.
      ctx.rng     : seeded random source for this move.
      Return the full next state. To refuse an illegal move (not your turn, square taken, game over...), throw new Error('short reason players can read').
      Validate everything: the action comes from a player's device.
      Restarting / "new game" / "play again" is just another action handled here.
 
-   function view(state, player) -> model
+   function view(state, player, ctx) -> model
      player: the viewer's id ('p1', ...) or null for a spectator.
+     ctx.players and ctx.creator: same as above. view() has no other inputs; never reference undefined variables.
      Return a plain JSON model of what THIS viewer may see. Include whose turn it is, scores, the board, and booleans
      the UI needs (for example canAct, isMyTurn, myTeam, mySymbol). Leave out other players' secrets.
 
@@ -500,6 +504,7 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
      build the whole screen and append it to root every time. Never cache elements between calls.
      model    : the value view() returned for this viewer.
      ctx.me   : this viewer's id or null (spectator).
+     ctx.creator : the table creator's id or null.
      ctx.players : [{id, name}].
      ctx.send(action) : send a plain JSON action object (under 1500 characters) to move(). Returns a Promise of
                 {ok:true} or {ok:false, error}. Nights already shows refusals to the player; you may also show them.
@@ -508,6 +513,10 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
      These are the only ctx members; do not call anything else on ctx.
      Use document.createElement / textContent / addEventListener. Never use innerHTML with player-provided text.
      Every tappable control MUST be a <button> element. Disable buttons the viewer cannot use right now.
+     Text fields: give every <input>, <textarea> and <select> a unique name attribute that includes the round
+     (for example name="esm-round-3"). Nights keeps what the player typed across redraws for fields with the same
+     name, so a new round with new names starts empty. Send typed answers in ONE action when the player submits
+     (or when their timer ends), never on every keystroke.
      setTimeout/setInterval are allowed only for countdown displays; time-based rules must go through ctx.send.
      Timers: to end a timed turn, the UI sends an action such as {type:'timeUp'} when its countdown reaches zero, and
      move() checks ctx.now against a deadline stored in state.
@@ -524,6 +533,11 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
    final screen for that player and checks the visible text contains each string (case-insensitive).
    Scenarios must not depend on random outcomes: choose actions that are legal whatever ctx.rng decided, or read
    the setup through moves that are always legal. Include a win (or end) scenario and an illegal-move scenario.
+   In tests p1 is ctx.creator. A scenario must include every step needed to reach the screen it checks (for
+   example the creator starting the round or the timer), and expectText must use words your render() really shows.
+
+Private answers: when players answer privately and answers are revealed later, keep each player's answers out of
+other players' view() until the reveal.
 
 Teams: if the host asks for teams, form them in setup() from ctx.players with ctx.rng (for random assignment)
 and show each player's team and mark in the view. Any number of players between the limits may sit at a table.
@@ -542,7 +556,7 @@ function move(state, action, ctx) {
   const total = state.total + action.amount;
   return { ...state, total, turn: state.turn + 1, winner: total >= state.target ? ctx.player : null };
 }
-function view(state, player) {
+function view(state, player, ctx) {
   const current = state.order[state.turn % state.order.length];
   return { total: state.total, target: state.target, current, winner: state.winner, isMyTurn: !state.winner && current === player };
 }

@@ -28,7 +28,7 @@ const firebaseConfigured = Boolean(
 );
 const GAME_API_URL = 'https://gaemaj.tech/api/games';
 const GAME_LIVE_URL = 'wss://gaemaj.tech/api/games/live';
-const REPAIR_ATTEMPTS = 2;
+const REPAIR_ATTEMPTS = 3;
 
 export type GameViewer = { id: string; name: string };
 
@@ -74,12 +74,13 @@ type TableDetail = TableSummary & {
   round: number;
   seats: SandboxPlayer[];
   me: string | null;
+  creatorSeat: string | null;
   outdated: boolean;
   problem: string;
   view: unknown;
 };
 
-type RemoteView = { me: string | null; players: SandboxPlayer[]; model: unknown };
+type RemoteView = { me: string | null; creator: string | null; players: SandboxPlayer[]; model: unknown };
 
 type ServerMessage = {
   type?: string;
@@ -318,7 +319,7 @@ function PreviewTable({ game, runtime }: { game: EventGame; runtime: GameRuntime
   const [me, setMe] = useState('p1');
   const [round, setRound] = useState(() => ({ seed: 1 + Math.floor(Math.random() * 2_000_000_000), moves: [] as SandboxMove[], id: 1 }));
   const players = useMemo(() => Array.from({ length: count }, (_, index) => ({ id: `p${index + 1}`, name: index === 0 ? 'You' : `Guest ${index + 1}` })), [count]);
-  const table = useMemo<SandboxTable>(() => ({ epoch: `preview:${round.id}:${count}`, seed: round.seed, players, me, moves: round.moves }), [count, me, players, round]);
+  const table = useMemo<SandboxTable>(() => ({ epoch: `preview:${round.id}:${count}`, seed: round.seed, players, me, creator: 'p1', moves: round.moves }), [count, me, players, round]);
   const restart = () => setRound((current) => ({ seed: 1 + Math.floor(Math.random() * 2_000_000_000), moves: [], id: current.id + 1 }));
   const send = useCallback((action: Record<string, unknown>) => {
     setRound((current) => ({ ...current, moves: [...current.moves, { player: me, at: Date.now(), action }] }));
@@ -438,7 +439,7 @@ function LiveTables({ eventId, game, viewer }: {
     if (watching) send({ type: 'move', tableId: watching, action });
   }, [send, watching]);
   const remote = useMemo<RemoteView | null>(() => table && table.status === 'playing' && !table.outdated && !table.problem
-    ? { me: table.me, players: table.seats, model: table.view }
+    ? { me: table.me, creator: table.creatorSeat, players: table.seats, model: table.view }
     : null, [table]);
 
   if (!firebaseConfigured) return <div className="game-stage game-stage-message"><Users size={26} /><strong>Live tables need the production backend.</strong></div>;
