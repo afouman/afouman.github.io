@@ -172,7 +172,7 @@ const requestGameDraft = async (
 async function loadHostedEvents(): Promise<GameEventOption[]> {
   const { app, store, auth } = await firebase();
   const user = auth.getAuth(app).currentUser;
-  if (!user) throw new Error('Sign in again to copy games.');
+  if (!user) throw new Error('Sign in again to export games.');
   const owners = HOST_EMAIL && user.email?.trim().toLowerCase() === HOST_EMAIL && user.uid !== LEGACY_HOST_UID
     ? [user.uid, LEGACY_HOST_UID]
     : [user.uid];
@@ -846,14 +846,14 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setBusy(false);
     }
   };
-  // Copies a game into another event this host manages. Older-engine games are
+  // Exports (copies) one game into another event this host manages. Older-engine games are
   // copied without their runtime, as drafts, so they can be regenerated there.
   const exportGame = async (game: EventGame, target: GameEventOption) => {
     setExporting(null);
     setBusy(true);
     setError('');
     try {
-      if (!firebaseConfigured) throw new Error('Connect the production backend to copy games between events.');
+      if (!firebaseConfigured) throw new Error('Connect the production backend to export games between events.');
       const { app, store } = await firebase();
       const playable = isPlayableRuntime(game.runtime);
       const gameId = `game-${crypto.randomUUID()}`;
@@ -877,9 +877,9 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
         updatedAt: store.serverTimestamp(),
         version: 1,
       });
-      notify(`“${game.title}” copied to ${target.title}${playable ? '' : ' as a draft to regenerate'}.`);
+      notify(`“${game.title}” exported to ${target.title}${playable ? '' : ' as a draft to regenerate'}.`);
     } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : 'The game could not be copied.');
+      setError(exportError instanceof Error ? exportError.message : 'The game could not be exported.');
     } finally {
       setBusy(false);
     }
@@ -951,7 +951,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
                   <button type="button" className="game-play" disabled={!playable} title={playable ? undefined : 'Regenerate this game to play it'} onClick={() => { setDesignPreview(false); setPlaying(game); }}><Play size={15} /> {playable ? 'Play' : 'Needs regenerating'}</button>
                   {canManage && <><button type="button" onClick={() => beginEdit(game)}><Pencil size={15} /> Edit</button><button type="button" className="game-delete game-more" onClick={() => setMenuGameId((current) => current === game.id ? '' : game.id)} disabled={busy} aria-label={`More actions for ${game.title}`} aria-expanded={menuGameId === game.id}><EllipsisVertical size={18} /></button></>}
                   {canManage && menuGameId === game.id && <div className="game-card-menu" role="menu">
-                    <button type="button" role="menuitem" onClick={() => { setMenuGameId(''); openExport(game); }}><Copy size={15} /> Copy to another event</button>
+                    <button type="button" role="menuitem" onClick={() => { setMenuGameId(''); openExport(game); }}><Copy size={15} /> Export to another event</button>
                     <button type="button" role="menuitem" className="game-menu-danger" onClick={() => { setMenuGameId(''); setDeleting(game); }}><Trash2 size={15} /> Delete</button>
                   </div>}
                 </footer>
@@ -993,8 +993,8 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
         onConfirm={() => void removeGame(deleting)}
       />}
       {exporting && <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setExporting(null); }}>
-        <div className="game-confirm game-export" role="dialog" aria-modal="true" aria-label={`Copy ${exporting.title} to another event`}>
-          <strong>Copy “{exporting.title}” to…</strong>
+        <div className="game-confirm game-export" role="dialog" aria-modal="true" aria-label={`Export ${exporting.title} to another event`}>
+          <strong>Export “{exporting.title}” to…</strong>
           {exportTargets === null ? <p>Loading your events…</p>
             : exportTargets.length ? <ul>{exportTargets.map((target) => <li key={target.id}><button type="button" onClick={() => void exportGame(exporting, target)}>{target.title || 'Untitled event'}</button></li>)}</ul>
             : <p>You are not hosting any other events yet.</p>}
