@@ -714,6 +714,7 @@ async function requestGeminiGame(env, model, prompt, partial = false) {
       game: null,
       raw: '',
       error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message,
+      status: response.status,
       retryable,
       repairable: false,
       durationMs: Date.now() - startedAt,
@@ -765,10 +766,25 @@ function configuredGameModels(env) {
   ].filter(Boolean))];
 }
 
+// A model that just answered "overloaded" (503) or "rate limited" (429) usually does
+// so again for a while, after making the host wait several seconds. Skip it for ten
+// minutes and go straight to the next model.
+const MODEL_COOLDOWN_SECONDS = 600;
+const modelCooldownKey = (model) => `game-model-cooldown:${model}`;
+
+async function availableGameModels(env) {
+  const models = configuredGameModels(env);
+  const cooling = await Promise.all(models.map((model) => env.PUSH_SUBSCRIPTIONS.get(modelCooldownKey(model)).catch(() => null)));
+  const ready = models.filter((_, index) => !cooling[index]);
+  return ready.length ? ready : models;
+}
+
 async function requestGeminiGameWithFallback(env, prompt, partial = false) {
   const failures = [];
-  for (const model of configuredGameModels(env)) {
+  for (const model of await availableGameModels(env)) {
     const result = await requestGeminiGame(env, model, prompt, partial);
+    if (result.status === 503 || result.status === 429)
+      await env.PUSH_SUBSCRIPTIONS.put(modelCooldownKey(model), String(result.status), { expirationTtl: MODEL_COOLDOWN_SECONDS }).catch(() => undefined);
     if (result.game) return { ...result, model };
     // Once Gemini produced a candidate, keep that exact draft and repair it.
     // A different model is only a fallback for a service-level failure.

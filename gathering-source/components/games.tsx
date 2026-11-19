@@ -628,49 +628,52 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
     if (!backdrop) return;
     const viewport = window.visualViewport;
     let frame = 0;
-    const syncViewport = () => {
+    const timers: number[] = [];
+    const editingReview = () => {
+      const active = document.activeElement;
+      return Boolean(review && active instanceof HTMLTextAreaElement && backdrop.contains(active) && active.closest('.game-review-panel'));
+    };
+    // While the feedback composer is focused, fit the overlay to the visible area above
+    // the iOS keyboard. Otherwise drop the override so the overlay is full screen again:
+    // iOS does not reliably report the final height after the keyboard closes, and a
+    // stale measured height left the overlay cut off half way down the screen.
+    const sync = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
-        const height = Math.round(viewport?.height || window.innerHeight);
-        const top = Math.round(viewport?.offsetTop || 0);
-        backdrop.style.setProperty('--game-visual-viewport-height', `${height}px`);
-        backdrop.style.setProperty('--game-visual-viewport-top', `${top}px`);
-        const active = document.activeElement;
-        if (review && active instanceof HTMLTextAreaElement && backdrop.contains(active)) {
-          active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        const editing = editingReview();
+        backdrop.classList.toggle('is-keyboard-open', editing);
+        if (editing && viewport) {
+          backdrop.style.setProperty('--game-visual-viewport-height', `${Math.round(viewport.height)}px`);
+          backdrop.style.setProperty('--game-visual-viewport-top', `${Math.round(viewport.offsetTop)}px`);
+        } else {
+          backdrop.style.removeProperty('--game-visual-viewport-height');
+          backdrop.style.removeProperty('--game-visual-viewport-top');
+          if (window.scrollY || window.scrollX) window.scrollTo(0, 0);
         }
       });
     };
-    const trackKeyboard = (event: FocusEvent) => {
-      if (event.type === 'focusin') {
-        const target = event.target;
-        const editingReview = review && target instanceof HTMLTextAreaElement && Boolean(target.closest('.game-review-panel'));
-        backdrop.classList.toggle('is-keyboard-open', Boolean(editingReview));
-        syncViewport();
-        return;
-      }
-      window.requestAnimationFrame(() => {
-        const active = document.activeElement;
-        const editingReview = review && active instanceof HTMLTextAreaElement && Boolean(active.closest('.game-review-panel'));
-        backdrop.classList.toggle('is-keyboard-open', Boolean(editingReview));
-        syncViewport();
-      });
+    // The keyboard animates for a few hundred milliseconds; check again once it settles.
+    const syncSoon = () => {
+      sync();
+      timers.splice(0).forEach((timer) => window.clearTimeout(timer));
+      [120, 350, 700].forEach((delay) => timers.push(window.setTimeout(sync, delay)));
     };
     document.documentElement.classList.add('game-overlay-open');
     document.body.classList.add('game-overlay-open');
-    syncViewport();
-    viewport?.addEventListener('resize', syncViewport);
-    viewport?.addEventListener('scroll', syncViewport);
-    window.addEventListener('resize', syncViewport);
-    backdrop.addEventListener('focusin', trackKeyboard);
-    backdrop.addEventListener('focusout', trackKeyboard);
+    sync();
+    viewport?.addEventListener('resize', sync);
+    window.addEventListener('resize', sync);
+    window.addEventListener('orientationchange', syncSoon);
+    backdrop.addEventListener('focusin', syncSoon);
+    backdrop.addEventListener('focusout', syncSoon);
     return () => {
       window.cancelAnimationFrame(frame);
-      viewport?.removeEventListener('resize', syncViewport);
-      viewport?.removeEventListener('scroll', syncViewport);
-      window.removeEventListener('resize', syncViewport);
-      backdrop.removeEventListener('focusin', trackKeyboard);
-      backdrop.removeEventListener('focusout', trackKeyboard);
+      timers.forEach((timer) => window.clearTimeout(timer));
+      viewport?.removeEventListener('resize', sync);
+      window.removeEventListener('resize', sync);
+      window.removeEventListener('orientationchange', syncSoon);
+      backdrop.removeEventListener('focusin', syncSoon);
+      backdrop.removeEventListener('focusout', syncSoon);
       document.documentElement.classList.remove('game-overlay-open');
       document.body.classList.remove('game-overlay-open');
     };
