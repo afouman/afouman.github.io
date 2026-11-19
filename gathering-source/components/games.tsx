@@ -658,6 +658,13 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
       timers.splice(0).forEach((timer) => window.clearTimeout(timer));
       [120, 350, 700].forEach((delay) => timers.push(window.setTimeout(sync, delay)));
     };
+    // iOS zooms into a focused text box unless the page caps its scale at 1. Cap it
+    // only while a game screen is open (pinch-zoom still works on current iOS), and
+    // restore the app's own setting when it closes.
+    const viewportMeta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    const originalViewport = viewportMeta?.getAttribute('content') ?? null;
+    if (viewportMeta && originalViewport !== null && !/maximum-scale/.test(originalViewport))
+      viewportMeta.setAttribute('content', `${originalViewport}, maximum-scale=1`);
     document.documentElement.classList.add('game-overlay-open');
     document.body.classList.add('game-overlay-open');
     sync();
@@ -676,6 +683,7 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
       backdrop.removeEventListener('focusout', syncSoon);
       document.documentElement.classList.remove('game-overlay-open');
       document.body.classList.remove('game-overlay-open');
+      if (viewportMeta && originalViewport !== null) viewportMeta.setAttribute('content', originalViewport);
     };
   }, [review]);
   return (
