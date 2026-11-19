@@ -226,6 +226,17 @@ const designSummary = (result: DesignedGame) => {
   return parts.join(' · ');
 };
 
+// Safari reports any failed request as "Load failed"; say what it means instead.
+const friendlyError = (error: unknown, fallback: string) => {
+  const message = error instanceof Error ? error.message : fallback;
+  return /load failed|failed to fetch|networkerror|network connection was lost|internet connection appears to be offline/i.test(message)
+    ? 'Could not reach the Nights game designer. Check the connection, then tap Retry.'
+    : message || fallback;
+};
+
+// Event-handler timestamps (kept out of render paths).
+const timestampNow = () => Date.now();
+
 const millis = (value: unknown) => {
   const candidate = value as { toMillis?: () => number } | number | null | undefined;
   if (typeof candidate === 'number') return candidate;
@@ -244,7 +255,7 @@ function ConfirmSheet({ title, detail, action, onConfirm, onCancel }: {
   onCancel: () => void;
 }) {
   return (
-    <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
+    <div className="game-confirm-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) onCancel(); }}>
       <div className="game-confirm" role="alertdialog" aria-modal="true" aria-label={title}>
         <strong>{title}</strong>
         {detail && <p>{detail}</p>}
@@ -345,6 +356,7 @@ type ReviewProps = {
   onSubmit: () => void;
   notes: number;
   onFixNotes: () => void;
+  onRetry?: () => void;
 };
 
 function ReviewPanel({ review }: { review: ReviewProps }) {
@@ -374,7 +386,7 @@ function ReviewPanel({ review }: { review: ReviewProps }) {
         }} rows={3} maxLength={1500} placeholder="Make the board larger, show scores at the top…" disabled={review.busy} />
         <button type="submit" disabled={review.busy || !review.value.trim()} aria-label="Send design feedback"><Send size={16} /> Send</button>
       </form>
-      {review.error && <p className="game-review-error">{review.error}</p>}
+      {review.error && <p className="game-review-error">{review.error}{review.onRetry && !review.busy && <button type="button" className="game-retry" onClick={review.onRetry}><RotateCcw size={13} /> Retry</button>}</p>}
     </aside>
   );
 }
@@ -687,12 +699,11 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
     };
   }, [review]);
   return (
-    <div ref={backdropRef} className="game-sandbox-backdrop" role="presentation" onPointerDown={(event) => {
+    <div ref={backdropRef} className="game-sandbox-backdrop" role="presentation" onClick={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className={`game-sandbox-shell ${review ? 'reviewing' : ''}`} role="dialog" aria-modal="true" aria-label={`${preview ? 'Preview' : 'Play'} ${game.title}`}>
-        <header><div><p className="eyebrow">{preview ? 'Design preview' : 'Live game'}</p><h3 className="font-display">{game.title}</h3></div><button type="button" onPointerDown={(event) => {
-          event.preventDefault();
+        <header><div><p className="eyebrow">{preview ? 'Design preview' : 'Live game'}</p><h3 className="font-display">{game.title}</h3></div><button type="button" onClick={(event) => {
           event.stopPropagation();
           onClose();
         }} aria-label="Close game"><XCircle size={22} /></button></header>
@@ -731,6 +742,14 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [error, setError] = useState('');
   const [testFailures, setTestFailures] = useState<string[]>([]);
   const [checkNotes, setCheckNotes] = useState<string[]>([]);
+  // The last failed action, offered again as a Retry button.
+  const retryRef = useRef<(() => void) | null>(null);
+  const [canRetry, setCanRetry] = useState(false);
+  const offerRetry = (action: (() => void) | null) => {
+    retryRef.current = action;
+    setCanRetry(Boolean(action));
+  };
+  const runRetry = () => retryRef.current?.();
   const [menuGameId, setMenuGameId] = useState('');
   const [exporting, setExporting] = useState<EventGame | null>(null);
   const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
@@ -830,11 +849,12 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     if (draft.minPlayers < 1 || draft.maxPlayers < draft.minPlayers) return 'Check the player limits.';
     return '';
   };
-  const reportDesignFailure = (designError: unknown, setMessage: (message: string) => void) => {
+  const reportDesignFailure = (designError: unknown, setMessage: (message: string) => void, retry: () => void) => {
+    offerRetry(retry);
     if (designError instanceof GameTestFailure) {
       setTestFailures(designError.failures);
-      setMessage('The draft still breaks after one automatic repair. Adjust the description and try again; the problems are listed below.');
-    } else setMessage(designError instanceof Error ? designError.message : 'Game generation failed.');
+      setMessage('The draft still breaks after one automatic repair. Retry, or adjust the description; the problems are listed below.');
+    } else setMessage(friendlyError(designError, 'Game generation failed.'));
   };
   const notesText = (notes: string[]) => notes.length
     ? `\n\nThe checks noted ${notes.length} possible issue${notes.length === 1 ? '' : 's'} (not blocking):\n${notes.map((note) => `• ${note}`).join('\n')}`
@@ -847,6 +867,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     }
     setBusy(true);
     setError('');
+    offerRetry(null);
     setTestFailures([]);
     setCheckNotes([]);
     try {
@@ -863,18 +884,19 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setPlaying(generatedDraft);
       notify(`Playable draft ready in ${result.seconds}s${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} generations left today` : ''}.`);
     } catch (designError) {
-      reportDesignFailure(designError, setError);
+      reportDesignFailure(designError, setError, () => void generate());
     } finally {
       setBusy(false);
       setProgress('');
     }
   };
-  const revise = async (hostText: string, failures: string[] = []) => {
+  const revise = async (hostText: string, failures: string[] = [], retrying = false) => {
     if (!draft.runtime || busy) return;
-    const nextMessages: ReviewMessage[] = [...reviewMessages, { id: crypto.randomUUID(), role: 'host', text: hostText }];
+    const nextMessages: ReviewMessage[] = retrying ? reviewMessages : [...reviewMessages, { id: crypto.randomUUID(), role: 'host', text: hostText }];
     setReviewMessages(nextMessages);
     setReviewInput('');
     setReviewError('');
+    offerRetry(null);
     setBusy(true);
     try {
       const result = await designTestedGame(eventId, definitionOf(draft), {
@@ -889,7 +911,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setCheckNotes(result.warnings);
       setReviewMessages((current) => [...current, { id: crypto.randomUUID(), role: 'designer', text: `Updated (${designSummary(result)}). ${result.game.uiNotes}${notesText(result.warnings)}` }]);
     } catch (designError) {
-      reportDesignFailure(designError, setReviewError);
+      reportDesignFailure(designError, setReviewError, () => void revise(hostText, failures, true));
     } finally {
       setBusy(false);
       setProgress('');
@@ -914,6 +936,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     }
     setBusy(true);
     setError('');
+    offerRetry(null);
     setTestFailures([]);
     try {
       // Publish runs the same fast check on the exact code being published. It never
@@ -931,8 +954,8 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
         summary: draft.summary.trim(),
         status,
         createdBy: draft.createdBy || accountUid,
-        createdAt: draft.createdAt || Date.now(),
-        updatedAt: Date.now(),
+        createdAt: draft.createdAt || timestampNow(),
+        updatedAt: timestampNow(),
         version: Math.max(1, draft.version || 1) + (draft.id ? 1 : 0),
       };
       if (firebaseConfigured) {
@@ -956,7 +979,10 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       if (saveError instanceof GameTestFailure) {
         setTestFailures(saveError.failures);
         setError('The game breaks in its check, so nothing was published. Refine or regenerate it, then publish again.');
-      } else setError(saveError instanceof Error ? saveError.message : 'Game could not be saved.');
+      } else {
+        offerRetry(() => void persist(status));
+        setError(friendlyError(saveError, 'Game could not be saved.'));
+      }
     } finally {
       setBusy(false);
       setProgress('');
@@ -1037,14 +1063,13 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   };
 
   return (
-    <div className="game-panel-backdrop" role="presentation" onPointerDown={(event) => {
+    <div className="game-panel-backdrop" role="presentation" onClick={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
         <header className="game-panel-header">
           <div><p className="eyebrow">{eventTitle}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
-          <button type="button" onPointerDown={(event) => {
-            event.preventDefault();
+          <button type="button" onClick={(event) => {
             event.stopPropagation();
             onClose();
           }} aria-label="Close games"><XCircle size={22} /></button>
@@ -1055,7 +1080,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
             <div><strong>Describe any simple gathering game</strong><p>Nights writes it, tests it in an isolated sandbox, and lets attendees play at as many tables as they like.</p></div>
             <button type="button" onClick={beginCreate}><Plus size={17} /> Create game</button>
           </section>}
-          {error && <p className="game-panel-error">{error}</p>}
+          {error && <p className="game-panel-error">{error}{canRetry && !busy && <button type="button" className="game-retry" onClick={runRetry}><RotateCcw size={13} /> Retry</button>}</p>}
           <section className="game-library" aria-label="Event games">
             <header><div><p className="eyebrow">Game shelf</p><h3 className="font-display">{canManage ? 'Your event games' : 'Ready to play'}</h3></div><span>{visibleGames.length}</span></header>
             {loading ? <div className="game-empty"><Sparkles size={24} /><strong>Loading games…</strong></div> : visibleGames.length ? <div className="game-card-grid">{visibleGames.map((game) => {
@@ -1076,7 +1101,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
           </section>
         </> : <section className="game-editor">
           <header><div><p className="eyebrow">{draft.id ? 'Edit game' : 'New game'}</p><h3 className="font-display">Define the experience</h3><span>Be specific, then generate. Every draft is tested in the sandbox before you see it.</span></div><button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Back to games</button></header>
-          {error && <p className="game-panel-error">{error}</p>}
+          {error && <p className="game-panel-error">{error}{canRetry && !busy && <button type="button" className="game-retry" onClick={runRetry}><RotateCcw size={13} /> Retry</button>}</p>}
           {testFailures.length > 0 && <div className="game-test-failures"><strong>Problems the sandbox tests found</strong><ul>{testFailures.map((failure) => <li key={failure}>{failure}</li>)}</ul></div>}
           <div className="game-editor-grid">
             <label className="game-field game-field-title"><span>Game name</span><input value={draft.title} onChange={(event) => updateDraft('title', event.target.value)} placeholder="Reverse Charades" maxLength={90} /></label>
@@ -1108,7 +1133,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
         onCancel={() => setDeleting(null)}
         onConfirm={() => void removeGame(deleting)}
       />}
-      {exporting && <div className="game-confirm-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setExporting(null); }}>
+      {exporting && <div className="game-confirm-backdrop" role="presentation" onClick={(event) => { if (event.target === event.currentTarget) setExporting(null); }}>
         <div className="game-confirm game-export" role="dialog" aria-modal="true" aria-label={`Export ${exporting.title} to another event`}>
           <strong>Export “{exporting.title}” to…</strong>
           {exportTargets === null ? <p>Loading your events…</p>
@@ -1133,6 +1158,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
           onSubmit: () => void refine(),
           notes: checkNotes.length,
           onFixNotes: () => void fixNotes(),
+          onRetry: reviewError && canRetry ? runRetry : undefined,
         } : undefined}
         onClose={() => { setPlaying(null); setDesignPreview(false); }}
       />}

@@ -5931,6 +5931,7 @@ html.game-overlay-open, body.game-overlay-open { overflow: hidden; overscroll-be
 .game-review-message small { display: block; margin-bottom: 0.2rem; color: #9ce6cf; font-size: 0.51rem; font-weight: 850; }
 .game-review-message p { margin: 0; color: rgb(255 255 255 / 0.83); font-size: 0.65rem; line-height: 1.45; white-space: pre-wrap; }
 .game-review-message.thinking { opacity: 0.68; }
+.game-retry { display: inline-flex; align-items: center; gap: 0.3rem; margin-left: 0.6rem; border-radius: 999px; background: #a3343c; padding: 0.35rem 0.75rem; color: #fff; font-size: 0.62rem; font-weight: 900; vertical-align: middle; }
 .game-review-fix { display: inline-flex; align-self: flex-start; align-items: center; gap: 0.35rem; border: 1px solid rgb(240 199 123 / 0.4); border-radius: 999px; background: rgb(240 199 123 / 0.14); padding: 0.45rem 0.8rem; color: #f7dfae; font-size: 0.62rem; font-weight: 850; }
 .game-review-panel > form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; border-top: 1px solid rgb(255 255 255 / 0.08); padding: 0.75rem; }
 .game-review-panel textarea { width: 100%; min-height: 72px; max-height: 150px; resize: vertical; border: 1px solid rgb(255 255 255 / 0.13); border-radius: 0.85rem; background: rgb(4 20 21 / 0.72); padding: 0.65rem 0.7rem; color: #fff; font: inherit; font-size: 16px; line-height: 1.4; outline: 0; touch-action: pan-x pan-y pinch-zoom; -webkit-text-size-adjust: 100%; }

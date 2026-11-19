@@ -7,6 +7,7 @@ import { createPortal } from 'react-dom';
 import Image from 'next/image';
 import EmojiPicker, { EmojiStyle, Theme } from 'emoji-picker-react';
 import { GamePanel } from '../components/games';
+import { useScrollMemory } from '../components/scroll-memory';
 import {
   ArrowLeft,
   Bell,
@@ -1443,6 +1444,7 @@ async function compressImageForDocument(file: File, maxDataUrlLength: number) {
 }
 
 export default function Home() {
+  useScrollMemory();
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
   const [menu, setMenu] = useState<EventMenu>(firebaseConfigured ? emptyEventMenu : demoMenu);
   const [events, setEvents] = useState<EventMenu[]>(firebaseConfigured ? [] : [demoMenu]);
