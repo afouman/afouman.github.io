@@ -5892,8 +5892,9 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-editor-actions .game-generate { background: #244e59; color: #fff; }
 .game-editor-actions .game-publish { background: #176d64; color: #fff; }
 .game-editor-actions button:disabled { opacity: 0.45; }
-.game-sandbox-backdrop { position: fixed; z-index: 180; inset: 0; display: grid; place-items: center; background: rgb(2 10 12 / 0.82); padding: 1rem; backdrop-filter: blur(16px); }
-.game-sandbox-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(780px, 100%); height: min(880px, calc(100dvh - 2rem)); overflow: hidden; border: 1px solid rgb(255 255 255 / 0.12); border-radius: 1.7rem; background: #0b2425; color: #f7f2e8; box-shadow: 0 40px 130px rgb(0 0 0 / 0.6); }
+html.game-overlay-open, body.game-overlay-open { overflow: hidden; overscroll-behavior: none; }
+.game-sandbox-backdrop { position: fixed; z-index: 180; top: var(--game-visual-viewport-top, 0); right: 0; bottom: auto; left: 0; display: grid; width: 100%; height: var(--game-visual-viewport-height, 100dvh); place-items: center; overflow: hidden; background: rgb(2 10 12 / 0.82); padding: 1rem; backdrop-filter: blur(16px); }
+.game-sandbox-shell { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: min(780px, 100%); height: min(880px, calc(var(--game-visual-viewport-height, 100dvh) - 2rem)); overflow: hidden; border: 1px solid rgb(255 255 255 / 0.12); border-radius: 1.7rem; background: #0b2425; color: #f7f2e8; box-shadow: 0 40px 130px rgb(0 0 0 / 0.6); }
 .game-sandbox-shell > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(255 255 255 / 0.1); padding: 1rem 1.15rem; }
 .game-sandbox-shell > header h3 { margin-top: 0.1rem; font-size: 1.6rem; }
 .game-sandbox-shell > header button { display: grid; width: 40px; height: 40px; place-items: center; border-radius: 50%; background: rgb(255 255 255 / 0.1); color: #fff; }
@@ -5930,8 +5931,9 @@ button.profile-balance:hover { background: #edf8f4; }
 .game-review-message small { display: block; margin-bottom: 0.2rem; color: #9ce6cf; font-size: 0.51rem; font-weight: 850; }
 .game-review-message p { margin: 0; color: rgb(255 255 255 / 0.83); font-size: 0.65rem; line-height: 1.45; white-space: pre-wrap; }
 .game-review-message.thinking { opacity: 0.68; }
+.game-review-fix { display: inline-flex; align-self: flex-start; align-items: center; gap: 0.35rem; border: 1px solid rgb(240 199 123 / 0.4); border-radius: 999px; background: rgb(240 199 123 / 0.14); padding: 0.45rem 0.8rem; color: #f7dfae; font-size: 0.62rem; font-weight: 850; }
 .game-review-panel > form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.5rem; border-top: 1px solid rgb(255 255 255 / 0.08); padding: 0.75rem; }
-.game-review-panel textarea { width: 100%; min-height: 72px; max-height: 150px; resize: vertical; border: 1px solid rgb(255 255 255 / 0.13); border-radius: 0.85rem; background: rgb(4 20 21 / 0.72); padding: 0.65rem 0.7rem; color: #fff; font: inherit; font-size: 16px; line-height: 1.4; outline: 0; }
+.game-review-panel textarea { width: 100%; min-height: 72px; max-height: 150px; resize: vertical; border: 1px solid rgb(255 255 255 / 0.13); border-radius: 0.85rem; background: rgb(4 20 21 / 0.72); padding: 0.65rem 0.7rem; color: #fff; font: inherit; font-size: 16px; line-height: 1.4; outline: 0; touch-action: pan-x pan-y pinch-zoom; -webkit-text-size-adjust: 100%; }
 .game-review-panel textarea::placeholder { color: rgb(255 255 255 / 0.34); }
 .game-review-panel textarea:focus { border-color: #98dbc7; box-shadow: 0 0 0 3px rgb(152 219 199 / 0.1); }
 .game-review-panel form button { display: inline-flex; min-width: 74px; align-items: center; align-self: end; justify-content: center; gap: 0.3rem; border-radius: 0.8rem; background: #98dbc7; padding: 0.7rem 0.75rem; color: #092421; font-size: 0.62rem; font-weight: 900; }
@@ -6006,7 +6008,7 @@ button.profile-balance:hover { background: #edf8f4; }
   .game-runtime-ready { grid-template-columns: auto 1fr; }
   .game-runtime-ready button { grid-column: 1 / -1; justify-content: center; }
   .game-sandbox-backdrop { padding: 0; }
-  .game-sandbox-shell { width: 100%; height: 100dvh; border: 0; border-radius: 0; }
+  .game-sandbox-shell { width: 100%; height: var(--game-visual-viewport-height, 100dvh); border: 0; border-radius: 0; }
   .game-sandbox-shell.reviewing { grid-template-columns: 1fr; grid-template-rows: auto auto minmax(220px, 1fr) minmax(180px, 34dvh) auto; width: 100%; }
   .game-sandbox-shell.reviewing > header { grid-column: 1; grid-row: 1; }
   .game-sandbox-shell.reviewing > .game-session-bar { grid-column: 1; grid-row: 2; }
@@ -6016,6 +6018,13 @@ button.profile-balance:hover { background: #edf8f4; }
   .game-review-panel > header { padding: 0.65rem 0.8rem; }
   .game-review-messages { padding: 0.7rem; }
   .game-review-panel > form { padding: 0.6rem max(0.65rem, env(safe-area-inset-right)) 0.6rem max(0.65rem, env(safe-area-inset-left)); }
+  .game-sandbox-backdrop.is-keyboard-open .game-sandbox-shell.reviewing { grid-template-rows: auto minmax(0, 1fr); }
+  .game-sandbox-backdrop.is-keyboard-open .game-sandbox-shell.reviewing > .game-session-bar,
+  .game-sandbox-backdrop.is-keyboard-open .game-sandbox-shell.reviewing > iframe,
+  .game-sandbox-backdrop.is-keyboard-open .game-sandbox-shell.reviewing > .game-stage,
+  .game-sandbox-backdrop.is-keyboard-open .game-sandbox-shell.reviewing > footer { display: none; }
+  .game-sandbox-backdrop.is-keyboard-open .game-review-panel { grid-column: 1; grid-row: 2; min-height: 0; }
+  .game-sandbox-backdrop.is-keyboard-open .game-review-messages { min-height: 0; }
 }
 
 .expense-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(5 15 18 / 0.72); padding: 1.25rem; backdrop-filter: blur(12px); }

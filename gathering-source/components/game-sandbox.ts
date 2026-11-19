@@ -498,11 +498,12 @@ const FRAME_SOURCE = String.raw`
     if (!worst || poor < Math.max(1, checked * 0.15)) return '';
     return 'Text is hard to read: "' + worst.text + '" is ' + worst.fg + ' on ' + worst.bg + ' (contrast ' + worst.ratio.toFixed(1) + ':1). Always set an explicit text color that contrasts with each background you set.';
   }
-  async function tapAndCheck(viewer, index, fill, note) {
+  // Taps one button and returns the first action it sent that move() accepts, or null.
+  async function tapForMove(viewer, index, fill, note) {
     await renderAs(viewer);
     if (fill) fillInputs();
     var button = root.querySelectorAll('button')[index];
-    if (!button || button.disabled) return false;
+    if (!button || button.disabled) return null;
     uiErrors = [];
     testSink = [];
     button.click();
@@ -512,105 +513,144 @@ const FRAME_SOURCE = String.raw`
     testSink = null;
     if (uiErrors.length) note('Tapping ' + label(button, index) + ' as ' + viewer + ' threw: ' + uiErrors[0], 'tap:' + uiErrors[0]);
     for (var s = 0; s < sent.length; s += 1) {
-      try { await engine.call('check', { player: viewer, action: sent[s], at: 1700000000000 }); return true; }
-      catch (error) { /* refusals such as "not your turn" are expected */ }
+      try { await engine.call('check', { player: viewer, action: sent[s], at: 1700000000000 }); return sent[s]; }
+      catch (error) {
+        // Refusals such as "not your turn" are expected; crashes in move() are not.
+        if (isRulesBug(error)) note('move() crashed when ' + viewer + ' tapped ' + label(button, index) + ': ' + text(error), 'bug:' + text(error));
+      }
     }
-    return false;
+    return null;
   }
-  async function clickSmoke(list, seed, viewer, note) {
-    var accepted = false;
-    await engine.call('reset', { players: list, seed: seed, creator: 'p1' });
-    players = list;
-    var problem = await renderAs(viewer);
-    if (problem) return false;
-    var total = Math.min(root.querySelectorAll('button').length, 40);
+  function isRulesBug(error) { return text(error).indexOf('Game rules error: ') === 0 || text(error).indexOf('took too long') >= 0; }
+  // Finds one legal opening move by tapping the viewer's buttons, as-is first and then
+  // with empty fields filled. Stops at the first legal move.
+  async function findOpeningMove(viewer, note) {
+    await renderAs(viewer);
+    var total = Math.min(root.querySelectorAll('button').length, 16);
     for (var index = 0; index < total; index += 1) {
-      if (await tapAndCheck(viewer, index, false, note)) accepted = true;
-      else if (await tapAndCheck(viewer, index, true, note)) accepted = true;
+      var action = await tapForMove(viewer, index, false, note);
+      if (!action) action = await tapForMove(viewer, index, true, note);
+      if (action) return action;
     }
-    return accepted;
+    return null;
   }
+
+  // The draft check. It is a quality gate, not a security gate: security comes from the
+  // sandbox, the network policy and the server referee, whatever the draft contains.
+  // blocking: objective breakage (code does not load, crashes, empty screens, no legal
+  //           opening move, a crash after that move, replay mismatch).
+  // warnings: heuristics and Gemini's own scenarios, which can be wrong themselves.
   async function selfTest(spec) {
-    var failures = [];
+    var blocking = [];
+    var warnings = [];
     var seen = {};
-    function note(message, key) {
+    function add(list, message, key) {
       var id = key || message;
-      if (seen[id] || failures.length >= 15) return;
+      if (seen[id] || list.length >= 10) return;
       seen[id] = true;
-      failures.push(message);
+      list.push(message);
     }
-    problems.forEach(function (problem) { note(problem); });
-    if (!renderFn || problems.length) return failures;
+    function block(message, key) { add(blocking, message, key); }
+    function warn(message, key) { add(warnings, message, key); }
+    problems.forEach(function (problem) { block(problem); });
+    if (!renderFn || problems.length) return { blocking: blocking, warnings: warnings };
     var min = Math.max(1, spec.minPlayers | 0);
     var max = Math.max(min, spec.maxPlayers | 0);
-    var counts = [min, Math.min(max, Math.max(min, 3)), Math.min(max, 6)].filter(function (n, i, all) { return all.indexOf(n) === i; });
-    var anyAccepted = false;
-    for (var c = 0; c < counts.length; c += 1) {
-      var n = counts[c];
-      var list = seats(n);
-      try { await engine.call('reset', { players: list, seed: 1000 + n, creator: 'p1' }); }
-      catch (error) { note('setup() failed with ' + n + ' players: ' + text(error), 'setup:' + text(error)); continue; }
-      players = list;
-      var viewers = list.map(function (p) { return p.id; }).concat([null]);
-      for (var v = 0; v < viewers.length; v += 1) {
-        var problem = await renderAs(viewers[v]);
-        if (problem) note(problem + ' (for example with ' + n + ' players, viewer ' + (viewers[v] || 'spectator') + ').', problem);
-        else {
+    var counts = min === max ? [min] : [min, max];
+    var contrastChecked = false;
+    async function renderEveryone(count, when) {
+      var ids = seats(count).map(function (p) { return p.id; }).slice(0, 2).concat([null]);
+      for (var v = 0; v < ids.length; v += 1) {
+        var problem = await renderAs(ids[v]);
+        if (problem) block(problem + ' (' + when + ', ' + count + ' players, viewer ' + (ids[v] || 'spectator') + ').', problem + when);
+        else if (!contrastChecked) {
           var readability = unreadableText();
-          if (readability) note(readability, 'contrast');
+          if (readability) { warn(readability, 'contrast'); contrastChecked = true; }
         }
       }
-      for (var p = 0; p < Math.min(n, 4); p += 1) {
-        if (await clickSmoke(list, 1000 + n, list[p].id, note)) anyAccepted = true;
-      }
     }
-    if (!anyAccepted) note('No button on the opening screen produced a move that move() accepts, for any player. Every tappable control must be a <button> whose click handler calls ctx.send with a legal action.');
+    for (var c = 0; c < counts.length; c += 1) {
+      var list = seats(counts[c]);
+      try { await engine.call('reset', { players: list, seed: 1000 + counts[c], creator: 'p1' }); }
+      catch (error) { block('setup() failed with ' + counts[c] + ' players: ' + text(error), 'setup:' + text(error)); continue; }
+      players = list;
+      await renderEveryone(counts[c], 'opening screen');
+    }
+    if (blocking.length) return { blocking: blocking, warnings: warnings };
+
+    // One legal opening move, then every screen again, then a replay of the same move.
+    var people = seats(min);
+    await engine.call('reset', { players: people, seed: 1000 + min, creator: 'p1' });
+    players = people;
+    var mover = null;
+    var opening = null;
+    var candidates = people.map(function (p) { return p.id; }).slice(0, 2);
+    for (var m = 0; m < candidates.length && !opening; m += 1) {
+      opening = await findOpeningMove(candidates[m], block);
+      if (opening) mover = candidates[m];
+    }
+    if (!opening) {
+      block('No button on the opening screen produced a move that move() accepts. Every tappable control must be a <button> whose click handler calls ctx.send with a legal action.');
+      return { blocking: blocking, warnings: warnings };
+    }
+    var at = 1700000000000;
+    var applied = await engine.call('apply', { moves: [{ player: mover, at: at, action: opening }] });
+    if (applied[0] !== 'ok') block('The opening move ' + JSON.stringify(opening).slice(0, 120) + ' passed check() but failed when applied: ' + applied[0]);
+    await renderEveryone(min, 'after the first move');
+    try {
+      var afterMove = JSON.stringify(await engine.call('view', { player: 'p1' }));
+      await engine.call('reset', { players: people, seed: 1000 + min, creator: 'p1' });
+      await engine.call('apply', { moves: [{ player: mover, at: at, action: opening }] });
+      if (JSON.stringify(await engine.call('view', { player: 'p1' })) !== afterMove)
+        block('Replaying the same move from the same start produced a different result. Use only ctx.rng and ctx.now for randomness and time.');
+    } catch (error) { block('Replaying the first move failed: ' + text(error)); }
+
+    // Gemini's own scenarios: useful hints, but they are written by the same model and
+    // can be wrong, so they never block a draft.
     var scenarios = [];
-    try { scenarios = JSON.parse(config.tests || '[]'); } catch (error) { scenarios = null; }
-    if (!Array.isArray(scenarios) || !scenarios.length) { note('tests must be a JSON array with at least one scenario.'); return failures; }
-    for (var t = 0; t < Math.min(scenarios.length, 6); t += 1) {
+    try { scenarios = JSON.parse(config.tests || '[]'); } catch (error) { scenarios = []; }
+    if (!Array.isArray(scenarios)) scenarios = [];
+    for (var t = 0; t < Math.min(scenarios.length, 4); t += 1) {
       var scenario = scenarios[t] || {};
       var name = String(scenario.name || 'Scenario ' + (t + 1)).slice(0, 80);
       var size = Math.min(max, Math.max(min, Number(scenario.players) || min));
-      var people = seats(size);
-      try { await engine.call('reset', { players: people, seed: 7, creator: 'p1' }); }
-      catch (error) { note('Scenario "' + name + '": setup() failed: ' + text(error)); continue; }
-      players = people;
-      var steps = Array.isArray(scenario.steps) ? scenario.steps : [];
+      var cast = seats(size);
+      try { await engine.call('reset', { players: cast, seed: 7, creator: 'p1' }); }
+      catch (error) { warn('Scenario "' + name + '": setup() failed: ' + text(error)); continue; }
+      players = cast;
+      var steps = Array.isArray(scenario.steps) ? scenario.steps.slice(0, 40) : [];
       for (var s = 0; s < steps.length; s += 1) {
         var step = steps[s] || {};
         var who = String(step.player || 'p1');
-        var at = 1700000000000 + s * 1000;
+        var stepAt = 1700000000000 + s * 1000;
         var acceptedStep = true;
         var reason = '';
-        try { await engine.call('check', { player: who, action: step.action || {}, at: at }); }
-        catch (error) { acceptedStep = false; reason = text(error); }
+        try { await engine.call('check', { player: who, action: step.action || {}, at: stepAt }); }
+        catch (error) {
+          acceptedStep = false;
+          reason = text(error);
+          if (isRulesBug(error)) block('move() crashed in scenario "' + name + '" step ' + (s + 1) + ': ' + reason, 'bug:' + reason);
+        }
         var expected = step.expect !== 'reject';
         if (acceptedStep !== expected)
-          note('Scenario "' + name + '" step ' + (s + 1) + ': ' + who + ' sent ' + JSON.stringify(step.action || {}).slice(0, 160)
-            + ' and move() ' + (acceptedStep ? 'accepted it' : 'refused it ("' + reason + '")') + ', but the test expected it to be ' + (expected ? 'accepted' : 'refused') + '.');
-        await engine.call('apply', { moves: [{ player: who, at: at, action: step.action || {} }] });
-      }
-      for (var r = 0; r < people.length; r += 1) {
-        var endProblem = await renderAs(people[r].id);
-        if (endProblem) note('Scenario "' + name + '": at the end, ' + endProblem + ' for ' + people[r].id + '.');
-        else {
-          var endReadability = unreadableText();
-          if (endReadability) note(endReadability, 'contrast');
-        }
+          warn('Scenario "' + name + '" step ' + (s + 1) + ': ' + who + ' sent ' + JSON.stringify(step.action || {}).slice(0, 120)
+            + ' and move() ' + (acceptedStep ? 'accepted it' : 'refused it ("' + reason + '")') + ', but the scenario expected it to be ' + (expected ? 'accepted' : 'refused') + '.');
+        await engine.call('apply', { moves: [{ player: who, at: stepAt, action: step.action || {} }] });
       }
       var expectText = scenario.expectText;
-      if (expectText && Array.isArray(expectText.includes)) {
-        await renderAs(String(expectText.player || 'p1'));
+      var finalViewer = String((expectText && expectText.player) || 'p1');
+      var endProblem = await renderAs(finalViewer);
+      if (endProblem) block('After scenario "' + name + '", ' + endProblem + ' for ' + finalViewer + '.', 'end:' + endProblem);
+      else if (expectText && Array.isArray(expectText.includes)) {
         var screenText = (root.innerText || root.textContent).replace(/\s+/g, ' ').trim();
         var screen = screenText.toLowerCase();
-        expectText.includes.forEach(function (fragment) {
+        expectText.includes.slice(0, 6).forEach(function (fragment) {
           if (screen.indexOf(String(fragment).toLowerCase()) < 0)
-            note('Scenario "' + name + '": the final screen for ' + (expectText.player || 'p1') + ' does not show "' + String(fragment).slice(0, 60) + '". It shows: "' + screenText.slice(0, 160) + '".');
+            warn('Scenario "' + name + '": the final screen for ' + finalViewer + ' does not show "' + String(fragment).slice(0, 60) + '". It shows: "' + screenText.slice(0, 140) + '".');
         });
       }
     }
-    return failures;
+    return { blocking: blocking, warnings: warnings };
   }
 
   addEventListener('message', function (event) {
@@ -631,8 +671,8 @@ const FRAME_SOURCE = String.raw`
       }
       else if (input.type === 'notice') showBanner(String(input.message || '').slice(0, 200), 'notice');
       else if (input.type === 'test') {
-        selfTest(input).then(function (failures) { post({ type: 'test-result', failures: failures }); },
-          function (error) { post({ type: 'test-result', failures: ['The self-test crashed: ' + text(error)] }); });
+        selfTest(input).then(function (result) { post({ type: 'test-result', failures: result.blocking, warnings: result.warnings }); },
+          function (error) { post({ type: 'test-result', failures: ['The check crashed: ' + text(error)], warnings: [] }); });
       }
     };
     port.start();
@@ -688,7 +728,7 @@ type FrameMessage =
   | { type: 'ready'; engine?: string; problems?: unknown }
   | { type: 'send'; action: unknown }
   | { type: 'error'; message: unknown }
-  | { type: 'test-result'; failures: unknown };
+  | { type: 'test-result'; failures: unknown; warnings?: unknown };
 
 // Validates one message from a sandbox. Anything unexpected is dropped.
 export function readFrameMessage(data: unknown): FrameMessage | null {
@@ -704,9 +744,14 @@ export function readFrameMessage(data: unknown): FrameMessage | null {
   return { type: 'send', action: JSON.parse(json) as Record<string, unknown> };
 }
 
-// Runs a candidate game through the in-sandbox self-test in a hidden frame.
-// Resolves to a list of human-readable problems; an empty list means it passed.
-export function runSelfTest(runtime: GameRuntime, minPlayers: number, maxPlayers: number): Promise<string[]> {
+export type GameCheckResult = { blocking: string[]; warnings: string[]; ms: number };
+
+const asMessages = (value: unknown) => Array.isArray(value) ? value.map((item) => String(item).slice(0, 600)).slice(0, 10) : [];
+
+// Runs a candidate game through the check in ONE hidden sandbox. Typically well under
+// a second. blocking problems stop a draft; warnings are shown to the host.
+export function runGameChecks(runtime: GameRuntime, minPlayers: number, maxPlayers: number): Promise<GameCheckResult> {
+  const started = performance.now();
   return new Promise((resolve) => {
     const frame = document.createElement('iframe');
     frame.setAttribute('sandbox', SANDBOX_ATTRIBUTES.sandbox);
@@ -718,20 +763,19 @@ export function runSelfTest(runtime: GameRuntime, minPlayers: number, maxPlayers
     const channel = new MessageChannel();
     let loads = 0;
     let finished = false;
-    const finish = (failures: string[]) => {
+    const finish = (blocking: string[], warnings: string[] = []) => {
       if (finished) return;
       finished = true;
       window.clearTimeout(timer);
       channel.port1.close();
       frame.remove();
-      resolve(failures);
+      resolve({ blocking, warnings, ms: Math.round(performance.now() - started) });
     };
-    const timer = window.setTimeout(() => finish(['The game did not finish its self-test within 30 seconds (an endless loop or an extremely slow screen).']), 30_000);
+    const timer = window.setTimeout(() => finish(['The game did not finish its check within 15 seconds (an endless loop or an extremely slow screen).']), 15_000);
     channel.port1.onmessage = ({ data }) => {
       const message = readFrameMessage(data);
       if (message?.type === 'ready') channel.port1.postMessage({ type: 'test', minPlayers, maxPlayers });
-      if (message?.type === 'test-result')
-        finish(Array.isArray(message.failures) ? message.failures.map((item) => String(item).slice(0, 600)).slice(0, 15) : ['The self-test returned no result.']);
+      if (message?.type === 'test-result') finish(asMessages(message.failures), asMessages(message.warnings));
     };
     frame.addEventListener('load', () => {
       loads += 1;
@@ -745,4 +789,9 @@ export function runSelfTest(runtime: GameRuntime, minPlayers: number, maxPlayers
     frame.srcdoc = sandboxDocument(runtime);
     document.body.appendChild(frame);
   });
+}
+
+// Compatibility: blocking problems only.
+export async function runSelfTest(runtime: GameRuntime, minPlayers: number, maxPlayers: number): Promise<string[]> {
+  return (await runGameChecks(runtime, minPlayers, maxPlayers)).blocking;
 }

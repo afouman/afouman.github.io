@@ -13,7 +13,7 @@ import { Check, Copy, Gamepad2, LogOut, MessageCircle, EllipsisVertical, Pencil,
 import {
   isPlayableRuntime,
   readFrameMessage,
-  runSelfTest,
+  runGameChecks,
   SANDBOX_ATTRIBUTES,
   sandboxDocument,
   type GameRuntime,
@@ -30,7 +30,8 @@ const GAME_API_URL = 'https://gaemaj.tech/api/games';
 const GAME_LIVE_URL = 'wss://gaemaj.tech/api/games/live';
 const HOST_EMAIL = process.env.NEXT_PUBLIC_HOST_EMAIL?.trim().toLowerCase();
 const LEGACY_HOST_UID = process.env.NEXT_PUBLIC_LEGACY_HOST_UID?.trim() || 'W2T8SwFA1pdg8wxm23E5kQqbEHv2';
-const REPAIR_ATTEMPTS = 3;
+// At most one automatic repair, and only for objective breakage.
+const REPAIR_ATTEMPTS = 1;
 
 export type GameViewer = { id: string; name: string };
 
@@ -147,6 +148,8 @@ const idToken = async () => {
   return user.getIdToken();
 };
 
+type GameDraftResponse = { game: GameRuntime; remainingToday?: number; model?: string; changed?: string[]; serverMs?: number };
+
 const requestGameDraft = async (
   eventId: string,
   definition: GameDefinition,
@@ -157,14 +160,9 @@ const requestGameDraft = async (
     headers: { 'content-type': 'application/json', authorization: `Bearer ${await idToken()}` },
     body: JSON.stringify({ eventId, definition, ...revision }),
   });
-  const result = await response.json().catch(() => null) as {
-    game?: GameRuntime;
-    error?: string;
-    remainingToday?: number;
-    model?: string;
-  } | null;
+  const result = await response.json().catch(() => null) as Partial<GameDraftResponse> & { error?: string } | null;
   if (!response.ok || !result?.game) throw new Error(result?.error || 'The game designer is unavailable right now.');
-  return result as { game: GameRuntime; remainingToday?: number; model?: string };
+  return result as GameDraftResponse;
 };
 
 // Events this account hosts, read directly so copying works from any view
@@ -191,25 +189,42 @@ class GameTestFailure extends Error {
   }
 }
 
-// Generate (or revise), then run the sandbox self-test and send any failures back
-// to Gemini until the draft passes or the repair budget is used.
+type DesignedGame = GameDraftResponse & { repairs: number; warnings: string[]; seconds: number; checkMs: number };
+
+// Generate (or revise), then run ONE fast sandbox check. Only objective breakage
+// (blocking) triggers a single targeted repair; warnings go to the host instead of
+// into silent rewrites. Security does not depend on this check: generated code always
+// runs in the sandbox, and live games are refereed by the server.
 async function designTestedGame(
   eventId: string,
   definition: GameDefinition,
-  revision: { previousGame?: GameRuntime; feedback?: string[] },
+  revision: { previousGame?: GameRuntime; feedback?: string[]; failures?: string[] },
   onProgress: (message: string) => void,
-) {
-  onProgress(revision.previousGame ? 'Applying your feedback…' : 'Designing the game…');
+): Promise<DesignedGame> {
+  const started = performance.now();
+  onProgress(revision.failures?.length ? 'Fixing the notes…' : revision.previousGame ? 'Applying your feedback…' : 'Designing the game…');
   let result = await requestGameDraft(eventId, definition, revision);
+  let checkMs = 0;
   for (let attempt = 0; ; attempt += 1) {
-    onProgress(attempt ? `Re-testing repair ${attempt}…` : 'Testing the draft in the sandbox…');
-    const failures = await runSelfTest(result.game, definition.minPlayers, definition.maxPlayers);
-    if (!failures.length) return { ...result, repairs: attempt };
-    if (attempt >= REPAIR_ATTEMPTS) throw new GameTestFailure(failures);
-    onProgress(`Fixing ${failures.length} problem${failures.length === 1 ? '' : 's'} found by the tests…`);
-    result = await requestGameDraft(eventId, definition, { previousGame: result.game, failures, feedback: revision.feedback });
+    onProgress(attempt ? 'Checking the repair…' : 'Checking the draft…');
+    const check = await runGameChecks(result.game, definition.minPlayers, definition.maxPlayers);
+    checkMs += check.ms;
+    if (!check.blocking.length)
+      return { ...result, repairs: attempt, warnings: check.warnings, checkMs, seconds: Math.round((performance.now() - started) / 100) / 10 };
+    if (attempt >= REPAIR_ATTEMPTS) throw new GameTestFailure(check.blocking);
+    onProgress(`Repairing ${check.blocking.length} problem${check.blocking.length === 1 ? '' : 's'}…`);
+    result = await requestGameDraft(eventId, definition, { previousGame: result.game, failures: check.blocking });
   }
 }
+
+const modelLabel = (model?: string) => (model || 'Gemini').replace(/^gemini-/i, 'Gemini ').replace(/-/g, ' ');
+
+const designSummary = (result: DesignedGame) => {
+  const parts = [`${result.seconds}s`, modelLabel(result.model)];
+  if (result.repairs) parts.push('1 automatic repair');
+  if (result.changed?.length) parts.push(`changed ${result.changed.filter((field) => field !== 'uiNotes').join(', ') || 'notes'}`);
+  return parts.join(' · ');
+};
 
 const millis = (value: unknown) => {
   const candidate = value as { toMillis?: () => number } | number | null | undefined;
@@ -328,10 +343,13 @@ type ReviewProps = {
   error: string;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  notes: number;
+  onFixNotes: () => void;
 };
 
 function ReviewPanel({ review }: { review: ReviewProps }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
   }, [review.messages, review.busy]);
@@ -341,9 +359,14 @@ function ReviewPanel({ review }: { review: ReviewProps }) {
       <div ref={listRef} className="game-review-messages" aria-live="polite">
         {review.messages.map((message) => <div key={message.id} className={`game-review-message ${message.role}`}><small>{message.role === 'host' ? 'You' : 'Nights designer'}</small><p>{message.text}</p></div>)}
         {review.busy && <div className="game-review-message designer thinking"><small>Nights designer</small><p>{review.progress || 'Working…'}</p></div>}
+        {!review.busy && review.notes > 0 && <button type="button" className="game-review-fix" onClick={review.onFixNotes}><Sparkles size={14} /> Fix {review.notes} noted issue{review.notes === 1 ? '' : 's'}</button>}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); review.onSubmit(); }}>
-        <textarea value={review.value} onChange={(event) => review.onChange(event.target.value)} onKeyDown={(event) => {
+        <textarea ref={inputRef} value={review.value} onChange={(event) => review.onChange(event.target.value)} onFocus={() => {
+          // iOS updates the visual viewport after focus. Re-check once the
+          // keyboard animation begins so the composer remains above it.
+          window.setTimeout(() => inputRef.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }), 80);
+        }} onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
             review.onSubmit();
@@ -599,8 +622,61 @@ function GamePlayer({ eventId, game, viewer, preview, review, onClose }: {
   onClose: () => void;
 }) {
   const runtime = game.runtime as GameRuntime;
+  const backdropRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const backdrop = backdropRef.current;
+    if (!backdrop) return;
+    const viewport = window.visualViewport;
+    let frame = 0;
+    const syncViewport = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const height = Math.round(viewport?.height || window.innerHeight);
+        const top = Math.round(viewport?.offsetTop || 0);
+        backdrop.style.setProperty('--game-visual-viewport-height', `${height}px`);
+        backdrop.style.setProperty('--game-visual-viewport-top', `${top}px`);
+        const active = document.activeElement;
+        if (review && active instanceof HTMLTextAreaElement && backdrop.contains(active)) {
+          active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+      });
+    };
+    const trackKeyboard = (event: FocusEvent) => {
+      if (event.type === 'focusin') {
+        const target = event.target;
+        const editingReview = review && target instanceof HTMLTextAreaElement && Boolean(target.closest('.game-review-panel'));
+        backdrop.classList.toggle('is-keyboard-open', Boolean(editingReview));
+        syncViewport();
+        return;
+      }
+      window.requestAnimationFrame(() => {
+        const active = document.activeElement;
+        const editingReview = review && active instanceof HTMLTextAreaElement && Boolean(active.closest('.game-review-panel'));
+        backdrop.classList.toggle('is-keyboard-open', Boolean(editingReview));
+        syncViewport();
+      });
+    };
+    document.documentElement.classList.add('game-overlay-open');
+    document.body.classList.add('game-overlay-open');
+    syncViewport();
+    viewport?.addEventListener('resize', syncViewport);
+    viewport?.addEventListener('scroll', syncViewport);
+    window.addEventListener('resize', syncViewport);
+    backdrop.addEventListener('focusin', trackKeyboard);
+    backdrop.addEventListener('focusout', trackKeyboard);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      viewport?.removeEventListener('resize', syncViewport);
+      viewport?.removeEventListener('scroll', syncViewport);
+      window.removeEventListener('resize', syncViewport);
+      backdrop.removeEventListener('focusin', trackKeyboard);
+      backdrop.removeEventListener('focusout', trackKeyboard);
+      document.documentElement.classList.remove('game-overlay-open');
+      document.body.classList.remove('game-overlay-open');
+    };
+  }, [review]);
   return (
-    <div className="game-sandbox-backdrop" role="presentation" onPointerDown={(event) => {
+    <div ref={backdropRef} className="game-sandbox-backdrop" role="presentation" onPointerDown={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className={`game-sandbox-shell ${review ? 'reviewing' : ''}`} role="dialog" aria-modal="true" aria-label={`${preview ? 'Preview' : 'Play'} ${game.title}`}>
@@ -643,6 +719,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [testFailures, setTestFailures] = useState<string[]>([]);
+  const [checkNotes, setCheckNotes] = useState<string[]>([]);
   const [menuGameId, setMenuGameId] = useState('');
   const [exporting, setExporting] = useState<EventGame | null>(null);
   const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
@@ -705,6 +782,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setReviewInput('');
       setReviewError('');
       setTestFailures([]);
+      setCheckNotes([]);
     }
     setDraft((current) => ({
       ...current,
@@ -716,6 +794,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     setDraft(newGameDraft(accountUid));
     setError('');
     setTestFailures([]);
+    setCheckNotes([]);
     setReviewMessages([]);
     setReviewInput('');
     setReviewError('');
@@ -726,6 +805,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     setDraft({ ...game, runtime: playable ? game.runtime : null });
     setError(game.runtime && !playable ? 'This game was made with the previous game engine. Generate it again to play.' : '');
     setTestFailures([]);
+    setCheckNotes([]);
     setReviewMessages(playable && game.runtime ? [{ id: crypto.randomUUID(), role: 'designer', text: `This is the current design. ${game.runtime.uiNotes}` }] : []);
     setReviewInput('');
     setReviewError('');
@@ -742,9 +822,12 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const reportDesignFailure = (designError: unknown, setMessage: (message: string) => void) => {
     if (designError instanceof GameTestFailure) {
       setTestFailures(designError.failures);
-      setMessage('Gemini could not produce a draft that passes the sandbox tests. Adjust the description and try again; the problems are listed below.');
+      setMessage('The draft still breaks after one automatic repair. Adjust the description and try again; the problems are listed below.');
     } else setMessage(designError instanceof Error ? designError.message : 'Game generation failed.');
   };
+  const notesText = (notes: string[]) => notes.length
+    ? `\n\nThe checks noted ${notes.length} possible issue${notes.length === 1 ? '' : 's'} (not blocking):\n${notes.map((note) => `• ${note}`).join('\n')}`
+    : '';
   const generate = async () => {
     const validation = validateDraft();
     if (validation) {
@@ -754,6 +837,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     setBusy(true);
     setError('');
     setTestFailures([]);
+    setCheckNotes([]);
     try {
       if (!firebaseConfigured) throw new Error('Connect the production backend to generate a game.');
       const result = await designTestedGame(eventId, definitionOf(draft), {}, setProgress);
@@ -761,11 +845,12 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setDraft(generatedDraft);
       setDesignPreview(true);
       setDesignRevision((current) => current + 1);
-      setReviewMessages([{ id: crypto.randomUUID(), role: 'designer', text: `A tested, playable draft is ready${result.repairs ? ` (fixed after ${result.repairs} test round${result.repairs === 1 ? '' : 's'})` : ''}. ${result.game.uiNotes}` }]);
+      setCheckNotes(result.warnings);
+      setReviewMessages([{ id: crypto.randomUUID(), role: 'designer', text: `Playable draft ready (${designSummary(result)}). ${result.game.uiNotes}${notesText(result.warnings)}` }]);
       setReviewInput('');
       setReviewError('');
       setPlaying(generatedDraft);
-      notify(`Playable draft ready${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} generations left today` : ''}.`);
+      notify(`Playable draft ready in ${result.seconds}s${typeof result.remainingToday === 'number' ? ` · ${result.remainingToday} generations left today` : ''}.`);
     } catch (designError) {
       reportDesignFailure(designError, setError);
     } finally {
@@ -773,10 +858,9 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setProgress('');
     }
   };
-  const refine = async () => {
-    const feedback = reviewInput.trim();
-    if (!feedback || !draft.runtime || busy) return;
-    const nextMessages: ReviewMessage[] = [...reviewMessages, { id: crypto.randomUUID(), role: 'host', text: feedback }];
+  const revise = async (hostText: string, failures: string[] = []) => {
+    if (!draft.runtime || busy) return;
+    const nextMessages: ReviewMessage[] = [...reviewMessages, { id: crypto.randomUUID(), role: 'host', text: hostText }];
     setReviewMessages(nextMessages);
     setReviewInput('');
     setReviewError('');
@@ -784,19 +868,28 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     try {
       const result = await designTestedGame(eventId, definitionOf(draft), {
         previousGame: draft.runtime,
-        feedback: nextMessages.filter((message) => message.role === 'host').map((message) => message.text),
+        feedback: failures.length ? [] : nextMessages.filter((message) => message.role === 'host').map((message) => message.text).slice(-6),
+        failures,
       }, setProgress);
       const revisedDraft: EventGame = { ...draft, runtime: result.game };
       setDraft(revisedDraft);
       setDesignRevision((current) => current + 1);
       setPlaying(revisedDraft);
-      setReviewMessages((current) => [...current, { id: crypto.randomUUID(), role: 'designer', text: `Updated and re-tested. ${result.game.uiNotes}` }]);
+      setCheckNotes(result.warnings);
+      setReviewMessages((current) => [...current, { id: crypto.randomUUID(), role: 'designer', text: `Updated (${designSummary(result)}). ${result.game.uiNotes}${notesText(result.warnings)}` }]);
     } catch (designError) {
       reportDesignFailure(designError, setReviewError);
     } finally {
       setBusy(false);
       setProgress('');
     }
+  };
+  const refine = async () => {
+    const feedback = reviewInput.trim();
+    if (feedback) await revise(feedback);
+  };
+  const fixNotes = async () => {
+    if (checkNotes.length) await revise(`Fix the ${checkNotes.length} issue${checkNotes.length === 1 ? '' : 's'} the checks noted.`, checkNotes);
   };
   const persist = async (status: EventGame['status']) => {
     const validation = validateDraft();
@@ -810,7 +903,15 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     }
     setBusy(true);
     setError('');
+    setTestFailures([]);
     try {
+      // Publish runs the same fast check on the exact code being published. It never
+      // calls Gemini and never changes the game: what you previewed is what you publish.
+      if (status === 'published' && draft.runtime) {
+        setProgress('Checking the game before publishing…');
+        const check = await runGameChecks(draft.runtime, draft.minPlayers, draft.maxPlayers);
+        if (check.blocking.length) throw new GameTestFailure(check.blocking);
+      }
       const gameId = draft.id || `game-${crypto.randomUUID()}`;
       const next: EventGame = {
         ...draft,
@@ -841,9 +942,13 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       setEditorOpen(false);
       notify(status === 'published' ? 'Game published for this event.' : 'Game draft saved.');
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Game could not be saved.');
+      if (saveError instanceof GameTestFailure) {
+        setTestFailures(saveError.failures);
+        setError('The game breaks in its check, so nothing was published. Refine or regenerate it, then publish again.');
+      } else setError(saveError instanceof Error ? saveError.message : 'Game could not be saved.');
     } finally {
       setBusy(false);
+      setProgress('');
     }
   };
   // Exports (copies) one game into another event this host manages. Older-engine games are
@@ -974,7 +1079,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
             <label className="game-field"><span>Private or hidden information</span><textarea value={draft.hiddenInformation} onChange={(event) => updateDraft('hiddenInformation', event.target.value)} placeholder="The acting word is shown only to the acting player." rows={4} /></label>
             <label className="game-field game-field-wide"><span>How the game ends</span><textarea value={draft.winCondition} onChange={(event) => updateDraft('winCondition', event.target.value)} placeholder="After five rounds, the team with the highest score wins." rows={3} /></label>
           </div>
-          {busy && progress && <div className="game-runtime-ready game-progress"><Sparkles size={19} /><div><strong>{progress}</strong><span>This usually takes under a minute.</span></div></div>}
+          {busy && progress && <div className="game-runtime-ready game-progress"><Sparkles size={19} /><div><strong>{progress}</strong><span>Usually 10–30 seconds.</span></div></div>}
           {!busy && isPlayableRuntime(draft.runtime) && <div className="game-runtime-ready game-progress"><ShieldCheck size={19} /><div><strong>Tested and playable</strong><span>{draft.runtime.instructions}</span></div></div>}
           <footer className="game-editor-actions">
             <button type="button" onClick={() => setEditorOpen(false)} disabled={busy}>Cancel</button>
@@ -1015,6 +1120,8 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
           error: reviewError,
           onChange: setReviewInput,
           onSubmit: () => void refine(),
+          notes: checkNotes.length,
+          onFixNotes: () => void fixNotes(),
         } : undefined}
         onClose={() => { setPlaying(null); setDesignPreview(false); }}
       />}

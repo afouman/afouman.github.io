@@ -17,5 +17,5 @@ export const metadata: Metadata = {
   openGraph: { title: 'Nights', description: 'Every gathering, beautifully organized', images: ['/gathering/og.png'] },
   twitter: { card: 'summary_large_image', title: 'Nights', description: 'Every gathering, beautifully organized', images: ['/gathering/og.png'] },
 };
-export const viewport: Viewport = { themeColor: '#f7f2e8', viewportFit: 'cover' };
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, themeColor: '#f7f2e8', viewportFit: 'cover' };
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) { return <html lang="en"><body className={`${body.variable} ${display.variable}`}>{children}</body></html>; }

@@ -39,8 +39,14 @@ function nightsJson(value, label) {
   if (text.length > 200000) throw new Error(label + ' returned too much data.');
   return JSON.parse(text);
 }
+// A refusal is a plain Error the rules throw on purpose ("not your turn"). Anything
+// else (ReferenceError, TypeError, ...) is a bug in the generated code.
+var NIGHTS_BUG = 'Game rules error: ';
 function nightsMessage(error) {
-  return String((error && error.message) || error || 'Refused.').slice(0, 300);
+  var message = String((error && error.message) || error || 'Refused.');
+  var name = error && error.name;
+  if (name && name !== 'Error' && message.indexOf(NIGHTS_BUG) !== 0) message = NIGHTS_BUG + name + ': ' + message;
+  return message.slice(0, 300);
 }
 function createEngine(game) {
   var players = [];

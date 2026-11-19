@@ -541,6 +541,8 @@ A game is two plain JavaScript sources. No imports, no modules, no network, no s
 Private answers: when players answer privately and answers are revealed later, keep each player's answers out of
 other players' view() until the reveal.
 
+Keep the code compact: no comments, no unused helpers, 2 or 3 test scenarios. Shorter code is generated faster.
+
 Teams: if the host asks for teams, form them in setup() from ctx.players with ctx.rng (for random assignment)
 and show each player's team and mark in the view. Any number of players between the limits may sit at a table.
 
@@ -589,6 +591,27 @@ function render(root, model, ctx) {
 }
 `;
 
+// Revisions return only the fields that change; the Worker merges them onto the draft.
+function gamePatchSchema() {
+  const schema = gameResponseSchema();
+  return { ...schema, required: ['uiNotes'] };
+}
+
+const GAME_PATCH_FIELDS = ['instructions', 'uiNotes', 'logicSource', 'uiSource', 'styles', 'tests'];
+
+function mergeGamePatch(previousGame, patch) {
+  const merged = { ...previousGame };
+  const changed = [];
+  for (const field of GAME_PATCH_FIELDS) {
+    const value = patch?.[field];
+    if (typeof value === 'string' && value.trim()) {
+      merged[field] = value;
+      changed.push(field);
+    }
+  }
+  return { merged, changed };
+}
+
 function gameGenerationPrompt(definition) {
   return `You write small multiplayer party games for Nights, a gathering app. Players use their phones at the same event.
 Turn the host's description into a game that follows the contract below exactly, and return JSON matching the response schema.
@@ -599,7 +622,7 @@ ${JSON.stringify(definition, null, 2)}`;
 }
 
 function gameRevisionPrompt(definition, previousGame, feedback, failures) {
-  const parts = [gameGenerationPrompt(definition), '', 'You are REVISING an existing draft. Keep everything that works; change only what is needed. Return the complete replacement for every field.', '', 'Current draft:', JSON.stringify(previousGame, null, 2)];
+  const parts = [gameGenerationPrompt(definition), '', 'You are REVISING an existing draft. Keep everything that works; change only what is needed.', 'Return ONLY the fields you change, each as its complete new text, and omit every field you keep unchanged. Always return uiNotes describing the updated screen. For a visual change that is usually just uiSource and/or styles; change logicSource only when the rules must change, and tests only when the rules change.', '', 'Current draft:', JSON.stringify(previousGame, null, 2)];
   if (failures.length) parts.push('', 'Nights ran this draft in its test harness and it FAILED. Fix every problem:', ...failures.map((failure, index) => `${index + 1}. ${failure}`));
   if (feedback.length) parts.push('', 'Host feedback, oldest to newest. Apply all of it:', ...feedback.map((message, index) => `${index + 1}. ${message}`));
   return parts.join('\n');
@@ -651,33 +674,85 @@ function cleanPreviousGame(value) {
   return result.game || null;
 }
 
-async function requestGeminiGame(env, model, prompt) {
+// Low reasoning effort: game drafts are checked in the sandbox anyway, and long
+// silent reasoning was the largest share of the wait. Gemini 3 models take a thinking
+// level; Gemini 2.5 Flash models take a thinking budget.
+function thinkingConfigFor(model) {
+  if (/^gemini-[3-9]/.test(model)) return { thinkingLevel: 'low' };
+  if (/^gemini-2\.5-flash/.test(model)) return { thinkingBudget: 0 };
+  return null;
+}
+
+async function callGemini(env, model, prompt, partial, thinking) {
+  const generationConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: partial ? gamePatchSchema() : gameResponseSchema(),
+    temperature: 0.4,
+    maxOutputTokens: 32768,
+  };
+  if (thinking) generationConfig.thinkingConfig = thinking;
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
-    body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        responseSchema: gameResponseSchema(),
-        temperature: 0.4,
-        maxOutputTokens: 32768,
-      },
-    }),
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }], generationConfig }),
   });
-  const result = await response.json().catch(() => null);
+  return { response, result: await response.json().catch(() => null) };
+}
+
+async function requestGeminiGame(env, model, prompt, partial = false) {
+  const startedAt = Date.now();
+  const thinking = thinkingConfigFor(model);
+  let { response, result } = await callGemini(env, model, prompt, partial, thinking);
+  // A model that rejects the thinking setting is retried once without it.
+  if (thinking && response.status === 400 && /thinking/i.test(result?.error?.message || ''))
+    ({ response, result } = await callGemini(env, model, prompt, partial, null));
   if (!response.ok) {
     const message = result?.error?.message || `Gemini returned HTTP ${response.status}.`;
-    return { game: null, error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message, retryable: response.status === 429 || response.status === 404 || response.status >= 500 };
+    const retryable = response.status === 429 || response.status === 404 || response.status >= 500;
+    console.log(JSON.stringify({ type: 'game-generation', model, stage: 'service', status: response.status, durationMs: Date.now() - startedAt }));
+    return {
+      game: null,
+      raw: '',
+      error: response.status === 429 ? 'Gemini’s free quota is temporarily exhausted. Try again later.' : message,
+      retryable,
+      repairable: false,
+      durationMs: Date.now() - startedAt,
+    };
   }
   const candidate = result?.candidates?.[0];
   const text = (candidate?.content?.parts || []).map(part => part.text || '').join('').trim();
-  if (candidate?.finishReason === 'MAX_TOKENS')
-    return { game: null, error: 'Gemini ran out of space before finishing the game. Simplify the description or try again.', retryable: true };
+  if (candidate?.finishReason === 'MAX_TOKENS') {
+    console.log(JSON.stringify({ type: 'game-generation', model, stage: 'candidate', outcome: 'max-tokens', durationMs: Date.now() - startedAt }));
+    return {
+      game: null,
+      raw: text,
+      error: 'Gemini ran out of space before finishing the game.',
+      retryable: false,
+      repairable: Boolean(text),
+      durationMs: Date.now() - startedAt,
+    };
+  }
   try {
-    return { game: JSON.parse(stripCodeFence(text)), error: '', retryable: false };
+    const game = JSON.parse(stripCodeFence(text));
+    console.log(JSON.stringify({ type: 'game-generation', model, partial, stage: 'candidate', outcome: 'parsed', durationMs: Date.now() - startedAt, outputTokens: result?.usageMetadata?.candidatesTokenCount, thinkingTokens: result?.usageMetadata?.thoughtsTokenCount }));
+    return {
+      game,
+      raw: text,
+      error: '',
+      retryable: false,
+      repairable: false,
+      durationMs: Date.now() - startedAt,
+    };
   } catch {
-    return { game: null, error: 'Gemini returned an unreadable draft.', retryable: true };
+    console.log(JSON.stringify({ type: 'game-generation', model, stage: 'candidate', outcome: 'invalid-json', durationMs: Date.now() - startedAt }));
+    return {
+      game: null,
+      raw: text,
+      error: 'Gemini returned JSON in the wrong format.',
+      retryable: false,
+      repairable: Boolean(text),
+      durationMs: Date.now() - startedAt,
+    };
   }
 }
 
@@ -690,15 +765,30 @@ function configuredGameModels(env) {
   ].filter(Boolean))];
 }
 
-async function requestGeminiGameWithFallback(env, prompt) {
+async function requestGeminiGameWithFallback(env, prompt, partial = false) {
   const failures = [];
   for (const model of configuredGameModels(env)) {
-    const result = await requestGeminiGame(env, model, prompt);
+    const result = await requestGeminiGame(env, model, prompt, partial);
     if (result.game) return { ...result, model };
+    // Once Gemini produced a candidate, keep that exact draft and repair it.
+    // A different model is only a fallback for a service-level failure.
+    if (result.repairable || result.raw) return { ...result, model };
     failures.push(`${model}: ${result.error}`);
     if (!result.retryable) break;
   }
-  return { game: null, error: failures.join(' · ') || 'No Gemini model is configured.', model: '' };
+  return { game: null, raw: '', repairable: false, error: failures.join(' · ') || 'No Gemini model is configured.', model: '' };
+}
+
+function exactGameRepairPrompt(originalPrompt, failedOutput, failure) {
+  return `${originalPrompt}
+
+Your previous response failed this exact check:
+${failure}
+
+FAILED RESPONSE (repair this draft; do not redesign the game):
+${failedOutput}
+
+Return the corrected response matching the schema. Preserve every working rule and UI choice. Change only what is required to fix the stated failure.`;
 }
 
 async function generateEventGame(request, env) {
@@ -729,22 +819,46 @@ async function generateEventGame(request, env) {
       return json(request, { error: 'Today’s game-generation allowance has been used. Try again tomorrow.' }, 429);
     await env.PUSH_SUBSCRIPTIONS.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
 
+    const startedAt = Date.now();
+    const partial = Boolean(previousGame);
     const prompt = previousGame
       ? gameRevisionPrompt(definition, previousGame, feedback, failures)
       : gameGenerationPrompt(definition);
-    let generation = await requestGeminiGameWithFallback(env, prompt);
+    let changed = [];
+    const finalize = (candidate) => {
+      if (!previousGame) return candidate;
+      const patch = mergeGamePatch(previousGame, candidate);
+      changed = patch.changed;
+      return patch.merged;
+    };
+    let generation = await requestGeminiGameWithFallback(env, prompt, partial);
+    let repairCount = 0;
+    if (!generation.game && generation.repairable && generation.raw && generation.model) {
+      repairCount += 1;
+      generation = {
+        ...(await requestGeminiGame(env, generation.model, exactGameRepairPrompt(prompt, generation.raw, generation.error), partial)),
+        model: generation.model,
+      };
+    }
     if (!generation.game) return json(request, { error: generation.error }, 502);
-    let validation = generatedGameValidation(generation.game);
+    let validation = generatedGameValidation(finalize(generation.game));
     if (!validation.valid) {
-      const repairPrompt = `${prompt}\n\nYour previous answer was rejected: ${validation.error}\nPrevious answer:\n${JSON.stringify(validation.game || generation.game)}\nReturn the corrected complete game.`;
-      generation = await requestGeminiGameWithFallback(env, repairPrompt);
+      repairCount += 1;
+      const failedDraft = JSON.stringify(validation.game || generation.game);
+      generation = {
+        ...(await requestGeminiGame(env, generation.model, exactGameRepairPrompt(prompt, failedDraft, validation.error), partial)),
+        model: generation.model,
+      };
       if (!generation.game) return json(request, { error: generation.error }, 502);
-      validation = generatedGameValidation(generation.game);
+      validation = generatedGameValidation(finalize(generation.game));
       if (!validation.valid) return json(request, { error: `Gemini’s draft was incomplete: ${validation.error}` }, 422);
     }
     return json(request, {
       game: validation.game,
       model: generation.model,
+      repairs: repairCount,
+      changed,
+      serverMs: Date.now() - startedAt,
       remainingToday: Math.max(0, dailyLimit - used - 1),
     });
   } catch (error) {
