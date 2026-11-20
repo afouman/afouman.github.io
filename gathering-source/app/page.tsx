@@ -8902,7 +8902,6 @@ function EventChat({
   const [unread, setUnread] = useState(0);
   const [pinnedIndex, setPinnedIndex] = useState(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
-  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -8910,19 +8909,6 @@ function EventChat({
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const restoredForOpen = useRef(false);
-  const nearBottomRef = useRef(true);
-  const gestureRef = useRef<{
-    key: string;
-    startX: number;
-    startY: number;
-    startedAt: number;
-    offset: number;
-    node: HTMLElement;
-    timer: number | null;
-    longPressed: boolean;
-  } | null>(null);
-  const lastTapRef = useRef<{ key: string; at: number } | null>(null);
-  const singleTapTimerRef = useRef<number | null>(null);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
   const locked = menu.chatOpen === false;
@@ -9029,8 +9015,7 @@ function EventChat({
 
   useEffect(() => {
     if (!visible || !restoredForOpen.current) return;
-    if (nearBottomRef.current) scrollStreamToBottom('smooth');
-    else setShowScrollBottom(true);
+    scrollStreamToBottom('smooth');
   }, [messages.length, scrollStreamToBottom, visible]);
 
   useEffect(() => {
@@ -9054,14 +9039,7 @@ function EventChat({
       const targetElement = target ? messageRefs.current[target.id] : null;
       if (targetElement) scrollMessageInsideStream(targetElement);
       else scrollStreamToBottom();
-      requestAnimationFrame(() => {
-        const stream = streamRef.current;
-        if (stream) {
-          nearBottomRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
-          setShowScrollBottom(!nearBottomRef.current);
-        }
-        rememberReadPosition();
-      });
+      requestAnimationFrame(rememberReadPosition);
     });
   }, [messages, readPositionKey, rememberReadPosition, scrollMessageInsideStream, scrollStreamToBottom, visible]);
 
@@ -9088,16 +9066,7 @@ function EventChat({
 
   useEffect(() => () => {
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
-    if (singleTapTimerRef.current) window.clearTimeout(singleTapTimerRef.current);
-    if (gestureRef.current?.timer) window.clearTimeout(gestureRef.current.timer);
   }, []);
-
-  useLayoutEffect(() => {
-    const composer = composerRef.current;
-    if (!composer) return;
-    composer.style.height = 'auto';
-    composer.style.height = `${Math.min(composer.scrollHeight, 112)}px`;
-  }, [draft, visible]);
 
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
 
@@ -9109,128 +9078,6 @@ function EventChat({
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
     highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(null), 1800);
   };
-
-  const beginReply = (message: ChatMessage) => {
-    if (locked || message.deleted) return;
-    setReplyTo({
-      id: message.id,
-      authorName: message.authorName,
-      text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300),
-    });
-    setEditing(null);
-    setMessageMenuFor(null);
-    setReactionFor(null);
-    focusComposer();
-  };
-
-  const beginEdit = (message: ChatMessage) => {
-    if (locked || message.deleted || message.type !== 'message') return;
-    setEditing(message);
-    setDraft(message.text);
-    setReplyTo(null);
-    setMessageMenuFor(null);
-    setReactionFor(null);
-    focusComposer();
-  };
-
-  const copyMessage = async (message: ChatMessage) => {
-    const text = message.type === 'poll' ? message.pollQuestion : message.text;
-    try {
-      await navigator.clipboard.writeText(text);
-      notify('Message copied');
-    } catch {
-      notify('Message could not be copied');
-    }
-    setMessageMenuFor(null);
-  };
-
-  const clearGesture = (animate = true) => {
-    const gesture = gestureRef.current;
-    if (!gesture) return;
-    if (gesture.timer) window.clearTimeout(gesture.timer);
-    if (animate) gesture.node.classList.add('settling');
-    gesture.node.style.setProperty('--chat-swipe-x', '0px');
-    gesture.node.classList.remove('swiping');
-    if (animate) window.setTimeout(() => gesture.node.classList.remove('settling'), 180);
-    gestureRef.current = null;
-  };
-
-  const startMessageGesture = (event: ReactPointerEvent<HTMLElement>, message: ChatMessage, displayKey: string) => {
-    if (locked || message.deleted || event.button !== 0) return;
-    if ((event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
-    clearGesture(false);
-    const node = event.currentTarget;
-    const gesture = {
-      key: displayKey,
-      startX: event.clientX,
-      startY: event.clientY,
-      startedAt: event.timeStamp,
-      offset: 0,
-      node,
-      timer: null as number | null,
-      longPressed: false,
-    };
-    if (event.pointerType !== 'mouse') {
-      gesture.timer = window.setTimeout(() => {
-        gesture.longPressed = true;
-        setMessageMenuFor(displayKey);
-        setReactionFor(null);
-        navigator.vibrate?.(12);
-      }, 380);
-    }
-    gestureRef.current = gesture;
-    node.setPointerCapture?.(event.pointerId);
-  };
-
-  const moveMessageGesture = (event: ReactPointerEvent<HTMLElement>) => {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.node !== event.currentTarget) return;
-    const deltaX = event.clientX - gesture.startX;
-    const deltaY = event.clientY - gesture.startY;
-    if (Math.abs(deltaY) > 8 || Math.abs(deltaX) > 8) {
-      if (gesture.timer) window.clearTimeout(gesture.timer);
-      gesture.timer = null;
-    }
-    if (deltaX <= 0 || Math.abs(deltaX) <= Math.abs(deltaY)) return;
-    gesture.offset = Math.min(76, deltaX * 0.72);
-    gesture.node.classList.add('swiping');
-    gesture.node.style.setProperty('--chat-swipe-x', `${gesture.offset}px`);
-  };
-
-  const finishMessageGesture = (event: ReactPointerEvent<HTMLElement>, message: ChatMessage, displayKey: string) => {
-    const gesture = gestureRef.current;
-    if (!gesture || gesture.node !== event.currentTarget) return;
-    const offset = gesture.offset;
-    const duration = event.timeStamp - gesture.startedAt;
-    const longPressed = gesture.longPressed;
-    clearGesture();
-    if (longPressed) return;
-    if (offset >= 48) {
-      navigator.vibrate?.(8);
-      beginReply(message);
-      return;
-    }
-    if (offset > 6 || duration > 500) return;
-    const now = event.timeStamp;
-    const previousTap = lastTapRef.current;
-    if (previousTap?.key === displayKey && now - previousTap.at < 310) {
-      if (singleTapTimerRef.current) window.clearTimeout(singleTapTimerRef.current);
-      singleTapTimerRef.current = null;
-      lastTapRef.current = null;
-      navigator.vibrate?.(8);
-      void react(message, '❤️');
-      return;
-    }
-    lastTapRef.current = { key: displayKey, at: now };
-    if (singleTapTimerRef.current) window.clearTimeout(singleTapTimerRef.current);
-    singleTapTimerRef.current = window.setTimeout(() => {
-      setMessageMenuFor((current) => current === displayKey ? null : displayKey);
-      setReactionFor(null);
-      singleTapTimerRef.current = null;
-    }, 230);
-  };
-
-  const cancelMessageGesture = () => clearGesture();
 
   const resolveActor = async (): Promise<ChatActor> => {
     if (actor.role === 'guest' || !firebaseConfigured) return actor;
@@ -9327,9 +9174,6 @@ function EventChat({
       setDraft('');
       setReplyTo(null);
       setEditing(null);
-      nearBottomRef.current = true;
-      setShowScrollBottom(false);
-      requestAnimationFrame(() => scrollStreamToBottom('smooth'));
       focusComposer();
     } catch {
       notify('Message could not be saved');
@@ -9410,7 +9254,7 @@ function EventChat({
       return { reactions };
     });
     setReactionFor(null);
-    setMessageMenuFor(null);
+    focusComposer();
   };
   const vote = async (message: ChatMessage, optionId: string) => {
     await updateMessage(message.id, (current, resolvedActor) => {
@@ -9595,21 +9439,9 @@ function EventChat({
             </aside>
           )}
         </div>
-        <div ref={streamRef} className="chat-stream" aria-live="polite" onScroll={() => {
-          const stream = streamRef.current;
-          if (stream) {
-            nearBottomRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
-            setShowScrollBottom(!nearBottomRef.current);
-          }
-          if (messageMenuFor || reactionFor || reactionDetailsFor) {
-            setMessageMenuFor(null);
-            setReactionFor(null);
-            setReactionDetailsFor(null);
-          }
-          rememberReadPosition();
-        }}>
+        <div ref={streamRef} className="chat-stream" aria-live="polite" onScroll={rememberReadPosition}>
           {messages.length === 0 && (
-            <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation. Tap a message for actions or swipe it to reply.</span></div>
+            <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
           )}
           {orderedMessages.map((message) => {
             const displayKey = message._displayKey;
@@ -9645,12 +9477,12 @@ function EventChat({
                 data-chat-message-id={message.id}
                 ref={(node) => { messageRefs.current[message.id] = node; }}
                 className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message._pollRepeat ? 'poll-repeat' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
-                onPointerDown={(event) => startMessageGesture(event, message, displayKey)}
-                onPointerMove={moveMessageGesture}
-                onPointerUp={(event) => finishMessageGesture(event, message, displayKey)}
-                onPointerCancel={cancelMessageGesture}
+                onPointerUp={(event) => {
+                  if (event.button !== 0) return;
+                  if ((event.target as HTMLElement).closest('button, input, textarea, label')) return;
+                  setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey);
+                }}
               >
-                {!locked && !message.deleted && <span className="chat-swipe-reply" aria-hidden="true"><Reply size={17} /></span>}
                 <div className="chat-message-meta">
                   <strong>{message.authorName}</strong>
                   {message.authorRole === 'host' && <b>Host</b>}
@@ -9660,19 +9492,13 @@ function EventChat({
                   {!message.deleted && !locked && <button type="button" className="chat-message-options" aria-label={`Options for ${message.authorName}'s message`} onClick={() => setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey)}>•••</button>}
                 </div>
                 {messageMenuFor === displayKey && !locked && (
-                  <div className="chat-message-menu" role="menu" aria-label="Message actions">
-                    {!message.deleted && <div className="chat-quick-reactions" aria-label="Quick reactions">
-                      {['❤️', '👍', '😂', '🎉', '😮'].map((emoji) => <button type="button" key={emoji} aria-label={`React ${emoji}`} onClick={() => void react(message, emoji)}>{emoji}</button>)}
-                      <button type="button" className="chat-more-reactions" aria-label="More reactions" onClick={() => { setReactionFor(displayKey); setMessageMenuFor(null); }}><Smile size={18} /></button>
-                    </div>}
-                    {!message.deleted && <button type="button" onClick={() => beginReply(message)}><Reply size={16} /> Reply</button>}
-                    {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => beginEdit(message)}><Pencil size={16} /> Edit</button>}
-                    {!message.deleted && <button type="button" onClick={() => void copyMessage(message)}><Copy size={16} /> Copy</button>}
+                  <div className="chat-message-menu">
+                    {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
+                    {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
                     {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin message' : 'Pin message'}</button>}
                     {(mine || actor.role === 'host') && !message.deleted && <button type="button" className="danger" onClick={() => void deleteMessage(message)}><Trash2 size={14} /> Delete</button>}
                   </div>
                 )}
-                {reactionFor === displayKey && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); }} /></div>}
                 {message.replyTo && !message.deleted && (
                   <button type="button" className="chat-reply-context" onClick={() => jumpToMessage(message.replyTo!.id)} title="Jump to replied message"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></button>
                 )}
@@ -9725,9 +9551,10 @@ function EventChat({
                 )}
                 {!locked && !message.deleted && (
                   <div className="chat-message-actions">
-                    <button type="button" onClick={() => beginReply(message)}><Reply size={13} /> Reply</button>
-                    {mine && message.type === 'message' && <button type="button" onClick={() => beginEdit(message)}><Pencil size={13} /> Edit</button>}
+                    <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); focusComposer(); }}><Reply size={13} /> Reply</button>
+                    {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); focusComposer(); }}><Pencil size={13} /> Edit</button>}
                     <button type="button" onClick={() => setReactionFor(reactionFor === displayKey ? null : displayKey)}><Smile size={13} /> React</button>
+                    {reactionFor === displayKey && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); focusComposer(); }} /></div>}
                   </div>
                 )}
               </article>
@@ -9735,11 +9562,6 @@ function EventChat({
           })}
           <div ref={endRef} />
         </div>
-        {showScrollBottom && <button type="button" className="chat-scroll-bottom" aria-label="Jump to latest message" onClick={() => {
-          nearBottomRef.current = true;
-          setShowScrollBottom(false);
-          scrollStreamToBottom('smooth');
-        }}><ChevronDown size={20} /></button>}
         {pollOpen && actor.role === 'host' && !locked && (
           <section className="chat-poll-composer">
             <div><strong>Create a poll</strong><button type="button" onClick={() => setPollOpen(false)}><XCircle size={18} /></button></div>
@@ -9754,12 +9576,10 @@ function EventChat({
         {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
           <footer className="chat-composer">
             {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
-            <div className={`chat-composer-row ${actor.role}`} onPointerDown={(event) => {
-              if (!(event.target as HTMLElement).closest('button')) composerRef.current?.focus({ preventScroll: true });
-            }}>
+            <div className={`chat-composer-row ${actor.role}`}>
               <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
               {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
-              <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} onFocus={() => { setMessageMenuFor(null); setReactionFor(null); }} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <button type="button" className="chat-send" disabled={busy || !draft.trim()} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
             </div>
             {emojiOpen && <div className="chat-emoji-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={350} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { setDraft((current) => `${current}${emojiData.emoji}`); setEmojiOpen(false); focusComposer(); }} /></div>}
