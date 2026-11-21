@@ -1583,6 +1583,27 @@ export default function Home() {
     };
   }, [moneyDetailsOpen, profileEditorOpen, settingsOpen]);
 
+  // The native shell scrolls `.app-root`, rather than `body`. The normal dialog
+  // lock below therefore cannot stop the page from moving behind an open chat
+  // on iPhone/iPad. Chat is rendered in a portal, so freezing this scroller
+  // leaves the chat stream itself fully scrollable.
+  useEffect(() => {
+    if (!chatOpen) return;
+    const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
+    if (!appScroller) return;
+    const previousOverflow = appScroller.style.overflow;
+    const previousOverscrollBehavior = appScroller.style.overscrollBehavior;
+    const previousTouchAction = appScroller.style.touchAction;
+    appScroller.style.overflow = 'hidden';
+    appScroller.style.overscrollBehavior = 'none';
+    appScroller.style.touchAction = 'none';
+    return () => {
+      appScroller.style.overflow = previousOverflow;
+      appScroller.style.overscrollBehavior = previousOverscrollBehavior;
+      appScroller.style.touchAction = previousTouchAction;
+    };
+  }, [chatOpen]);
+
   useEffect(() => {
     if (!firebaseConfigured) return;
     let stopProfile = () => {};
@@ -8902,6 +8923,7 @@ function EventChat({
   const [unread, setUnread] = useState(0);
   const [pinnedIndex, setPinnedIndex] = useState(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -8909,6 +8931,7 @@ function EventChat({
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const restoredForOpen = useRef(false);
+  const nearBottomRef = useRef(true);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
   const locked = menu.chatOpen === false;
@@ -9015,7 +9038,8 @@ function EventChat({
 
   useEffect(() => {
     if (!visible || !restoredForOpen.current) return;
-    scrollStreamToBottom('smooth');
+    if (nearBottomRef.current) scrollStreamToBottom('smooth');
+    else setShowScrollBottom(true);
   }, [messages.length, scrollStreamToBottom, visible]);
 
   useEffect(() => {
@@ -9039,7 +9063,14 @@ function EventChat({
       const targetElement = target ? messageRefs.current[target.id] : null;
       if (targetElement) scrollMessageInsideStream(targetElement);
       else scrollStreamToBottom();
-      requestAnimationFrame(rememberReadPosition);
+      requestAnimationFrame(() => {
+        const stream = streamRef.current;
+        if (stream) {
+          nearBottomRef.current = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
+          setShowScrollBottom(!nearBottomRef.current);
+        }
+        rememberReadPosition();
+      });
     });
   }, [messages, readPositionKey, rememberReadPosition, scrollMessageInsideStream, scrollStreamToBottom, visible]);
 
@@ -9067,6 +9098,13 @@ function EventChat({
   useEffect(() => () => {
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
   }, []);
+
+  useLayoutEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.style.height = 'auto';
+    composer.style.height = `${Math.min(composer.scrollHeight, 112)}px`;
+  }, [draft, visible]);
 
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
 
@@ -9380,10 +9418,13 @@ function EventChat({
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header className="chat-header">
-            <div>
-              <p className="eyebrow">{menu.title}</p>
-              <h2 id="event-chat-title" className="font-display">Event chat</h2>
-              <span>{locked ? 'Locked by host · conversation is read-only' : `${actor.role === 'host' ? 'Chatting as Host' : `Chatting as ${actor.name}`}`}</span>
+            <div className="chat-header-identity">
+              <span className="chat-avatar" aria-hidden="true"><MessageCircle size={20} /></span>
+              <div>
+                <p className="eyebrow">{menu.title}</p>
+                <h2 id="event-chat-title">Event chat</h2>
+                <span>{locked ? 'Locked by host · read only' : `${messages.length ? `${messages.length} message${messages.length === 1 ? '' : 's'} · ` : ''}${actor.role === 'host' ? 'Chatting as Host' : actor.name}`}</span>
+              </div>
             </div>
             <div className="chat-header-actions">
               {PUSH_NOTIFICATIONS_ENABLED && pushAvailable && (
@@ -9439,7 +9480,15 @@ function EventChat({
             </aside>
           )}
         </div>
-        <div ref={streamRef} className="chat-stream" aria-live="polite" onScroll={rememberReadPosition}>
+        <div ref={streamRef} className="chat-stream" aria-live="polite" onScroll={() => {
+          const stream = streamRef.current;
+          if (stream) {
+            const nearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 72;
+            nearBottomRef.current = nearBottom;
+            setShowScrollBottom(!nearBottom);
+          }
+          rememberReadPosition();
+        }}>
           {messages.length === 0 && (
             <div className="chat-empty"><MessageCircle size={28} /><strong>No messages yet</strong><span>Start the conversation for this event.</span></div>
           )}
@@ -9493,10 +9542,21 @@ function EventChat({
                 </div>
                 {messageMenuFor === displayKey && !locked && (
                   <div className="chat-message-menu">
+                    {!message.deleted && (
+                      <div className="chat-quick-reactions" aria-label="Quick reactions">
+                        {['👍', '❤️', '😂', '😮', '😢', '🔥'].map((emoji) => (
+                          <button key={emoji} type="button" aria-label={`React ${emoji}`} onClick={() => {
+                            void react(message, emoji).finally(() => setMessageMenuFor(null));
+                          }}>{emoji}</button>
+                        ))}
+                      </div>
+                    )}
                     {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
                     {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
                     {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin message' : 'Pin message'}</button>}
                     {(mine || actor.role === 'host') && !message.deleted && <button type="button" className="danger" onClick={() => void deleteMessage(message)}><Trash2 size={14} /> Delete</button>}
+                    {!message.deleted && <button type="button" onClick={() => setReactionFor(reactionFor === displayKey ? null : displayKey)}><Smile size={14} /> More reactions</button>}
+                    {reactionFor === displayKey && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); setMessageMenuFor(null); focusComposer(); }} /></div>}
                   </div>
                 )}
                 {message.replyTo && !message.deleted && (
@@ -9553,8 +9613,7 @@ function EventChat({
                   <div className="chat-message-actions">
                     <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); focusComposer(); }}><Reply size={13} /> Reply</button>
                     {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); focusComposer(); }}><Pencil size={13} /> Edit</button>}
-                    <button type="button" onClick={() => setReactionFor(reactionFor === displayKey ? null : displayKey)}><Smile size={13} /> React</button>
-                    {reactionFor === displayKey && <div className="chat-reaction-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={330} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { void react(message, emojiData.emoji); focusComposer(); }} /></div>}
+                    <button type="button" onClick={() => setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey)}><Smile size={13} /> React</button>
                   </div>
                 )}
               </article>
@@ -9562,6 +9621,13 @@ function EventChat({
           })}
           <div ref={endRef} />
         </div>
+        {showScrollBottom && (
+          <button type="button" className="chat-scroll-bottom" onClick={() => {
+            scrollStreamToBottom('smooth');
+            nearBottomRef.current = true;
+            setShowScrollBottom(false);
+          }} aria-label="Jump to latest message"><ChevronDown size={19} /></button>
+        )}
         {pollOpen && actor.role === 'host' && !locked && (
           <section className="chat-poll-composer">
             <div><strong>Create a poll</strong><button type="button" onClick={() => setPollOpen(false)}><XCircle size={18} /></button></div>
