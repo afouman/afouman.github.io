@@ -1069,7 +1069,7 @@ service cloud.firestore {
             'pollQuestion', 'pollOptions', 'pollVotes', 'pollVoterNames',
             'allowGuestOptions', 'allowMultipleVotes', 'pollBumpedAt',
             'pinned', 'pinnedAt', 'pinnedByName', 'deleted',
-            'lastActorUid', 'lastActorRole'
+            'lastActorUid', 'lastActorRole', 'attachments'
           ])
           && request.resource.data.id == messageId
           && request.resource.data.type in ['message', 'poll']
@@ -1081,6 +1081,8 @@ service cloud.firestore {
           && request.resource.data.text.size() <= 2000
           && validReply(request.resource.data)
           && request.resource.data.reactions is map
+          && request.resource.data.attachments is list
+          && request.resource.data.attachments.size() <= 6
           && request.resource.data.pollVotes is map
           && request.resource.data.pollVoterNames is map
           && request.resource.data.pollOptions is list
@@ -1098,13 +1100,14 @@ service cloud.firestore {
           && request.resource.data.lastActorRole == request.resource.data.authorRole
           && (
             (request.resource.data.type == 'message'
-              && request.resource.data.text.size() > 0
+              && (request.resource.data.text.size() > 0 || request.resource.data.attachments.size() > 0)
               && request.resource.data.pollQuestion == ''
               && request.resource.data.pollOptions.size() == 0)
             ||
             (request.resource.data.type == 'poll'
               && request.resource.data.authorRole == 'host'
               && request.resource.data.text == ''
+              && request.resource.data.attachments.size() == 0
               && request.resource.data.pollQuestion.size() > 0
               && request.resource.data.pollOptions.size() >= 2)
           );

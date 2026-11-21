@@ -1,5 +1,5 @@
 'use client';
-/* oxlint-disable jsx-a11y/prefer-tag-over-role -- Safari handles controls inside this fixed overlay reliably only with a non-native dialog wrapper. */
+/* oxlint-disable jsx-a11y/prefer-tag-over-role, next/no-img-element, jsx-a11y/media-has-caption -- Safari handles controls inside this fixed overlay reliably only with a non-native dialog wrapper; chat uploads need direct, user-selected media URLs. */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
@@ -28,6 +28,7 @@ import {
   DollarSign,
   Eye,
   ExternalLink,
+  File as FileIcon,
   FileText,
   Flame,
   Gamepad2,
@@ -41,12 +42,14 @@ import {
   MapPin,
   Menu as MenuIcon,
   MessageCircle,
+  Mic,
   Monitor,
   Minus,
   Move,
   Pencil,
   Pin,
   PinOff,
+  Paperclip,
   Plus,
   Reply,
   Send,
@@ -58,6 +61,7 @@ import {
   Smartphone,
   Sparkles,
   SquarePlus,
+  Square,
   Trash2,
   Upload,
   UtensilsCrossed,
@@ -307,6 +311,15 @@ type ChatPollOption = {
 };
 type ChatReaction = string | { emoji: string; name: string };
 type ChatPollVote = string | string[];
+type ChatAttachment = {
+  id: string;
+  name: string;
+  url: string;
+  path?: string;
+  contentType: string;
+  size: number;
+  kind: 'image' | 'video' | 'audio' | 'file';
+};
 type ChatMessage = {
   id: string;
   type: 'message' | 'poll';
@@ -332,6 +345,7 @@ type ChatMessage = {
   deleted?: boolean;
   lastActorUid?: string;
   lastActorRole?: 'host' | 'guest';
+  attachments?: ChatAttachment[];
 };
 let chatAudioContext: AudioContext | null = null;
 const primeChatAudio = () => {
@@ -8924,9 +8938,17 @@ function EventChat({
   const [pinnedIndex, setPinnedIndex] = useState(0);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recorderStreamRef = useRef<MediaStream | null>(null);
+  const recordingTimerRef = useRef<number | null>(null);
+  const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; timer: number | null; active: boolean; opened: boolean } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
@@ -9099,6 +9121,25 @@ function EventChat({
     if (highlightTimerRef.current) window.clearTimeout(highlightTimerRef.current);
   }, []);
 
+  useEffect(() => () => {
+    if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+    recorderRef.current?.stop();
+    recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+  }, []);
+
+  useEffect(() => {
+    if (!messageMenuFor && !reactionFor && !reactionDetailsFor) return;
+    const dismiss = (event: PointerEvent) => {
+      const target = event.target as HTMLElement;
+      if (target.closest('.chat-message-menu, .chat-reaction-picker, .chat-reaction-details, .chat-message')) return;
+      setMessageMenuFor(null);
+      setReactionFor(null);
+      setReactionDetailsFor(null);
+    };
+    document.addEventListener('pointerdown', dismiss, true);
+    return () => document.removeEventListener('pointerdown', dismiss, true);
+  }, [messageMenuFor, reactionFor, reactionDetailsFor]);
+
   useLayoutEffect(() => {
     const composer = composerRef.current;
     if (!composer) return;
@@ -9160,16 +9201,171 @@ function EventChat({
       });
     });
   };
+  const beginReply = (message: ChatMessage) => {
+    setReplyTo({
+      id: message.id,
+      authorName: message.authorName,
+      text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300),
+    });
+    setEditing(null);
+    setMessageMenuFor(null);
+    focusComposer();
+  };
+  const attachmentKind = (contentType: string): ChatAttachment['kind'] => {
+    if (contentType.startsWith('image/')) return 'image';
+    if (contentType.startsWith('video/')) return 'video';
+    if (contentType.startsWith('audio/')) return 'audio';
+    return 'file';
+  };
+  const chooseAttachments = (files: FileList | null) => {
+    const next = Array.from(files || []);
+    const oversized = next.find((file) => file.size > 25 * 1024 * 1024);
+    if (oversized) {
+      notify(`${oversized.name} is larger than 25 MB`);
+      return;
+    }
+    setPendingAttachments((current) => [...current, ...next].slice(0, 6));
+  };
+  const uploadAttachments = async (resolvedActor: ChatActor): Promise<ChatAttachment[]> => {
+    if (!pendingAttachments.length) return [];
+    if (!firebaseConfigured) {
+      return Promise.all(pendingAttachments.map((file) => new Promise<ChatAttachment>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error('attachment-read-failed'));
+        reader.onload = () => {
+          if (typeof reader.result !== 'string') {
+            reject(new Error('attachment-read-failed'));
+            return;
+          }
+          resolve({
+          id: crypto.randomUUID(), name: file.name, url: reader.result, contentType: file.type || 'application/octet-stream',
+          size: file.size, kind: attachmentKind(file.type || ''),
+          });
+        };
+        reader.readAsDataURL(file);
+      })));
+    }
+    const [{ getApp }, storage] = await Promise.all([
+      import('firebase/app'),
+      import('firebase/storage'),
+    ]);
+    const bucket = storage.getStorage(getApp());
+    return Promise.all(pendingAttachments.map(async (file) => {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(-100) || 'attachment';
+      const id = crypto.randomUUID();
+      const path = `events/${menu.id}/chat/${resolvedActor.uid}/${id}-${safeName}`;
+      const target = storage.ref(bucket, path);
+      await storage.uploadBytes(target, file, { contentType: file.type || 'application/octet-stream' });
+      return {
+        id,
+        name: file.name.slice(0, 140),
+        url: await storage.getDownloadURL(target),
+        path,
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        kind: attachmentKind(file.type || ''),
+      } satisfies ChatAttachment;
+    }));
+  };
+  const startVoiceRecording = async () => {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      notify('Voice messages are not supported on this device.');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks: BlobPart[] = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size) setPendingAttachments((current) => [...current, new File([blob], `voice-message-${new Date().toISOString().slice(11, 19).replaceAll(':', '-')}.webm`, { type: blob.type })].slice(0, 6));
+        stream.getTracks().forEach((track) => track.stop());
+        recorderRef.current = null;
+        recorderStreamRef.current = null;
+        if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+        setRecording(false);
+        setRecordingSeconds(0);
+      };
+      recorderRef.current = recorder;
+      recorderStreamRef.current = stream;
+      setRecordingSeconds(0);
+      setRecording(true);
+      recordingTimerRef.current = window.setInterval(() => setRecordingSeconds((seconds) => seconds + 1), 1000);
+      recorder.start();
+    } catch {
+      notify('Microphone access is needed to record a voice message.');
+    }
+  };
+  const startMessageGesture = (event: ReactPointerEvent<HTMLElement>, message: ChatMessage, displayKey: string) => {
+    if (event.button !== 0 || locked || message.deleted) return;
+    if ((event.target as HTMLElement).closest('button, input, textarea, label, a, audio, video')) return;
+    const node = event.currentTarget;
+    const state = { x: event.clientX, y: event.clientY, node, active: true, opened: false, timer: null as number | null };
+    state.timer = window.setTimeout(() => {
+      state.opened = true;
+      state.timer = null;
+      node.style.setProperty('--chat-swipe-x', '0px');
+      setMessageMenuFor(displayKey);
+      navigator.vibrate?.(12);
+    }, 420);
+    gestureRef.current = state;
+  };
+  const moveMessageGesture = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = gestureRef.current;
+    if (!state?.active || state.opened) return;
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+    if (Math.abs(dy) > 8 || dx > 8) {
+      if (state.timer) window.clearTimeout(state.timer);
+      state.timer = null;
+      if (Math.abs(dy) > Math.abs(dx)) state.active = false;
+      return;
+    }
+    if (dx < 0 && Math.abs(dx) > Math.abs(dy)) {
+      if (state.timer) window.clearTimeout(state.timer);
+      state.timer = null;
+      state.node.classList.add('swiping');
+      state.node.style.setProperty('--chat-swipe-x', `${Math.max(-82, dx)}px`);
+    }
+  };
+  const finishMessageGesture = (event: ReactPointerEvent<HTMLElement>, message: ChatMessage) => {
+    const state = gestureRef.current;
+    if (!state) return;
+    if (state.timer) window.clearTimeout(state.timer);
+    const dx = event.clientX - state.x;
+    state.node.classList.remove('swiping');
+    state.node.classList.add('settling');
+    state.node.style.setProperty('--chat-swipe-x', '0px');
+    window.setTimeout(() => state.node.classList.remove('settling'), 180);
+    if (!state.opened && dx < -48) beginReply(message);
+    gestureRef.current = null;
+  };
+  const cancelMessageGesture = () => {
+    const state = gestureRef.current;
+    if (!state) return;
+    if (state.timer) window.clearTimeout(state.timer);
+    state.node.classList.remove('swiping');
+    state.node.style.setProperty('--chat-swipe-x', '0px');
+    gestureRef.current = null;
+  };
   const sendMessage = async () => {
     const text = draft.trim();
-    if (!text || locked || busy) return;
+    if ((!text && !pendingAttachments.length) || locked || busy) return;
     setBusy(true);
     try {
       const resolvedActor = await resolveActor();
       if (editing) {
+        if (pendingAttachments.length) throw new Error('attachments-while-editing');
         if (editing.authorUid !== resolvedActor.uid) throw new Error('not-author');
         await updateMessage(editing.id, () => ({ text: text.slice(0, 2000), edited: true }));
       } else {
+        const attachments = await uploadAttachments(resolvedActor);
         const id = crypto.randomUUID();
         const message: ChatMessage = {
           id,
@@ -9196,6 +9392,7 @@ function EventChat({
           deleted: false,
           lastActorUid: resolvedActor.uid,
           lastActorRole: resolvedActor.role,
+          attachments,
         };
         if (firebaseConfigured) {
           const [{ getApp }, store] = await Promise.all([
@@ -9212,6 +9409,7 @@ function EventChat({
       setDraft('');
       setReplyTo(null);
       setEditing(null);
+      setPendingAttachments([]);
       focusComposer();
     } catch {
       notify('Message could not be saved');
@@ -9258,6 +9456,7 @@ function EventChat({
         deleted: false,
         lastActorUid: resolvedActor.uid,
         lastActorRole: 'host',
+        attachments: [],
       };
       if (firebaseConfigured) {
         const [{ getApp }, store] = await Promise.all([
@@ -9526,12 +9725,12 @@ function EventChat({
                 data-chat-message-id={message.id}
                 ref={(node) => { messageRefs.current[message.id] = node; }}
                 className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message._pollRepeat ? 'poll-repeat' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
-                onPointerUp={(event) => {
-                  if (event.button !== 0) return;
-                  if ((event.target as HTMLElement).closest('button, input, textarea, label')) return;
-                  setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey);
-                }}
+                onPointerDown={(event) => startMessageGesture(event, message, displayKey)}
+                onPointerMove={moveMessageGesture}
+                onPointerUp={(event) => finishMessageGesture(event, message)}
+                onPointerCancel={cancelMessageGesture}
               >
+                {!message.deleted && <span className="chat-swipe-reply" aria-hidden="true"><Reply size={16} /></span>}
                 <div className="chat-message-meta">
                   <strong>{message.authorName}</strong>
                   {message.authorRole === 'host' && <b>Host</b>}
@@ -9551,7 +9750,7 @@ function EventChat({
                         ))}
                       </div>
                     )}
-                    {!message.deleted && <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); setMessageMenuFor(null); focusComposer(); }}><Reply size={14} /> Reply</button>}
+                    {!message.deleted && <button type="button" onClick={() => beginReply(message)}><Reply size={14} /> Reply</button>}
                     {mine && message.type === 'message' && !message.deleted && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); setMessageMenuFor(null); focusComposer(); }}><Pencil size={14} /> Edit</button>}
                     {actor.role === 'host' && !message.deleted && <button type="button" onClick={() => void togglePinned(message)}>{message.pinned ? <PinOff size={14} /> : <Pin size={14} />}{message.pinned ? 'Unpin message' : 'Pin message'}</button>}
                     {(mine || actor.role === 'host') && !message.deleted && <button type="button" className="danger" onClick={() => void deleteMessage(message)}><Trash2 size={14} /> Delete</button>}
@@ -9561,6 +9760,16 @@ function EventChat({
                 )}
                 {message.replyTo && !message.deleted && (
                   <button type="button" className="chat-reply-context" onClick={() => jumpToMessage(message.replyTo!.id)} title="Jump to replied message"><strong>{message.replyTo.authorName}</strong><span>{message.replyTo.text}</span></button>
+                )}
+                {!message.deleted && (message.attachments || []).length > 0 && (
+                  <div className="chat-attachments">
+                    {(message.attachments || []).map((attachment) => (
+                      attachment.kind === 'image' ? <a key={attachment.id} href={attachment.url} target="_blank" rel="noreferrer" className="chat-image-attachment"><img src={attachment.url} alt={attachment.name} /></a>
+                        : attachment.kind === 'video' ? <video key={attachment.id} controls playsInline src={attachment.url} />
+                          : attachment.kind === 'audio' ? <audio key={attachment.id} controls src={attachment.url} />
+                            : <a key={attachment.id} href={attachment.url} target="_blank" rel="noreferrer" className="chat-file-attachment"><FileIcon size={18} /><span><strong>{attachment.name}</strong><small>{Math.max(1, Math.ceil(attachment.size / 1024))} KB</small></span></a>
+                    ))}
+                  </div>
                 )}
                 {message.deleted ? <p className="chat-deleted-copy">Message deleted</p> : message.type === 'message' ? <p>{message.text}</p> : (
                   <div className="chat-poll">
@@ -9611,7 +9820,7 @@ function EventChat({
                 )}
                 {!locked && !message.deleted && (
                   <div className="chat-message-actions">
-                    <button type="button" onClick={() => { setReplyTo({ id: message.id, authorName: message.authorName, text: (message.type === 'poll' ? message.pollQuestion : message.text).slice(0, 300) }); focusComposer(); }}><Reply size={13} /> Reply</button>
+                    <button type="button" onClick={() => beginReply(message)}><Reply size={13} /> Reply</button>
                     {mine && message.type === 'message' && <button type="button" onClick={() => { setEditing(message); setDraft(message.text); setReplyTo(null); focusComposer(); }}><Pencil size={13} /> Edit</button>}
                     <button type="button" onClick={() => setMessageMenuFor(messageMenuFor === displayKey ? null : displayKey)}><Smile size={13} /> React</button>
                   </div>
@@ -9642,11 +9851,15 @@ function EventChat({
         {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
           <footer className="chat-composer">
             {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
+            {pendingAttachments.length > 0 && <div className="chat-pending-attachments">{pendingAttachments.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={13} /><b>{file.name}</b><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index))}><XCircle size={14} /></button></span>)}</div>}
+            <input ref={attachmentInputRef} className="chat-file-input" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" onChange={(event) => { chooseAttachments(event.target.files); event.currentTarget.value = ''; }} />
             <div className={`chat-composer-row ${actor.role}`}>
               <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
+              <button type="button" className="chat-tool-button" onClick={() => attachmentInputRef.current?.click()} aria-label="Attach photos, videos, or files"><Paperclip size={19} /></button>
               {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
               <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <button type="button" className="chat-send" disabled={busy || !draft.trim()} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
+              <button type="button" className={`chat-tool-button chat-voice-button ${recording ? 'recording' : ''}`} disabled={busy || Boolean(editing)} onClick={() => void startVoiceRecording()} aria-label={recording ? `Stop voice recording at ${recordingSeconds} seconds` : 'Record voice message'}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}</button>
+              <button type="button" className="chat-send" disabled={busy || (!draft.trim() && !pendingAttachments.length)} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
             </div>
             {emojiOpen && <div className="chat-emoji-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={350} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { setDraft((current) => `${current}${emojiData.emoji}`); setEmojiOpen(false); focusComposer(); }} /></div>}
           </footer>
