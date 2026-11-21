@@ -62,6 +62,7 @@ struct NightsWebView: UIViewRepresentable {
         webView.backgroundColor = UIColor(red: 0.024, green: 0.106, blue: 0.165, alpha: 1)
         webView.scrollView.backgroundColor = webView.backgroundColor
         context.coordinator.webView = webView
+        context.coordinator.beginKeyboardTracking(for: webView)
         model.webView = webView
         webView.load(URLRequest(url: model.startURL, cachePolicy: .useProtocolCachePolicy))
         return webView
@@ -72,6 +73,7 @@ struct NightsWebView: UIViewRepresentable {
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsAuth")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsTheme")
+        coordinator.endKeyboardTracking()
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler,
@@ -79,6 +81,7 @@ struct NightsWebView: UIViewRepresentable {
         private let model: NightsBrowserModel
         fileprivate weak var webView: WKWebView?
         private var appleNonce: String?
+        private var keyboardObservers: [NSObjectProtocol] = []
 
         init(model: NightsBrowserModel) {
             self.model = model
@@ -86,6 +89,39 @@ struct NightsWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             model.isOffline = false
+            webView.inputAssistantItem.leadingBarButtonGroups = []
+            webView.inputAssistantItem.trailingBarButtonGroups = []
+            webView.reloadInputViews()
+        }
+
+        func beginKeyboardTracking(for webView: WKWebView) {
+            endKeyboardTracking()
+            let center = NotificationCenter.default
+            keyboardObservers = [
+                center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] notification in
+                    self?.publishKeyboardInset(notification, for: webView)
+                },
+                center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.publishKeyboardInset(0, for: webView)
+                },
+            ]
+        }
+
+        func endKeyboardTracking() {
+            keyboardObservers.forEach(NotificationCenter.default.removeObserver)
+            keyboardObservers.removeAll()
+        }
+
+        private func publishKeyboardInset(_ notification: Notification, for webView: WKWebView) {
+            guard let value = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue else { return }
+            let frame = webView.convert(value.cgRectValue, from: nil)
+            publishKeyboardInset(max(0, webView.bounds.maxY - frame.minY), for: webView)
+        }
+
+        private func publishKeyboardInset(_ inset: CGFloat, for webView: WKWebView) {
+            let value = Int(inset.rounded())
+            let active = value > 80 ? "true" : "false"
+            webView.evaluateJavaScript("document.documentElement.style.setProperty('--nights-native-keyboard-inset', '\(value)px'); document.body.classList.toggle('chat-keyboard-open', \(active));")
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

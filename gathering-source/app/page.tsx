@@ -9648,7 +9648,7 @@ function EventChat({
   }
 
   return (
-    <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `${keyboardInset}px` } as CSSProperties}>
+    <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header className="chat-header">
