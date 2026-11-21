@@ -44,6 +44,7 @@ import {
   MessageCircle,
   Mic,
   Monitor,
+  MoreHorizontal,
   Minus,
   Move,
   Pencil,
@@ -8922,6 +8923,7 @@ function EventChat({
   const [replyTo, setReplyTo] = useState<ChatReply | null>(null);
   const [editing, setEditing] = useState<ChatMessage | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [chatOptionsOpen, setChatOptionsOpen] = useState(false);
   const [reactionFor, setReactionFor] = useState<string | null>(null);
   const [reactionDetailsFor, setReactionDetailsFor] = useState<string | null>(null);
   const [pollVotersFor, setPollVotersFor] = useState<string | null>(null);
@@ -9128,17 +9130,18 @@ function EventChat({
   }, []);
 
   useEffect(() => {
-    if (!messageMenuFor && !reactionFor && !reactionDetailsFor) return;
+    if (!messageMenuFor && !reactionFor && !reactionDetailsFor && !chatOptionsOpen) return;
     const dismiss = (event: PointerEvent) => {
       const target = event.target as HTMLElement;
-      if (target.closest('.chat-message-menu, .chat-reaction-picker, .chat-reaction-details, .chat-message')) return;
+      if (target.closest('.chat-message-menu, .chat-reaction-picker, .chat-reaction-details, .chat-message, .chat-header-options')) return;
       setMessageMenuFor(null);
       setReactionFor(null);
       setReactionDetailsFor(null);
+      setChatOptionsOpen(false);
     };
     document.addEventListener('pointerdown', dismiss, true);
     return () => document.removeEventListener('pointerdown', dismiss, true);
-  }, [messageMenuFor, reactionFor, reactionDetailsFor]);
+  }, [messageMenuFor, reactionFor, reactionDetailsFor, chatOptionsOpen]);
 
   useLayoutEffect(() => {
     const composer = composerRef.current;
@@ -9322,13 +9325,13 @@ function EventChat({
     if (!state?.active || state.opened || state.pointerId !== event.pointerId) return;
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    if (Math.abs(dy) > 8 || dx > 8) {
+    if (dx > 10 || (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx) * 1.6)) {
       if (state.timer) window.clearTimeout(state.timer);
       state.timer = null;
       if (Math.abs(dy) > Math.abs(dx)) state.active = false;
       return;
     }
-    if (dx < 0 && Math.abs(dx) > Math.abs(dy)) {
+    if (dx < 0 && Math.abs(dx) >= Math.abs(dy) * 0.55) {
       if (state.timer) window.clearTimeout(state.timer);
       state.timer = null;
       state.node.classList.add('swiping');
@@ -9344,7 +9347,7 @@ function EventChat({
     state.node.classList.add('settling');
     state.node.style.setProperty('--chat-swipe-x', '0px');
     window.setTimeout(() => state.node.classList.remove('settling'), 180);
-    if (state.active && !state.opened && dx < -36) beginReply(message);
+    if (state.active && !state.opened && dx < -28) beginReply(message);
     gestureRef.current = null;
   };
   const cancelMessageGesture = () => {
@@ -9627,6 +9630,15 @@ function EventChat({
               </div>
             </div>
             <div className="chat-header-actions">
+              <div className="chat-header-options">
+                <button type="button" onClick={() => setChatOptionsOpen((open) => !open)} aria-label="Chat options" aria-expanded={chatOptionsOpen}><MoreHorizontal size={20} /></button>
+                {chatOptionsOpen && (
+                  <div className="chat-header-options-menu">
+                    {actor.role === 'host' && !locked && <button type="button" onClick={() => { setPollOpen(true); setChatOptionsOpen(false); }}><ListChecks size={16} /> Create a poll</button>}
+                    <button type="button" onClick={() => { setEmojiOpen(true); setChatOptionsOpen(false); focusComposer(); }}><Smile size={16} /> Add emoji</button>
+                  </div>
+                )}
+              </div>
               {PUSH_NOTIFICATIONS_ENABLED && pushAvailable && (
                 <button
                   type="button"
@@ -9854,13 +9866,13 @@ function EventChat({
             {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
             {pendingAttachments.length > 0 && <div className="chat-pending-attachments">{pendingAttachments.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={13} /><b>{file.name}</b><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index))}><XCircle size={14} /></button></span>)}</div>}
             <input ref={attachmentInputRef} className="chat-file-input" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" onChange={(event) => { chooseAttachments(event.target.files); event.currentTarget.value = ''; }} />
-            <div className={`chat-composer-row ${actor.role}`}>
-              <button type="button" className="chat-tool-button" onClick={() => setEmojiOpen(!emojiOpen)} aria-label="Add emoji"><Smile size={19} /></button>
+            <div className="chat-composer-row">
               <button type="button" className="chat-tool-button" onClick={() => attachmentInputRef.current?.click()} aria-label="Attach photos, videos, or files"><Paperclip size={19} /></button>
-              {actor.role === 'host' && <button type="button" className="chat-tool-button" onClick={() => setPollOpen(!pollOpen)} aria-label="Create poll"><ListChecks size={19} /></button>}
               <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
-              <button type="button" className={`chat-tool-button chat-voice-button ${recording ? 'recording' : ''}`} disabled={busy || Boolean(editing)} onClick={() => void startVoiceRecording()} aria-label={recording ? `Stop voice recording at ${recordingSeconds} seconds` : 'Record voice message'}>{recording ? <Square size={16} fill="currentColor" /> : <Mic size={19} />}</button>
-              <button type="button" className="chat-send" disabled={busy || (!draft.trim() && !pendingAttachments.length)} onClick={() => void sendMessage()} aria-label="Send message"><Send size={18} /></button>
+              <button type="button" className={`chat-primary-action ${recording ? 'recording' : ''}`} disabled={busy || Boolean(editing)} onClick={() => {
+                if (recording || (!draft.trim() && !pendingAttachments.length)) void startVoiceRecording();
+                else void sendMessage();
+              }} aria-label={recording ? `Stop voice recording at ${recordingSeconds} seconds` : draft.trim() || pendingAttachments.length ? 'Send message' : 'Record voice message'}>{recording ? <Square size={16} fill="currentColor" /> : draft.trim() || pendingAttachments.length ? <Send size={18} /> : <Mic size={19} />}</button>
             </div>
             {emojiOpen && <div className="chat-emoji-picker full-emoji-picker"><EmojiPicker theme={Theme.DARK} emojiStyle={EmojiStyle.NATIVE} width="100%" height={350} autoFocusSearch={false} lazyLoadEmojis previewConfig={{ showPreview: false }} onEmojiClick={(emojiData) => { setDraft((current) => `${current}${emojiData.emoji}`); setEmojiOpen(false); focusComposer(); }} /></div>}
           </footer>
