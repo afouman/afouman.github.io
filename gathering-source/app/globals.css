@@ -6290,6 +6290,15 @@ body.native-ios-shell {
 .guest-home-dock {
   width: 100%;
 }
+/* While composing a chat message the keyboard owns the bottom of the screen.
+   The chat itself moves above it; navigation controls do not remain visible
+   between the composer and keyboard. */
+body.chat-keyboard-open .host-event-dock,
+body.chat-keyboard-open .guest-event-dock,
+body.chat-keyboard-open .guest-home-dock {
+  visibility: hidden;
+  pointer-events: none;
+}
 .host-mode {
   overscroll-behavior-y: none;
 }

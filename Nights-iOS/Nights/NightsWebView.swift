@@ -53,6 +53,11 @@ struct NightsWebView: UIViewRepresentable {
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isDirectionalLockEnabled = true
         webView.scrollView.decelerationRate = .normal
+        // Nights supplies its own message composer controls. The standard
+        // WKWebView input assistant (previous/next arrows and Done button)
+        // floats above the keyboard and obscures that composer on iPhone.
+        webView.inputAssistantItem.leadingBarButtonGroups = []
+        webView.inputAssistantItem.trailingBarButtonGroups = []
         webView.isOpaque = false
         webView.backgroundColor = UIColor(red: 0.024, green: 0.106, blue: 0.165, alpha: 1)
         webView.scrollView.backgroundColor = webView.backgroundColor

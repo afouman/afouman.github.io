@@ -9167,6 +9167,7 @@ function EventChat({
     const syncKeyboard = () => {
       const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
       setKeyboardInset(inset);
+      document.body.classList.toggle('chat-keyboard-open', inset > 80);
       if (document.activeElement === composerRef.current) settleComposerAtLatest();
     };
     syncKeyboard();
@@ -9175,6 +9176,7 @@ function EventChat({
     return () => {
       viewport.removeEventListener('resize', syncKeyboard);
       viewport.removeEventListener('scroll', syncKeyboard);
+      document.body.classList.remove('chat-keyboard-open');
       setKeyboardInset(0);
     };
   }, [settleComposerAtLatest, visible]);
