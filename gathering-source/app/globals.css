@@ -6295,9 +6295,11 @@ body.native-ios-shell {
    between the composer and keyboard. */
 body.chat-keyboard-open .host-event-dock,
 body.chat-keyboard-open .guest-event-dock,
-body.chat-keyboard-open .guest-home-dock {
-  visibility: hidden;
-  pointer-events: none;
+body.chat-keyboard-open .guest-home-dock,
+body.chat-composer-focused .host-event-dock,
+body.chat-composer-focused .guest-event-dock,
+body.chat-composer-focused .guest-home-dock {
+  display: none !important;
 }
 .host-mode {
   overscroll-behavior-y: none;

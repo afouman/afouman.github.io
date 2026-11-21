@@ -9128,6 +9128,7 @@ function EventChat({
     if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
     recorderRef.current?.stop();
     recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
+    document.body.classList.remove('chat-composer-focused');
   }, []);
 
   useEffect(() => {
@@ -9182,6 +9183,10 @@ function EventChat({
   }, [settleComposerAtLatest, visible]);
 
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
+  const setComposerFocusState = (focused: boolean) => {
+    document.body.classList.toggle('chat-composer-focused', focused);
+    if (focused) settleComposerAtLatest();
+  };
 
   const jumpToMessage = (messageId: string) => {
     const message = messageRefs.current[messageId];
@@ -9902,7 +9907,7 @@ function EventChat({
             <input ref={attachmentInputRef} className="chat-file-input" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" onChange={(event) => { chooseAttachments(event.target.files); event.currentTarget.value = ''; }} />
             <div className="chat-composer-row">
               <button type="button" className="chat-tool-button" onClick={() => attachmentInputRef.current?.click()} aria-label="Attach photos, videos, or files"><Paperclip size={19} /></button>
-              <textarea ref={composerRef} value={draft} onFocus={settleComposerAtLatest} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea ref={composerRef} value={draft} inputMode="text" enterKeyHint="send" onFocus={() => setComposerFocusState(true)} onBlur={() => window.setTimeout(() => setComposerFocusState(false), 0)} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <button type="button" className={`chat-primary-action ${recording ? 'recording' : ''}`} disabled={busy || Boolean(editing)} onClick={() => {
                 if (recording || (!draft.trim() && !pendingAttachments.length)) void startVoiceRecording();
                 else void sendMessage();
