@@ -8948,7 +8948,7 @@ function EventChat({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
-  const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; timer: number | null; active: boolean; opened: boolean } | null>(null);
+  const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; timer: number | null; active: boolean; opened: boolean } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
@@ -9306,7 +9306,8 @@ function EventChat({
     if (event.button !== 0 || locked || message.deleted) return;
     if ((event.target as HTMLElement).closest('button, input, textarea, label, a, audio, video')) return;
     const node = event.currentTarget;
-    const state = { x: event.clientX, y: event.clientY, node, active: true, opened: false, timer: null as number | null };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const state = { x: event.clientX, y: event.clientY, node, pointerId: event.pointerId, active: true, opened: false, timer: null as number | null };
     state.timer = window.setTimeout(() => {
       state.opened = true;
       state.timer = null;
@@ -9318,7 +9319,7 @@ function EventChat({
   };
   const moveMessageGesture = (event: ReactPointerEvent<HTMLElement>) => {
     const state = gestureRef.current;
-    if (!state?.active || state.opened) return;
+    if (!state?.active || state.opened || state.pointerId !== event.pointerId) return;
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
     if (Math.abs(dy) > 8 || dx > 8) {
@@ -9336,14 +9337,14 @@ function EventChat({
   };
   const finishMessageGesture = (event: ReactPointerEvent<HTMLElement>, message: ChatMessage) => {
     const state = gestureRef.current;
-    if (!state) return;
+    if (!state || state.pointerId !== event.pointerId) return;
     if (state.timer) window.clearTimeout(state.timer);
     const dx = event.clientX - state.x;
     state.node.classList.remove('swiping');
     state.node.classList.add('settling');
     state.node.style.setProperty('--chat-swipe-x', '0px');
     window.setTimeout(() => state.node.classList.remove('settling'), 180);
-    if (!state.opened && dx < -48) beginReply(message);
+    if (state.active && !state.opened && dx < -36) beginReply(message);
     gestureRef.current = null;
   };
   const cancelMessageGesture = () => {
