@@ -8943,6 +8943,7 @@ function EventChat({
   const [pendingAttachments, setPendingAttachments] = useState<File[]>([]);
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [keyboardInset, setKeyboardInset] = useState(0);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -9149,6 +9150,34 @@ function EventChat({
     composer.style.height = 'auto';
     composer.style.height = `${Math.min(composer.scrollHeight, 112)}px`;
   }, [draft, visible]);
+
+  const settleComposerAtLatest = useCallback(() => {
+    const settle = () => {
+      scrollStreamToBottom('auto');
+      nearBottomRef.current = true;
+      setShowScrollBottom(false);
+    };
+    requestAnimationFrame(settle);
+    window.setTimeout(settle, 180);
+  }, [scrollStreamToBottom]);
+
+  useEffect(() => {
+    if (!visible || !window.visualViewport) return;
+    const viewport = window.visualViewport;
+    const syncKeyboard = () => {
+      const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      setKeyboardInset(inset);
+      if (document.activeElement === composerRef.current) settleComposerAtLatest();
+    };
+    syncKeyboard();
+    viewport.addEventListener('resize', syncKeyboard);
+    viewport.addEventListener('scroll', syncKeyboard);
+    return () => {
+      viewport.removeEventListener('resize', syncKeyboard);
+      viewport.removeEventListener('scroll', syncKeyboard);
+      setKeyboardInset(0);
+    };
+  }, [settleComposerAtLatest, visible]);
 
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
 
@@ -9617,7 +9646,7 @@ function EventChat({
   }
 
   return (
-    <div className={`chat-float-layer ${actor.role}`}>
+    <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `${keyboardInset}px` } as CSSProperties}>
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header className="chat-header">
@@ -9863,12 +9892,15 @@ function EventChat({
         )}
         {locked ? <div className="chat-locked"><LockKeyhole size={16} /> The host has locked this chat.</div> : (
           <footer className="chat-composer">
-            {(replyTo || editing) && <div className="chat-composer-context"><span>{editing ? 'Editing your message' : <>Replying to <strong>{replyTo?.authorName}</strong></>}</span><button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }}><XCircle size={16} /></button></div>}
+            {(replyTo || editing) && <div className="chat-composer-context">
+              {editing ? <span>Editing your message</span> : <div className="chat-composer-reply-copy"><strong>{replyTo?.authorName}</strong><span>{replyTo?.text}</span></div>}
+              <button type="button" onClick={() => { setReplyTo(null); setEditing(null); setDraft(''); focusComposer(); }} aria-label="Cancel reply"><XCircle size={16} /></button>
+            </div>}
             {pendingAttachments.length > 0 && <div className="chat-pending-attachments">{pendingAttachments.map((file, index) => <span key={`${file.name}-${index}`}><FileIcon size={13} /><b>{file.name}</b><button type="button" aria-label={`Remove ${file.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, fileIndex) => fileIndex !== index))}><XCircle size={14} /></button></span>)}</div>}
             <input ref={attachmentInputRef} className="chat-file-input" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip" onChange={(event) => { chooseAttachments(event.target.files); event.currentTarget.value = ''; }} />
             <div className="chat-composer-row">
               <button type="button" className="chat-tool-button" onClick={() => attachmentInputRef.current?.click()} aria-label="Attach photos, videos, or files"><Paperclip size={19} /></button>
-              <textarea ref={composerRef} value={draft} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
+              <textarea ref={composerRef} value={draft} onFocus={settleComposerAtLatest} onChange={(event) => setDraft(event.target.value)} maxLength={2000} rows={1} placeholder={editing ? 'Edit message' : 'Message everyone going…'} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void sendMessage(); } }} />
               <button type="button" className={`chat-primary-action ${recording ? 'recording' : ''}`} disabled={busy || Boolean(editing)} onClick={() => {
                 if (recording || (!draft.trim() && !pendingAttachments.length)) void startVoiceRecording();
                 else void sendMessage();
