@@ -6301,6 +6301,24 @@ body.chat-composer-focused .guest-event-dock,
 body.chat-composer-focused .guest-home-dock {
   display: none !important;
 }
+.chat-unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.35rem 0 0.65rem;
+  color: rgb(116 231 202 / 0.92);
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.chat-unread-divider::before,
+.chat-unread-divider::after {
+  height: 1px;
+  flex: 1;
+  background: rgb(116 231 202 / 0.4);
+  content: '';
+}
 .host-mode {
   overscroll-behavior-y: none;
 }

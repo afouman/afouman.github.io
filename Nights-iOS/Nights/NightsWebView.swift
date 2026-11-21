@@ -82,6 +82,7 @@ struct NightsWebView: UIViewRepresentable {
         fileprivate weak var webView: WKWebView?
         private var appleNonce: String?
         private var keyboardObservers: [NSObjectProtocol] = []
+        private var inputAssistantResetForKeyboard = false
 
         init(model: NightsBrowserModel) {
             self.model = model
@@ -102,6 +103,7 @@ struct NightsWebView: UIViewRepresentable {
                     self?.publishKeyboardInset(notification, for: webView)
                 },
                 center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.inputAssistantResetForKeyboard = false
                     self?.publishKeyboardInset(0, for: webView)
                 },
             ]
@@ -121,6 +123,19 @@ struct NightsWebView: UIViewRepresentable {
         private func publishKeyboardInset(_ inset: CGFloat, for webView: WKWebView) {
             let value = Int(inset.rounded())
             let active = value > 80 ? "true" : "false"
+            // WKWebView can recreate the system previous/next/Done accessory
+            // when its HTML textarea becomes first responder. Empty its public
+            // UIKit input-assistant groups after that handoff as well as after
+            // navigation; this contains no private API and keeps Nights' own
+            // composer as the only accessory above the keyboard.
+            if value > 80 && !inputAssistantResetForKeyboard {
+                inputAssistantResetForKeyboard = true
+                DispatchQueue.main.async {
+                    webView.inputAssistantItem.leadingBarButtonGroups = []
+                    webView.inputAssistantItem.trailingBarButtonGroups = []
+                    webView.reloadInputViews()
+                }
+            }
             webView.evaluateJavaScript("document.documentElement.style.setProperty('--nights-native-keyboard-inset', '\(value)px'); document.body.classList.toggle('chat-keyboard-open', \(active));")
         }
 

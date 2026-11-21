@@ -1,7 +1,7 @@
 'use client';
 /* oxlint-disable jsx-a11y/prefer-tag-over-role, next/no-img-element, jsx-a11y/media-has-caption -- Safari handles controls inside this fixed overlay reliably only with a non-native dialog wrapper; chat uploads need direct, user-selected media URLs. */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal } from 'react-dom';
 import Image from 'next/image';
@@ -8944,6 +8944,7 @@ function EventChat({
   const [recording, setRecording] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [keyboardInset, setKeyboardInset] = useState(0);
+  const [unreadStartMessageId, setUnreadStartMessageId] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -8956,6 +8957,7 @@ function EventChat({
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const restoredForOpen = useRef(false);
+  const unreadMarkerSeededFor = useRef<string | null>(null);
   const nearBottomRef = useRef(true);
   const previewKey = `gather-demo-chat:${menu.id}`;
   const readPositionKey = `gather-chat-read:${menu.id}:${actor.uid}`;
@@ -9070,6 +9072,8 @@ function EventChat({
   useEffect(() => {
     if (!visible) {
       restoredForOpen.current = false;
+      unreadMarkerSeededFor.current = null;
+      queueMicrotask(() => setUnreadStartMessageId(null));
       return;
     }
     if (restoredForOpen.current || messages.length === 0) return;
@@ -9099,6 +9103,26 @@ function EventChat({
     });
   }, [messages, readPositionKey, rememberReadPosition, scrollMessageInsideStream, scrollStreamToBottom, visible]);
 
+  // Keep a session marker for the first message that arrived after this person
+  // last read the conversation. The read pointer can continue to advance while
+  // they scroll, without making the visual boundary jump around underneath them.
+  useEffect(() => {
+    if (!visible || messages.length === 0) return;
+    const markerKey = `${menu.id}:${actor.uid}`;
+    if (unreadMarkerSeededFor.current === markerKey) return;
+    unreadMarkerSeededFor.current = markerKey;
+    const lastReadId = localStorage.getItem(readPositionKey);
+    if (!lastReadId) return;
+    const chronological = [...messages].sort(
+      (left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id),
+    );
+    const lastReadIndex = chronological.findIndex((message) => message.id === lastReadId);
+    const firstUnread = chronological
+      .slice(lastReadIndex + 1)
+      .find((message) => message.authorUid !== actor.uid && !message.deleted);
+    requestAnimationFrame(() => setUnreadStartMessageId(firstUnread?.id || null));
+  }, [actor.uid, menu.id, messages, readPositionKey, visible]);
+
   useEffect(() => {
     const currentIds = new Set(messages.map((message) => message.id));
     if (knownMessageIds.current) {
@@ -9107,7 +9131,8 @@ function EventChat({
       );
       if (incoming.length) {
         playChatSound();
-        if (!visible) setUnread((current) => current + incoming.length);
+        if (visible) setUnreadStartMessageId((current) => current || incoming[0].id);
+        else setUnread((current) => current + incoming.length);
       }
     }
     knownMessageIds.current = currentIds;
@@ -9240,7 +9265,7 @@ function EventChat({
       });
     });
   };
-  const beginReply = (message: ChatMessage) => {
+  const beginReply = (message: ChatMessage, focus = true) => {
     setReplyTo({
       id: message.id,
       authorName: message.authorName,
@@ -9248,7 +9273,7 @@ function EventChat({
     });
     setEditing(null);
     setMessageMenuFor(null);
-    focusComposer();
+    if (focus) focusComposer();
   };
   const attachmentKind = (contentType: string): ChatAttachment['kind'] => {
     if (contentType.startsWith('image/')) return 'image';
@@ -9383,7 +9408,10 @@ function EventChat({
     state.node.classList.add('settling');
     state.node.style.setProperty('--chat-swipe-x', '0px');
     window.setTimeout(() => state.node.classList.remove('settling'), 180);
-    if (state.active && !state.opened && dx < -28) beginReply(message);
+    // A swipe selects the reply target but deliberately does not focus the
+    // composer. That keeps the event dock visible until the person chooses to
+    // type, just like a native messaging app.
+    if (state.active && !state.opened && dx < -28) beginReply(message, false);
     gestureRef.current = null;
   };
   const cancelMessageGesture = () => {
@@ -9769,8 +9797,11 @@ function EventChat({
             }));
             const isLatestPollInstance = !message.pollBumpedAt || message._pollRepeat;
             return (
+              <Fragment key={displayKey}>
+                {unreadStartMessageId === message.id && !message._pollRepeat && (
+                  <div className="chat-unread-divider" role="status"><span>New messages</span></div>
+                )}
               <article
-                key={displayKey}
                 data-chat-message-id={message.id}
                 ref={(node) => { messageRefs.current[message.id] = node; }}
                 className={`chat-message ${mine ? 'mine' : ''} ${message.type === 'poll' ? 'poll-message' : ''} ${message._pollRepeat ? 'poll-repeat' : ''} ${message.pinned ? 'pinned' : ''} ${highlightedMessageId === message.id ? 'highlighted' : ''} ${message.deleted ? 'deleted' : ''}`}
@@ -9875,6 +9906,7 @@ function EventChat({
                   </div>
                 )}
               </article>
+              </Fragment>
             );
           })}
           <div ref={endRef} />
