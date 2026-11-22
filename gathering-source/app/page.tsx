@@ -1472,6 +1472,8 @@ export default function Home() {
   const [eventNotificationCounts, setEventNotificationCounts] = useState<Record<string, number>>({});
   const [eventActivities, setEventActivities] = useState<EventActivity[]>([]);
   const [activityCenterOpen, setActivityCenterOpen] = useState(false);
+  const [activityCenterClosing, setActivityCenterClosing] = useState(false);
+  const activityCenterCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [eventReady, setEventReady] = useState(false);
   const [cart, setCart] = useState<Record<string, number>>({});
   const [guestName, setGuestName] = useState('');
@@ -3456,6 +3458,8 @@ export default function Home() {
   }, {}), [eventActivities]);
   const openActivityCenter = () => {
     if (menu.id === EMPTY_EVENT_ID) return;
+    if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
+    setActivityCenterClosing(false);
     setEventMenuOpen(false);
     setExpensesOpen(false);
     setGamesOpen(false);
@@ -3470,6 +3474,19 @@ export default function Home() {
       return next;
     });
   };
+  const closeActivityCenter = useCallback(() => {
+    if (!activityCenterOpen || activityCenterClosing) return;
+    setActivityCenterClosing(true);
+    if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
+    activityCenterCloseTimer.current = setTimeout(() => {
+      setActivityCenterOpen(false);
+      setActivityCenterClosing(false);
+      activityCenterCloseTimer.current = null;
+    }, 380);
+  }, [activityCenterClosing, activityCenterOpen]);
+  useEffect(() => () => {
+    if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
+  }, []);
   const notificationTargets = useMemo(() => {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
     const targets = new Map<string, { event: EventMenu; actor: ChatActor }>();
@@ -6378,6 +6395,8 @@ export default function Home() {
   const closeEventPanels = () => {
     setEventMenuOpen(false);
     setActivityCenterOpen(false);
+    setActivityCenterClosing(false);
+    if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
     setExpensesOpen(false);
     setGamesOpen(false);
     setExpenseEditRequest(null);
@@ -6790,13 +6809,13 @@ export default function Home() {
       )}
 
       {activityCenterOpen && (
-        <div className="activity-center-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget) setActivityCenterOpen(false);
+        <div className={`activity-center-backdrop ${activityCenterClosing ? 'is-closing' : ''}`} role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closeActivityCenter();
         }}>
           <dialog open className="activity-center-dialog" aria-labelledby="activity-center-title">
             <header>
               <div><p className="eyebrow">{menu.title}</p><h2 id="activity-center-title" className="font-display">Notifications</h2></div>
-              <button type="button" onClick={() => setActivityCenterOpen(false)} aria-label="Close notifications"><XCircle size={22} /></button>
+              <button type="button" onClick={closeActivityCenter} aria-label="Close notifications"><XCircle size={22} /></button>
             </header>
             <p className="activity-center-note">Event updates and expenses appear here. Chat messages stay in Chat.</p>
             <div className="activity-center-list">

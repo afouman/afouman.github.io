@@ -5941,6 +5941,8 @@ button.profile-balance:hover { background: #edf8f4; }
 .activity-center-empty { display: grid; justify-items: center; gap: 0.35rem; padding: 3.5rem 1rem; color: rgb(23 54 59 / 0.42); text-align: center; }
 .activity-center-empty strong { color: #17363b; font-size: 0.85rem; }
 .activity-center-empty span { font-size: 0.68rem; }
+.activity-center-backdrop.is-closing { animation: none; opacity: 0; transition: opacity 260ms ease-out; }
+.activity-center-backdrop.is-closing .activity-center-dialog { opacity: 0; transition: transform 380ms cubic-bezier(0.22, 0.9, 0.28, 1), opacity 250ms ease-out; }
 
 /* Event games: library, AI-assisted editor, and isolated runtime */
 .game-panel-backdrop { position: fixed; z-index: 155; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(4 18 22 / 0.78); padding: 1.25rem; backdrop-filter: blur(14px); animation: overlay-fade-in 180ms ease-out both; }
@@ -6362,6 +6364,13 @@ body.native-ios-shell .guest-home-dock > button {
   border-radius: 0.85rem;
   font-size: 0.78rem;
 }
+/* Invite confirmations belong above the native Home dock, never underneath it. */
+body.native-ios-shell .toast {
+  z-index: 90;
+  bottom: calc(5.75rem + env(safe-area-inset-bottom));
+  max-width: calc(100vw - 2rem);
+  text-align: center;
+}
 /* While composing a chat message the keyboard owns the bottom of the screen.
    The chat itself moves above it; navigation controls do not remain visible
    between the composer and keyboard. */
@@ -6377,6 +6386,37 @@ body.chat-composer-focused .guest-home-dock {
 body.chat-composer-focused .chat-float-layer {
   --chat-dock-space: 0px;
   --chat-bottom-space: var(--nights-keyboard-inset, 0px);
+}
+
+@media (max-width: 760px) {
+  /* Notification center uses the same sheet motion and independent scrolling
+     as Games and Expenses on iPhone. */
+  .activity-center-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+  .activity-center-dialog {
+    display: flex;
+    width: 100%;
+    height: min(82dvh, 760px);
+    max-height: calc(100dvh - env(safe-area-inset-top) - 0.5rem);
+    flex-direction: column;
+    border-radius: 1.5rem 1.5rem 0 0;
+    animation: panel-sheet-open 280ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
+    will-change: transform, opacity;
+  }
+  .activity-center-list {
+    min-height: 0;
+    max-height: none;
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    padding-bottom: calc(1.35rem + env(safe-area-inset-bottom));
+  }
+  .activity-center-backdrop.is-closing .activity-center-dialog {
+    transform: translate3d(0, calc(100% + 2rem), 0);
+  }
 }
 .chat-unread-divider {
   display: flex;
