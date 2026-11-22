@@ -2255,7 +2255,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .guest-event-filters select { justify-self: end; min-height: 34px; max-width: 180px; border: 0; background: transparent; color: #146b66; font-size: 0.68rem; font-weight: 850; outline: 0; text-align: right; text-align-last: right; }
 .guest-event-filter-date-range { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem; }
-.guest-event-filter-date-range label { display: grid; gap: 0.28rem; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
+.guest-event-filters .guest-event-filter-date-range label { display: grid; grid-template-columns: none; align-items: initial; gap: 0.28rem; border: 0; background: transparent; padding: 0; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
 .guest-event-filter-date-range input { width: 100%; min-height: 38px; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.75rem; background: #f4f7f3; padding: 0.35rem 0.5rem; color: #146b66; font-size: 16px; font-weight: 800; }
 .guest-event-filter-popover > footer { display: grid; grid-template-columns: 0.7fr 1fr; gap: 0.55rem; margin-top: 0.75rem; }
 .guest-event-filter-popover > footer button { justify-content: center; min-height: 40px; border-radius: 0.75rem; background: #edf2ef; padding: 0.55rem 0.7rem; color: #176d64; font-size: 0.67rem; font-weight: 900; }
@@ -3629,7 +3629,8 @@ button.profile-balance:hover { background: #edf8f4; }
   letter-spacing: 0.02em;
 }
 .chat-poll-options { display: grid; gap: 0.38rem; margin-top: 0.65rem; }
-.chat-poll-options > button {
+.chat-poll-option { display: grid; gap: 0.28rem; }
+.chat-poll-option > button {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3641,9 +3642,14 @@ button.profile-balance:hover { background: #edf8f4; }
   padding: 0.55rem 0.65rem;
   text-align: left;
 }
-.chat-poll-options > button.selected { border-color: var(--peach); background: rgb(242 166 142 / 0.12); }
+.chat-poll-option > button.selected { border-color: var(--peach); background: rgb(242 166 142 / 0.12); }
 .chat-poll-options span { display: grid; gap: 0.1rem; font-size: 0.78rem; }
 .chat-poll-options small { color: rgb(246 240 228 / 0.4); font-size: 0.58rem; }
+.chat-poll-link { display: inline-flex; width: max-content; align-items: center; gap: 0.3rem; margin-left: 0.22rem; color: var(--peach); font-size: 0.64rem; font-weight: 850; text-decoration: none; }
+.chat-poll-link:hover { color: #fff1e8; text-decoration: underline; }
+.chat-poll-option-editor { display: flex; align-items: flex-start; gap: 0.4rem; }
+.chat-poll-option-editor > div { display: grid; min-width: 0; flex: 1; gap: 0.32rem; }
+.chat-poll-option-editor > button { display: grid; width: 34px; height: 34px; flex: none; place-items: center; border-radius: 0.65rem; background: rgb(255 255 255 / 0.08); color: rgb(246 240 228 / 0.74); }
 .chat-poll-voters-toggle {
   display: inline-flex;
   align-items: center;
@@ -5976,6 +5982,8 @@ button.profile-balance:hover { background: #edf8f4; }
 .activity-center-list article,
 .activity-center-entry { display: grid; width: 100%; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: start; gap: 0.75rem; border-top: 1px solid rgb(18 59 66 / 0.09); background: transparent; padding: 0.9rem 0; color: inherit; text-align: left; }
 .activity-center-entry:hover { background: rgb(23 109 100 / 0.05); }
+.activity-center-entry.unread { border-color: rgb(21 134 116 / 0.28); background: linear-gradient(90deg, rgb(220 239 233 / 0.94), rgb(220 239 233 / 0.38)); box-shadow: inset 3px 0 0 #159776; }
+.activity-center-entry.unread strong { color: #0d6258; }
 .activity-center-list article > span,
 .activity-center-entry > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 0.8rem; background: #dcefe9; color: #176d64; }
 .activity-center-list article > div,

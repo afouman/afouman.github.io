@@ -275,7 +275,7 @@ struct NightsWebView: UIViewRepresentable {
         ) -> WKWebView? {
             if navigationAction.targetFrame == nil, let url = navigationAction.request.url {
                 if let scheme = url.scheme?.lowercased(),
-                   ["tel", "sms", "mailto", "maps"].contains(scheme) {
+                   ["http", "https", "tel", "sms", "mailto", "maps"].contains(scheme) {
                     UIApplication.shared.open(url)
                 } else {
                     webView.load(URLRequest(url: url))

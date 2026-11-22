@@ -121,6 +121,7 @@ type EventMenu = {
   categories?: string[];
   resources?: EventResource[];
   ownerUid?: string;
+  ownerName?: string;
   updatedAt?: number;
   items: MenuItem[];
 };
@@ -221,6 +222,7 @@ type EventInvitation = {
   eventId: string;
   eventTitle?: string;
   hostUid: string;
+  hostName?: string;
   recipientUid: string;
   recipientGuestUid: string;
   recipientEmail: string;
@@ -312,6 +314,7 @@ type ChatPollOption = {
   text: string;
   addedByUid: string;
   addedByName: string;
+  link?: string;
 };
 type ChatReaction = string | { emoji: string; name: string };
 type ChatPollVote = string | string[];
@@ -517,6 +520,16 @@ const formatPhoneInput = (value: string) => {
   if (digits.length <= 3) return digits;
   if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
+const externalHttpUrl = (value: string) => {
+  const candidate = value.trim();
+  if (!candidate) return '';
+  try {
+    const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+    return /^https?:$/.test(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
 };
 const companionPhone = (companion: string | { name: string; phone?: string }) =>
   typeof companion === 'string' ? '' : formatPhone(companion.phone || '');
@@ -1050,6 +1063,7 @@ const ensureOwnedEventGuestAccess = async (event: EventMenu, session: GuestSessi
       eventId: event.id,
       eventTitle: event.title,
       hostUid: session.authUid,
+      hostName: 'Host',
       recipientUid: session.authUid,
       recipientGuestUid: session.guestUid,
       recipientEmail: session.email || '',
@@ -2456,6 +2470,7 @@ export default function Home() {
               eventId: event.id,
               eventTitle: event.title,
               hostUid: accountUser.uid,
+              hostName: displayName,
               recipientUid: accountUser.uid,
               recipientGuestUid: guestUid,
               recipientEmail: accountProfile.email,
@@ -3478,9 +3493,9 @@ export default function Home() {
     setGamesOpen(false);
     setExpenseEditRequest(null);
     setActivityCenterOpen(true);
-    if (!accountUser) return;
+    if (!accountUser || scope === 'all') return;
     setEventActivities((current) => {
-      const next = current.map((activity) => ((scope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id)
+      const next = current.map((activity) => (activity.eventId === menu.id
         ? { ...activity, read: true }
         : activity));
       localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
@@ -4805,6 +4820,7 @@ export default function Home() {
           eventId: event.id,
           eventTitle: event.title,
           hostUid: accountUser.uid,
+          hostName: accountDisplayName(accountProfile),
           recipientUid: contactUid,
           recipientGuestUid,
           recipientPhone: normalizedPhone,
@@ -4873,6 +4889,7 @@ export default function Home() {
         eventId: event.id,
         eventTitle: event.title,
         hostUid: accountUser.uid,
+        hostName: accountDisplayName(accountProfile),
         recipientUid: targetUid,
         recipientGuestUid: directory.guestUid,
         recipientEmail: directory.email,
@@ -5116,6 +5133,7 @@ export default function Home() {
           return;
         }
         event.ownerUid = user.uid;
+        event.ownerName = accountProfile ? accountDisplayName(accountProfile) : (user.displayName || user.email || 'Host');
         const db = store.getFirestore(getApp());
         const duplicate = await store.getDocs(store.query(
           store.collection(db, 'events'),
@@ -6042,6 +6060,9 @@ export default function Home() {
       }
       const savedData = savedEvent.data() as EventMenu;
       const ownerUid = savedData.ownerUid || cleanedMenu.ownerUid || user.uid;
+      const ownerName = savedData.ownerName
+        || cleanedMenu.ownerName
+        || (accountProfile ? accountDisplayName(accountProfile) : (user.displayName || user.email || 'Host'));
       const previousPublicPath = normalizedPublicEventPath(savedData.publicPath);
       const previousClaimId = savedData.publicPathClaimId
         || (previousPublicPath ? await guestNameIndexId(previousPublicPath) : '');
@@ -6070,6 +6091,7 @@ export default function Home() {
         transaction.set(eventRef, withoutUndefined({
           ...cleanedMenu,
           ownerUid,
+          ownerName,
           publicPathClaimId: nextClaimId || undefined,
         }), { merge: true });
       });
@@ -6854,16 +6876,16 @@ export default function Home() {
             </header>
             <p className="activity-center-note">{activityCenterScope === 'all' ? 'New event invitations appear here. Tap one to open the event.' : 'Event updates and expenses appear here. Chat messages stay in Chat.'}</p>
             <div className="activity-center-list">
-              {eventActivities.filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id).length ? eventActivities
-                .filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id)
+              {eventActivities.filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' && !activity.read : activity.eventId === menu.id).length ? eventActivities
+                .filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' && !activity.read : activity.eventId === menu.id)
                 .sort((a, b) => b.createdAt - a.createdAt)
                 .map((activity) => (
-                  <button type="button" className="activity-center-entry" key={activity.id} onClick={() => activityCenterScope === 'all' && openActivityEvent(activity)}>
+                  <button type="button" className={`activity-center-entry ${!activity.read ? 'unread' : ''}`} key={activity.id} onClick={() => activityCenterScope === 'all' && openActivityEvent(activity)}>
                     <span>{activity.kind === 'expense' ? <DollarSign size={17} /> : activity.kind === 'location' ? <MapPin size={17} /> : activity.kind === 'schedule' ? <Clock3 size={17} /> : <Bell size={17} />}</span>
                     <div><strong>{activity.title}</strong><p>{activity.detail}</p><time>{new Date(activity.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time></div>
                     {activityCenterScope === 'all' && <ChevronRight size={17} />}
                   </button>
-                )) : <div className="activity-center-empty"><Bell size={24} /><strong>You’re caught up</strong><span>New event activity will appear here.</span></div>}
+                )) : <div className="activity-center-empty"><Bell size={24} /><strong>You’re caught up</strong><span>{activityCenterScope === 'all' ? 'New invitations will appear here.' : 'New event activity will appear here.'}</span></div>}
             </div>
           </dialog>
         </div>,
@@ -7975,11 +7997,21 @@ function GuestAccessPortal({
   const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past' | 'custom'>('all');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
-  const [ownershipScope, setOwnershipScope] = useState<'all' | 'hosting' | 'invited'>('all');
+  const [hostScope, setHostScope] = useState<'all' | 'mine' | 'from'>('all');
+  const [selectedHostUid, setSelectedHostUid] = useState('');
   const [pendingRsvpOnly, setPendingRsvpOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
-  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (ownershipScope === 'all' ? 0 : 1) + (pendingRsvpOnly ? 1 : 0);
+  const invitedHosts = useMemo(() => {
+    const hosts = new Map<string, string>();
+    events.filter((access) => !access.hosted).forEach((access) => {
+      const id = access.invitation?.hostUid || access.event.ownerUid || '';
+      if (!id || hosts.has(id)) return;
+      hosts.set(id, access.invitation?.hostName || access.event.ownerName || 'Host');
+    });
+    return [...hosts.entries()].map(([uid, name]) => ({ uid, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [events]);
+  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUid ? 1 : 0) + (pendingRsvpOnly ? 1 : 0);
   useEffect(() => {
     if (!filtersOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
@@ -8007,11 +8039,13 @@ function GuestAccessPortal({
         || (dateScope === 'custom'
           ? eventTime(access) >= rangeStart && eventTime(access) <= rangeEnd
           : dateScope === 'past' ? eventTime(access) < filterReferenceTime : eventTime(access) >= filterReferenceTime))
-      .filter((access) => ownershipScope === 'all'
-        || (ownershipScope === 'hosting' ? Boolean(access.hosted) : !access.hosted))
+      .filter((access) => hostScope === 'all'
+        || (hostScope === 'mine'
+          ? Boolean(access.hosted)
+          : !access.hosted && (!selectedHostUid || (access.invitation?.hostUid || access.event.ownerUid) === selectedHostUid)))
       .filter((access) => !pendingRsvpOnly || Boolean(access.invitation && !access.rsvp && !access.hosted))
       .sort((a, b) => (eventTime(a) - eventTime(b)) * (dateOrder === 'asc' ? 1 : -1));
-  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, ownershipScope, pendingRsvpOnly]);
+  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, hostScope, pendingRsvpOnly, selectedHostUid]);
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
@@ -8043,10 +8077,11 @@ function GuestAccessPortal({
                     <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
                     <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past' | 'custom')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option><option value="custom">Custom range</option></select></label>
                     {dateScope === 'custom' && <div className="guest-event-filter-date-range"><label><span>From</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label><label><span>To</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label></div>}
-                    <label><span>Relationship</span><select value={ownershipScope} onChange={(event) => setOwnershipScope(event.target.value as 'all' | 'hosting' | 'invited')}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option></select></label>
+                    <label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'mine' | 'from'; setHostScope(next); if (next !== 'from') setSelectedHostUid(''); }}><option value="all">All hosts</option><option value="mine">Hosted by me</option><option value="from">From host…</option></select></label>
+                    {hostScope === 'from' && <label><span>From host</span><select value={selectedHostUid} onChange={(event) => setSelectedHostUid(event.target.value)}><option value="">All invited hosts</option>{invitedHosts.map((host) => <option key={host.uid} value={host.uid}>{host.name}</option>)}</select></label>}
                     <label><span>RSVP</span><select value={pendingRsvpOnly ? 'pending' : 'all'} onChange={(event) => setPendingRsvpOnly(event.target.value === 'pending')}><option value="all">All RSVP states</option><option value="pending">Needs my RSVP</option></select></label>
                   </div>
-                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setOwnershipScope('all'); setPendingRsvpOnly(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUid(''); setPendingRsvpOnly(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
                 </div>,
                 document.body,
@@ -9067,6 +9102,7 @@ function EventChat({
   const [pollOpen, setPollOpen] = useState(false);
   const [pollQuestion, setPollQuestion] = useState('');
   const [pollOptions, setPollOptions] = useState(['', '']);
+  const [pollLinks, setPollLinks] = useState(['', '']);
   const [allowGuestOptions, setAllowGuestOptions] = useState(false);
   const [allowMultipleVotes, setAllowMultipleVotes] = useState(false);
   const [addingOptionFor, setAddingOptionFor] = useState<string | null>(null);
@@ -9712,6 +9748,11 @@ function EventChat({
     const question = pollQuestion.trim();
     const options = pollOptions.map((option) => option.trim()).filter(Boolean);
     if (actor.role !== 'host' || !question || options.length < 2 || locked || busy) return;
+    const invalidLink = pollLinks.some((link) => link.trim() && !externalHttpUrl(link));
+    if (invalidLink) {
+      notify('Poll links must be valid http or https addresses.');
+      return;
+    }
     setBusy(true);
     try {
       const resolvedActor = await resolveActor();
@@ -9730,12 +9771,17 @@ function EventChat({
         replyTo: null,
         reactions: {},
         pollQuestion: question.slice(0, 300),
-        pollOptions: options.slice(0, 12).map((text, index) => ({
-          id: `${id}-${index}`,
-          text: text.slice(0, 120),
-          addedByUid: resolvedActor.uid,
-          addedByName: 'Host',
-        })),
+        pollOptions: pollOptions
+          .map((text, index) => ({ text: text.trim(), link: externalHttpUrl(pollLinks[index] || '') }))
+          .filter((option) => option.text)
+          .slice(0, 12)
+          .map((option, index) => ({
+            id: `${id}-${index}`,
+            text: option.text.slice(0, 120),
+            link: option.link || undefined,
+            addedByUid: resolvedActor.uid,
+            addedByName: 'Host',
+          })),
         pollVotes: {},
         pollVoterNames: {},
         allowGuestOptions,
@@ -9762,6 +9808,7 @@ function EventChat({
       } else savePreview([...messages, message]);
       setPollQuestion('');
       setPollOptions(['', '']);
+      setPollLinks(['', '']);
       setAllowGuestOptions(false);
       setAllowMultipleVotes(false);
       setPollOpen(false);
@@ -10091,10 +10138,13 @@ function EventChat({
                         const myVotes = message.pollVotes?.[actor.uid];
                         const selected = Array.isArray(myVotes) ? myVotes.includes(option.id) : myVotes === option.id;
                         return (
-                          <button key={option.id} type="button" disabled={locked} className={selected ? 'selected' : ''} onClick={() => void vote(message, option.id)}>
-                            <span>{option.text}{option.addedByName !== 'Host' && <small>Added by {option.addedByName}</small>}</span>
-                            <b>{votes}</b>
-                          </button>
+                          <div key={option.id} className="chat-poll-option">
+                            <button type="button" disabled={locked} className={selected ? 'selected' : ''} onClick={() => void vote(message, option.id)}>
+                              <span>{option.text}{option.addedByName !== 'Host' && <small>Added by {option.addedByName}</small>}</span>
+                              <b>{votes}</b>
+                            </button>
+                            {option.link && <a className="chat-poll-link" href={option.link} target="_blank" rel="noreferrer"><ExternalLink size={13} /> Open link</a>}
+                          </div>
                         );
                       })}
                     </div>
@@ -10151,8 +10201,8 @@ function EventChat({
           <section className="chat-poll-composer">
             <div><strong>Create a poll</strong><button type="button" onClick={() => setPollOpen(false)}><XCircle size={18} /></button></div>
             <input value={pollQuestion} onChange={(event) => setPollQuestion(event.target.value)} maxLength={300} placeholder="What should everyone vote on?" />
-            {pollOptions.map((option, index) => <div key={index}><input value={option} onChange={(event) => setPollOptions((current) => current.map((value, optionIndex) => optionIndex === index ? event.target.value : value))} maxLength={120} placeholder={`Option ${index + 1}`} />{pollOptions.length > 2 && <button type="button" onClick={() => setPollOptions((current) => current.filter((_, optionIndex) => optionIndex !== index))}><XCircle size={16} /></button>}</div>)}
-            {pollOptions.length < 12 && <button type="button" className="chat-add-option-trigger" onClick={() => setPollOptions((current) => [...current, ''])}><Plus size={14} /> Add option</button>}
+            {pollOptions.map((option, index) => <div key={index} className="chat-poll-option-editor"><div><input value={option} onChange={(event) => setPollOptions((current) => current.map((value, optionIndex) => optionIndex === index ? event.target.value : value))} maxLength={120} placeholder={`Option ${index + 1}`} /><input value={pollLinks[index] || ''} onChange={(event) => setPollLinks((current) => current.map((value, optionIndex) => optionIndex === index ? event.target.value : value))} maxLength={500} inputMode="url" placeholder="Optional link (https://…)" /></div>{pollOptions.length > 2 && <button type="button" onClick={() => { setPollOptions((current) => current.filter((_, optionIndex) => optionIndex !== index)); setPollLinks((current) => current.filter((_, optionIndex) => optionIndex !== index)); }}><XCircle size={16} /></button>}</div>)}
+            {pollOptions.length < 12 && <button type="button" className="chat-add-option-trigger" onClick={() => { setPollOptions((current) => [...current, '']); setPollLinks((current) => [...current, '']); }}><Plus size={14} /> Add option</button>}
             <label><input type="checkbox" checked={allowGuestOptions} onChange={(event) => setAllowGuestOptions(event.target.checked)} /> Let guests add poll options</label>
             <label><input type="checkbox" checked={allowMultipleVotes} onChange={(event) => setAllowMultipleVotes(event.target.checked)} /> Guests can select multiple choices</label>
             <button type="button" className="primary-button" disabled={busy || !pollQuestion.trim() || pollOptions.filter((option) => option.trim()).length < 2} onClick={() => void createPoll()}>Publish poll</button>
