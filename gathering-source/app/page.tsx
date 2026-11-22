@@ -1472,6 +1472,7 @@ export default function Home() {
   const [eventNotificationCounts, setEventNotificationCounts] = useState<Record<string, number>>({});
   const [eventActivities, setEventActivities] = useState<EventActivity[]>([]);
   const [activityCenterOpen, setActivityCenterOpen] = useState(false);
+  const [activityCenterScope, setActivityCenterScope] = useState<'event' | 'all'>('event');
   const [activityCenterClosing, setActivityCenterClosing] = useState(false);
   const activityCenterCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [eventReady, setEventReady] = useState(false);
@@ -2159,7 +2160,6 @@ export default function Home() {
             if (localStorage.getItem(marker)) return;
             localStorage.setItem(marker, '1');
             const title = invitation.eventTitle || 'a new event';
-            setToast(`You were invited to ${title}`);
             const nativeNotifier = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsNotification;
             if (nativeNotifier) {
               nativeNotifier.postMessage({
@@ -3456,10 +3456,15 @@ export default function Home() {
     if (!activity.read) counts[activity.eventId] = (counts[activity.eventId] || 0) + 1;
     return counts;
   }, {}), [eventActivities]);
-  const openActivityCenter = () => {
-    if (menu.id === EMPTY_EVENT_ID) return;
+  const totalActivityUnread = useMemo(
+    () => eventActivities.filter((activity) => !activity.read).length,
+    [eventActivities],
+  );
+  const openActivityCenter = (scope: 'event' | 'all' = 'event') => {
+    if (scope === 'event' && menu.id === EMPTY_EVENT_ID) return;
     if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
     setActivityCenterClosing(false);
+    setActivityCenterScope(scope);
     setEventMenuOpen(false);
     setExpensesOpen(false);
     setGamesOpen(false);
@@ -3467,7 +3472,7 @@ export default function Home() {
     setActivityCenterOpen(true);
     if (!accountUser) return;
     setEventActivities((current) => {
-      const next = current.map((activity) => activity.eventId === menu.id
+      const next = current.map((activity) => (scope === 'all' || activity.eventId === menu.id)
         ? { ...activity, read: true }
         : activity);
       localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
@@ -6486,6 +6491,16 @@ export default function Home() {
                 <Smartphone size={14} /> Nights Host
               </span>
             )}
+            {mode === 'guest' && accountUser && <button
+              type="button"
+              className="persistent-notifications-button"
+              onClick={() => openActivityCenter('all')}
+              aria-label={`Open notifications${totalActivityUnread ? `, ${totalActivityUnread} unread` : ''}`}
+              aria-haspopup="dialog"
+            >
+              <Bell size={18} />
+              {totalActivityUnread > 0 && <b>{totalActivityUnread > 9 ? '9+' : totalActivityUnread}</b>}
+            </button>}
             {accountUser && <button
               type="button"
               className="persistent-profile-button"
@@ -6809,18 +6824,18 @@ export default function Home() {
       )}
 
       {activityCenterOpen && createPortal(
-        <div className={`activity-center-backdrop ${activityCenterClosing ? 'is-closing' : ''}`} role="presentation" onMouseDown={(event) => {
+        <div className={`activity-center-backdrop ${activityCenterClosing ? 'is-closing' : ''} ${guestHomeView ? 'above-home-dock' : mode === 'guest' ? 'above-guest-dock' : 'above-host-dock'}`} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) closeActivityCenter();
         }}>
           <dialog open className="activity-center-dialog" aria-labelledby="activity-center-title">
             <header>
-              <div><p className="eyebrow">{menu.title}</p><h2 id="activity-center-title" className="font-display">Notifications</h2></div>
+              <div><p className="eyebrow">{activityCenterScope === 'all' ? 'Nights' : menu.title}</p><h2 id="activity-center-title" className="font-display">Notifications</h2></div>
               <button type="button" onClick={closeActivityCenter} aria-label="Close notifications"><XCircle size={22} /></button>
             </header>
-            <p className="activity-center-note">Event updates and expenses appear here. Chat messages stay in Chat.</p>
+            <p className="activity-center-note">{activityCenterScope === 'all' ? 'Invitations, event updates and expenses appear here. Chat messages stay in Chat.' : 'Event updates and expenses appear here. Chat messages stay in Chat.'}</p>
             <div className="activity-center-list">
-              {eventActivities.filter((activity) => activity.eventId === menu.id).length ? eventActivities
-                .filter((activity) => activity.eventId === menu.id)
+              {eventActivities.filter((activity) => activityCenterScope === 'all' || activity.eventId === menu.id).length ? eventActivities
+                .filter((activity) => activityCenterScope === 'all' || activity.eventId === menu.id)
                 .sort((a, b) => b.createdAt - a.createdAt)
                 .map((activity) => (
                   <article key={activity.id}>
@@ -7936,11 +7951,14 @@ function GuestAccessPortal({
   selectEvent: (event: GuestEventAccess) => void;
 }) {
   const [dateOrder, setDateOrder] = useState<'asc' | 'desc'>('asc');
-  const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past'>('all');
+  const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past' | 'custom'>('all');
+  const [dateStart, setDateStart] = useState('');
+  const [dateEnd, setDateEnd] = useState('');
   const [ownershipScope, setOwnershipScope] = useState<'all' | 'hosting' | 'invited'>('all');
+  const [pendingRsvpOnly, setPendingRsvpOnly] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
-  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (ownershipScope === 'all' ? 0 : 1);
+  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (ownershipScope === 'all' ? 0 : 1) + (pendingRsvpOnly ? 1 : 0);
   useEffect(() => {
     if (!filtersOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
@@ -7961,13 +7979,18 @@ function GuestAccessPortal({
       const parsed = Date.parse(access.event.startsAt || access.event.date || '');
       return Number.isFinite(parsed) ? parsed : Number.MAX_SAFE_INTEGER;
     };
+    const rangeStart = dateStart ? new Date(`${dateStart}T00:00:00`).getTime() : Number.NEGATIVE_INFINITY;
+    const rangeEnd = dateEnd ? new Date(`${dateEnd}T23:59:59.999`).getTime() : Number.POSITIVE_INFINITY;
     return events
       .filter((access) => dateScope === 'all'
-        || (dateScope === 'past' ? eventTime(access) < filterReferenceTime : eventTime(access) >= filterReferenceTime))
+        || (dateScope === 'custom'
+          ? eventTime(access) >= rangeStart && eventTime(access) <= rangeEnd
+          : dateScope === 'past' ? eventTime(access) < filterReferenceTime : eventTime(access) >= filterReferenceTime))
       .filter((access) => ownershipScope === 'all'
         || (ownershipScope === 'hosting' ? Boolean(access.hosted) : !access.hosted))
+      .filter((access) => !pendingRsvpOnly || Boolean(access.invitation && !access.rsvp && !access.hosted))
       .sort((a, b) => (eventTime(a) - eventTime(b)) * (dateOrder === 'asc' ? 1 : -1));
-  }, [dateOrder, dateScope, events, filterReferenceTime, ownershipScope]);
+  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, ownershipScope, pendingRsvpOnly]);
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
@@ -7997,10 +8020,12 @@ function GuestAccessPortal({
                   <header><div><strong>Filter events</strong><small>Choose what appears on your home screen.</small></div><button type="button" onClick={() => setFiltersOpen(false)} aria-label="Close event filters"><XCircle size={18} /></button></header>
                   <div className="guest-event-filters">
                     <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
-                    <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option></select></label>
+                    <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past' | 'custom')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option><option value="custom">Custom range</option></select></label>
+                    {dateScope === 'custom' && <div className="guest-event-filter-date-range"><label><span>From</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label><label><span>To</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label></div>}
                     <label><span>Relationship</span><select value={ownershipScope} onChange={(event) => setOwnershipScope(event.target.value as 'all' | 'hosting' | 'invited')}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option></select></label>
+                    <label><span>RSVP</span><select value={pendingRsvpOnly ? 'pending' : 'all'} onChange={(event) => setPendingRsvpOnly(event.target.value === 'pending')}><option value="all">All RSVP states</option><option value="pending">Needs my RSVP</option></select></label>
                   </div>
-                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setOwnershipScope('all'); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setOwnershipScope('all'); setPendingRsvpOnly(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
                 </div>,
                 document.body,

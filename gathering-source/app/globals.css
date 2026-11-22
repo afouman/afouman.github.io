@@ -1982,6 +1982,38 @@ button:disabled {
   font-weight: 950;
 }
 .persistent-profile-button:hover { background: #c7e8de; }
+.persistent-notifications-button {
+  position: fixed;
+  z-index: 95;
+  top: calc(env(safe-area-inset-top) + 0.9rem);
+  right: calc(1rem + 3rem);
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  place-items: center;
+  border: 1px solid rgb(18 59 66 / 0.16);
+  border-radius: 50%;
+  background: #fffdf8;
+  color: #176d64;
+  box-shadow: 0 8px 24px rgb(4 34 42 / 0.1);
+}
+.persistent-notifications-button:hover { background: #edf8f4; }
+.persistent-notifications-button > b {
+  position: absolute;
+  top: -0.3rem;
+  right: -0.35rem;
+  display: grid;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  place-items: center;
+  border: 2px solid var(--cream);
+  border-radius: 999px;
+  background: var(--tomato);
+  padding: 0 0.16rem;
+  color: #fff;
+  font-size: 0.5rem;
+  font-weight: 950;
+}
 
 /* The WKWebView shell gets a compact app bar. Installation and browser-push
    controls are intentionally omitted by the component in this environment. */
@@ -2025,6 +2057,12 @@ button:disabled {
 .native-ios-app .persistent-profile-button {
   top: calc(env(safe-area-inset-top) + 0.8rem);
   right: max(0.7rem, env(safe-area-inset-right));
+  width: 2.4rem;
+  height: 2.4rem;
+}
+.native-ios-app .persistent-notifications-button {
+  top: calc(env(safe-area-inset-top) + 0.8rem);
+  right: calc(max(0.7rem, env(safe-area-inset-right)) + 2.8rem);
   width: 2.4rem;
   height: 2.4rem;
 }
@@ -2216,6 +2254,9 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filters label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.7rem; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; padding: 0.38rem 0.48rem 0.38rem 0.7rem; }
 .guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .guest-event-filters select { justify-self: end; min-height: 34px; max-width: 180px; border: 0; background: transparent; color: #146b66; font-size: 0.68rem; font-weight: 850; outline: 0; text-align: right; text-align-last: right; }
+.guest-event-filter-date-range { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem; }
+.guest-event-filter-date-range label { display: grid; gap: 0.28rem; color: rgb(19 40 44 / 0.52); font-size: 0.58rem; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
+.guest-event-filter-date-range input { width: 100%; min-height: 38px; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.75rem; background: #f4f7f3; padding: 0.35rem 0.5rem; color: #146b66; font-size: 16px; font-weight: 800; }
 .guest-event-filter-popover > footer { display: grid; grid-template-columns: 0.7fr 1fr; gap: 0.55rem; margin-top: 0.75rem; }
 .guest-event-filter-popover > footer button { justify-content: center; min-height: 40px; border-radius: 0.75rem; background: #edf2ef; padding: 0.55rem 0.7rem; color: #176d64; font-size: 0.67rem; font-weight: 900; }
 .guest-event-filter-popover > footer .primary-button { background: #176d64; color: #fff; }
@@ -6395,13 +6436,23 @@ body.chat-composer-focused .chat-float-layer {
     align-items: end;
     padding: 0;
   }
+  /* The persistent dock stays available.  The sheet occupies only the space
+     above the dock, with the taller guest-event dock accounted for. */
+  .activity-center-backdrop.above-home-dock,
+  .activity-center-backdrop.above-host-dock {
+    bottom: calc(4.25rem + env(safe-area-inset-bottom));
+  }
+  .activity-center-backdrop.above-guest-dock {
+    bottom: calc(9.6rem + env(safe-area-inset-bottom));
+  }
   .activity-center-dialog {
     display: flex;
     width: 100%;
-    height: min(82dvh, 760px);
-    max-height: calc(100dvh - env(safe-area-inset-top) - 0.5rem);
+    height: min(82dvh, calc(100% - 0.5rem));
+    max-height: calc(100% - 0.5rem);
     flex-direction: column;
-    border-radius: 1.5rem 1.5rem 0 0;
+    border-radius: 1.5rem 1.5rem 0.9rem 0.9rem;
+    margin-bottom: 0.35rem;
     animation: panel-sheet-open 280ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
     will-change: transform, opacity;
   }
