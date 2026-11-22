@@ -6369,6 +6369,13 @@ export default function Home() {
     setChatOpen(true);
     setEventMenuOpen(false);
   };
+  const toggleEventChat = () => {
+    if (chatOpen) {
+      window.dispatchEvent(new Event('nights-close-event-chat'));
+      return;
+    }
+    openEventChat();
+  };
   const updateCurrentChatUnread = useCallback((unread: number) => {
     if (menu.id === EMPTY_EVENT_ID) return;
     setEventNotificationCounts((current) => current[menu.id] === unread
@@ -6718,16 +6725,19 @@ export default function Home() {
       )}
 
       {expensesOpen && expenseActor && (
-        <ExpensePanel
-          key={menu.id}
-          menu={menu}
-          actor={expenseActor}
-          canManage={canManageCurrentEvent}
-          fallbackRsvps={rsvps}
-          editRequest={expenseEditRequest}
-          onClose={() => { setExpenseEditRequest(null); setExpensesOpen(false); }}
-          notify={notify}
-        />
+        createPortal(
+          <ExpensePanel
+            key={menu.id}
+            menu={menu}
+            actor={expenseActor}
+            canManage={canManageCurrentEvent}
+            fallbackRsvps={rsvps}
+            editRequest={expenseEditRequest}
+            onClose={() => { setExpenseEditRequest(null); setExpensesOpen(false); }}
+            notify={notify}
+          />,
+          document.body,
+        )
       )}
 
       {appEnvironmentReady && gamesOpen && menu.id !== EMPTY_EVENT_ID && createPortal(
@@ -7295,7 +7305,7 @@ export default function Home() {
             <button type="button" onClick={navigateHome} disabled={hostPreview} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={(event) => { event.currentTarget.blur(); openEventChat(); }} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -7370,7 +7380,7 @@ export default function Home() {
             <button type="button" onClick={() => window.location.assign(guestHomeRoute())} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={(event) => { event.currentTarget.blur(); openEventChat(); }} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -9455,7 +9465,7 @@ function EventChat({
     state.node.style.setProperty('--chat-swipe-x', '0px');
     gestureRef.current = null;
   };
-  const closeChat = () => {
+  const closeChat = useCallback(() => {
     if (closing) return;
     // Closing must restore the navigation dock even if WebKit has not yet
     // delivered its keyboard-dismissal notification.
@@ -9469,7 +9479,12 @@ function EventChat({
       setClosing(false);
       onMinimize();
     }, 440);
-  };
+  }, [closing, onMinimize, rememberReadPosition]);
+  useEffect(() => {
+    if (!visible) return;
+    window.addEventListener('nights-close-event-chat', closeChat);
+    return () => window.removeEventListener('nights-close-event-chat', closeChat);
+  }, [closeChat, visible]);
   const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -9490,9 +9505,11 @@ function EventChat({
     if (dy <= 0 || Math.abs(dx) > dy) {
       state.active = false;
       state.node.style.removeProperty('--chat-modal-pull-y');
+      state.node.style.removeProperty('transition');
       return;
     }
     event.preventDefault();
+    state.node.style.setProperty('transition', 'none');
     state.node.style.setProperty('--chat-modal-pull-y', `${Math.min(92, dy * 0.55)}px`);
   };
   const finishHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
@@ -9500,6 +9517,7 @@ function EventChat({
     if (!state || state.pointerId !== event.pointerId) return;
     const dy = event.clientY - state.y;
     const dx = event.clientX - state.x;
+    state.node.style.removeProperty('transition');
     headerPullRef.current = null;
     if (state.active && dy > 76 && Math.abs(dy) > Math.abs(dx)) {
       closeChat();
@@ -9509,6 +9527,7 @@ function EventChat({
   };
   const cancelHeaderPull = () => {
     headerPullRef.current?.node.style.removeProperty('--chat-modal-pull-y');
+    headerPullRef.current?.node.style.removeProperty('transition');
     headerPullRef.current = null;
   };
   const sendMessage = async () => {
