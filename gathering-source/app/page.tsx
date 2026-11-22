@@ -8003,6 +8003,7 @@ function GuestAccessPortal({
   const [hostPickerReturnScope, setHostPickerReturnScope] = useState<'all' | 'hosting' | 'invited' | 'specific'>('all');
   const [hostPickerOpen, setHostPickerOpen] = useState(false);
   const [rsvpScopes, setRsvpScopes] = useState<Array<'pending' | 'yes' | 'maybe' | 'no'>>([]);
+  const [rsvpPickerDraftScopes, setRsvpPickerDraftScopes] = useState<Array<'pending' | 'yes' | 'maybe' | 'no'>>([]);
   const [rsvpPickerOpen, setRsvpPickerOpen] = useState(false);
   const [resolvedHostNames, setResolvedHostNames] = useState<Record<string, string>>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -8024,6 +8025,13 @@ function GuestAccessPortal({
     .filter((host) => selectedHostUids.includes(host.uid))
     .map((host) => host.name)
     .join(', '), [invitedHosts, selectedHostUids]);
+  const selectedRsvpNames = useMemo(() => ({
+    pending: 'Pending my RSVP',
+    yes: 'Going',
+    maybe: 'Maybe',
+    no: 'Not going',
+  } as const), []);
+  const selectedRsvpSummary = rsvpScopes.map((scope) => selectedRsvpNames[scope]).join(', ');
   useEffect(() => {
     const hostUids = [...new Set(events.filter((access) => !access.hosted)
       .map((access) => access.invitation?.hostUid || access.event.ownerUid)
@@ -8121,10 +8129,9 @@ function GuestAccessPortal({
                     <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past' | 'custom')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option><option value="custom">Custom range</option></select></label>
                     {dateScope === 'custom' && <div className="guest-event-filter-date-range"><label><span>From</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label><label><span>To</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label></div>}
                     <div className={`guest-filter-host-field ${hostScope === 'specific' && selectedHostNames ? 'has-selection' : ''}`}><label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'hosting' | 'invited' | 'specific'; if (next === 'specific') { setHostPickerReturnScope(hostScope); setHostPickerDraftUids(selectedHostUids); setHostScope('specific'); setHostPickerOpen(true); return; } setHostScope(next); setSelectedHostUids([]); }}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option><option value="specific">Event by host…</option></select></label>{hostScope === 'specific' && selectedHostNames && <small>{selectedHostNames}</small>}</div>
-                    <button type="button" className="guest-filter-picker-trigger" onClick={() => setRsvpPickerOpen((open) => !open)} aria-expanded={rsvpPickerOpen}><span>RSVP</span><strong>{rsvpScopes.length ? `${rsvpScopes.length} selected` : 'All RSVP states'}</strong><ChevronDown size={15} /></button>
-                    {rsvpPickerOpen && <section className="guest-filter-multi-picker" aria-label="Choose RSVP states"><header><strong>RSVP</strong><button type="button" onClick={() => setRsvpPickerOpen(false)} aria-label="Close RSVP picker"><XCircle size={16} /></button></header><div><label><input type="checkbox" checked={rsvpScopes.length === 0} onChange={() => setRsvpScopes([])} /><span>All RSVP states</span></label>{([['pending', 'Pending my RSVP'], ['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([scope, label]) => <label key={scope}><input type="checkbox" checked={rsvpScopes.includes(scope)} onChange={() => setRsvpScopes((current) => current.includes(scope) ? current.filter((entry) => entry !== scope) : [...current, scope])} /><span>{label}</span></label>)}</div></section>}
+                    <div className={`guest-filter-rsvp-field ${selectedRsvpSummary ? 'has-selection' : ''}`}><button type="button" className="guest-filter-picker-trigger" onClick={() => { setRsvpPickerDraftScopes(rsvpScopes); setRsvpPickerOpen(true); }} aria-expanded={rsvpPickerOpen}><span>RSVP</span><strong>{selectedRsvpSummary || 'All RSVP states'}</strong><ChevronDown size={15} /></button>{selectedRsvpSummary && <small>{selectedRsvpSummary}</small>}</div>
                   </div>
-                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUids([]); setHostPickerOpen(false); setRsvpScopes([]); setRsvpPickerOpen(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUids([]); setHostPickerOpen(false); setRsvpScopes([]); setRsvpPickerDraftScopes([]); setRsvpPickerOpen(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
                 </div>,
                 document.body,
@@ -8135,6 +8142,16 @@ function GuestAccessPortal({
                     <header><div><strong id="host-picker-title">Event by host</strong><small>Select one or more hosts.</small></div><button type="button" onClick={() => { setHostPickerOpen(false); setHostScope(hostPickerReturnScope); }} aria-label="Close host selection"><XCircle size={18} /></button></header>
                     <div className="guest-filter-selection-list">{invitedHosts.map((host) => <label key={host.uid}><input type="checkbox" checked={hostPickerDraftUids.includes(host.uid)} onChange={() => setHostPickerDraftUids((current) => current.includes(host.uid) ? current.filter((uid) => uid !== host.uid) : [...current, host.uid])} /><span>{host.name}</span></label>)}</div>
                     <footer><button type="button" onClick={() => { setHostPickerOpen(false); setHostScope(hostPickerReturnScope); }}>Cancel</button><button type="button" className="primary-button" disabled={hostPickerDraftUids.length === 0} onClick={() => { setSelectedHostUids(hostPickerDraftUids); setHostScope('specific'); setHostPickerOpen(false); }}>Confirm</button></footer>
+                  </dialog>
+                </div>,
+                document.body,
+              )}
+              {rsvpPickerOpen && createPortal(
+                <div className="guest-filter-selection-backdrop" role="presentation">
+                  <dialog open className="guest-filter-selection-dialog" aria-labelledby="rsvp-picker-title">
+                    <header><div><strong id="rsvp-picker-title">RSVP</strong><small>Select one or more RSVP states.</small></div><button type="button" onClick={() => setRsvpPickerOpen(false)} aria-label="Close RSVP selection"><XCircle size={18} /></button></header>
+                    <div className="guest-filter-selection-list"><label><input type="checkbox" checked={rsvpPickerDraftScopes.length === 0} onChange={() => setRsvpPickerDraftScopes([])} /><span>All RSVP states</span></label>{([['pending', 'Pending my RSVP'], ['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([scope, label]) => <label key={scope}><input type="checkbox" checked={rsvpPickerDraftScopes.includes(scope)} onChange={() => setRsvpPickerDraftScopes((current) => current.includes(scope) ? current.filter((entry) => entry !== scope) : [...current, scope])} /><span>{label}</span></label>)}</div>
+                    <footer><button type="button" onClick={() => setRsvpPickerOpen(false)}>Cancel</button><button type="button" className="primary-button" onClick={() => { setRsvpScopes(rsvpPickerDraftScopes); setRsvpPickerOpen(false); }}>Confirm</button></footer>
                   </dialog>
                 </div>,
                 document.body,
