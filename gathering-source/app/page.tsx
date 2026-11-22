@@ -7997,9 +7997,11 @@ function GuestAccessPortal({
   const [dateScope, setDateScope] = useState<'all' | 'upcoming' | 'past' | 'custom'>('all');
   const [dateStart, setDateStart] = useState('');
   const [dateEnd, setDateEnd] = useState('');
-  const [hostScope, setHostScope] = useState<'all' | 'mine' | 'from'>('all');
-  const [selectedHostUid, setSelectedHostUid] = useState('');
-  const [rsvpScope, setRsvpScope] = useState<'all' | 'pending' | 'yes' | 'maybe' | 'no'>('all');
+  const [hostScope, setHostScope] = useState<'all' | 'hosting' | 'invited' | 'specific'>('all');
+  const [selectedHostUids, setSelectedHostUids] = useState<string[]>([]);
+  const [hostPickerOpen, setHostPickerOpen] = useState(false);
+  const [rsvpScopes, setRsvpScopes] = useState<Array<'pending' | 'yes' | 'maybe' | 'no'>>([]);
+  const [rsvpPickerOpen, setRsvpPickerOpen] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
   const invitedHosts = useMemo(() => {
@@ -8011,7 +8013,7 @@ function GuestAccessPortal({
     });
     return [...hosts.entries()].map(([uid, name]) => ({ uid, name })).sort((a, b) => a.name.localeCompare(b.name));
   }, [events]);
-  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUid ? 1 : 0) + (rsvpScope === 'all' ? 0 : 1);
+  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUids.length ? 1 : 0) + (rsvpScopes.length ? 1 : 0);
   useEffect(() => {
     if (!filtersOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
@@ -8040,15 +8042,17 @@ function GuestAccessPortal({
           ? eventTime(access) >= rangeStart && eventTime(access) <= rangeEnd
           : dateScope === 'past' ? eventTime(access) < filterReferenceTime : eventTime(access) >= filterReferenceTime))
       .filter((access) => hostScope === 'all'
-        || (hostScope === 'mine'
+        || (hostScope === 'hosting'
           ? Boolean(access.hosted)
-          : !access.hosted && (!selectedHostUid || (access.invitation?.hostUid || access.event.ownerUid) === selectedHostUid)))
-      .filter((access) => rsvpScope === 'all'
-        || (rsvpScope === 'pending'
+          : hostScope === 'invited'
+            ? !access.hosted
+            : !access.hosted && (selectedHostUids.length === 0 || selectedHostUids.includes(access.invitation?.hostUid || access.event.ownerUid || ''))))
+      .filter((access) => rsvpScopes.length === 0
+        || rsvpScopes.some((scope) => scope === 'pending'
           ? Boolean(access.invitation && !access.rsvp && !access.hosted)
-          : access.rsvp?.status === rsvpScope))
+          : access.rsvp?.status === scope))
       .sort((a, b) => (eventTime(a) - eventTime(b)) * (dateOrder === 'asc' ? 1 : -1));
-  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, hostScope, rsvpScope, selectedHostUid]);
+  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, hostScope, rsvpScopes, selectedHostUids]);
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
@@ -8080,11 +8084,12 @@ function GuestAccessPortal({
                     <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
                     <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past' | 'custom')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option><option value="custom">Custom range</option></select></label>
                     {dateScope === 'custom' && <div className="guest-event-filter-date-range"><label><span>From</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label><label><span>To</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label></div>}
-                    <label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'mine' | 'from'; setHostScope(next); if (next !== 'from') setSelectedHostUid(''); }}><option value="all">All hosts</option><option value="mine">Hosted by me</option><option value="from">From host…</option></select></label>
-                    {hostScope === 'from' && <label><span>From host</span><select value={selectedHostUid} onChange={(event) => setSelectedHostUid(event.target.value)}><option value="">All invited hosts</option>{invitedHosts.map((host) => <option key={host.uid} value={host.uid}>{host.name}</option>)}</select></label>}
-                    <label><span>RSVP</span><select value={rsvpScope} onChange={(event) => setRsvpScope(event.target.value as 'all' | 'pending' | 'yes' | 'maybe' | 'no')}><option value="all">All RSVP states</option><option value="pending">Pending my RSVP</option><option value="yes">Going</option><option value="maybe">Maybe</option><option value="no">Not going</option></select></label>
+                    <label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'hosting' | 'invited' | 'specific'; setHostScope(next); setHostPickerOpen(next === 'specific'); if (next !== 'specific') setSelectedHostUids([]); }}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option><option value="specific">Event by host…</option></select></label>
+                    {hostScope === 'specific' && hostPickerOpen && <section className="guest-filter-multi-picker" aria-label="Choose event hosts"><header><strong>Event by host</strong><button type="button" onClick={() => setHostPickerOpen(false)} aria-label="Close host picker"><XCircle size={16} /></button></header><p>Select one or more hosts.</p><div>{invitedHosts.map((host) => <label key={host.uid}><input type="checkbox" checked={selectedHostUids.includes(host.uid)} onChange={() => setSelectedHostUids((current) => current.includes(host.uid) ? current.filter((uid) => uid !== host.uid) : [...current, host.uid])} /><span>{host.name}</span></label>)}</div></section>}
+                    <button type="button" className="guest-filter-picker-trigger" onClick={() => setRsvpPickerOpen((open) => !open)} aria-expanded={rsvpPickerOpen}><span>RSVP</span><strong>{rsvpScopes.length ? `${rsvpScopes.length} selected` : 'All RSVP states'}</strong><ChevronDown size={15} /></button>
+                    {rsvpPickerOpen && <section className="guest-filter-multi-picker" aria-label="Choose RSVP states"><header><strong>RSVP</strong><button type="button" onClick={() => setRsvpPickerOpen(false)} aria-label="Close RSVP picker"><XCircle size={16} /></button></header><div><label><input type="checkbox" checked={rsvpScopes.length === 0} onChange={() => setRsvpScopes([])} /><span>All RSVP states</span></label>{([['pending', 'Pending my RSVP'], ['yes', 'Going'], ['maybe', 'Maybe'], ['no', 'Not going']] as const).map(([scope, label]) => <label key={scope}><input type="checkbox" checked={rsvpScopes.includes(scope)} onChange={() => setRsvpScopes((current) => current.includes(scope) ? current.filter((entry) => entry !== scope) : [...current, scope])} /><span>{label}</span></label>)}</div></section>}
                   </div>
-                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUid(''); setRsvpScope('all'); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUids([]); setHostPickerOpen(false); setRsvpScopes([]); setRsvpPickerOpen(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
                 </div>,
                 document.body,
