@@ -8953,6 +8953,7 @@ function EventChat({
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; timer: number | null; active: boolean; opened: boolean } | null>(null);
+  const headerPullRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; active: boolean } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
@@ -9422,6 +9423,46 @@ function EventChat({
     state.node.style.setProperty('--chat-swipe-x', '0px');
     gestureRef.current = null;
   };
+  const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    headerPullRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      node: event.currentTarget,
+      pointerId: event.pointerId,
+      active: true,
+    };
+  };
+  const moveHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = headerPullRef.current;
+    if (!state?.active || state.pointerId !== event.pointerId) return;
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+    if (dy <= 0 || Math.abs(dx) > dy) {
+      state.active = false;
+      state.node.style.removeProperty('--chat-header-pull-y');
+      return;
+    }
+    event.preventDefault();
+    state.node.style.setProperty('--chat-header-pull-y', `${Math.min(92, dy * 0.55)}px`);
+  };
+  const finishHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = headerPullRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const dy = event.clientY - state.y;
+    const dx = event.clientX - state.x;
+    state.node.style.removeProperty('--chat-header-pull-y');
+    headerPullRef.current = null;
+    if (state.active && dy > 76 && Math.abs(dy) > Math.abs(dx)) {
+      rememberReadPosition();
+      onMinimize();
+    }
+  };
+  const cancelHeaderPull = () => {
+    headerPullRef.current?.node.style.removeProperty('--chat-header-pull-y');
+    headerPullRef.current = null;
+  };
   const sendMessage = async () => {
     const text = draft.trim();
     if ((!text && !pendingAttachments.length) || locked || busy) return;
@@ -9684,12 +9725,18 @@ function EventChat({
     <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
       <dialog open className="event-chat" aria-labelledby="event-chat-title">
         <div className="chat-top">
-          <header className="chat-header">
+          <header
+            className="chat-header"
+            onPointerDown={startHeaderPull}
+            onPointerMove={moveHeaderPull}
+            onPointerUp={finishHeaderPull}
+            onPointerCancel={cancelHeaderPull}
+          >
             <div className="chat-header-identity">
               <span className="chat-avatar" aria-hidden="true"><MessageCircle size={20} /></span>
               <div>
                 <p className="eyebrow">{menu.title}</p>
-                <h2 id="event-chat-title">Event chat</h2>
+                <h2 id="event-chat-title">{menu.title} Chat</h2>
                 <span>{locked ? 'Locked by host · read only' : `${messages.length ? `${messages.length} message${messages.length === 1 ? '' : 's'} · ` : ''}${actor.role === 'host' ? 'Chatting as Host' : actor.name}`}</span>
               </div>
             </div>

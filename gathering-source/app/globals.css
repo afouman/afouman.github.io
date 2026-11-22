@@ -3196,6 +3196,9 @@ button.profile-balance:hover { background: #edf8f4; }
   min-height: 68px;
   border-bottom: 1px solid rgb(255 255 255 / 0.08);
   padding: 0.7rem 0.85rem;
+  transform: translateY(var(--chat-header-pull-y, 0));
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  touch-action: pan-x;
 }
 .chat-top {
   position: relative;
@@ -3209,6 +3212,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .chat-header h2 { overflow: hidden; margin: 0; color: #f6f0e4; font-family: var(--font-display), Georgia, serif; font-size: 1.1rem; font-weight: 500; line-height: 1.05; text-overflow: ellipsis; white-space: nowrap; }
 .chat-header span { display: block; overflow: hidden; margin-top: 0.22rem; color: rgb(246 240 228 / 0.5); font-size: 0.66rem; text-overflow: ellipsis; white-space: nowrap; }
 .chat-header-actions > button,
+.chat-header-options > button,
 .chat-poll-composer > div > button {
   display: grid;
   width: 34px;
@@ -3226,7 +3230,12 @@ button.profile-balance:hover { background: #edf8f4; }
   align-items: center;
   gap: 0.2rem;
 }
-.chat-header-options { position: relative; }
+.chat-header-options {
+  position: relative;
+  display: flex;
+  height: 34px;
+  align-items: center;
+}
 .chat-header-options-menu {
   position: absolute;
   z-index: 16;
@@ -3256,7 +3265,8 @@ button.profile-balance:hover { background: #edf8f4; }
   text-align: left;
 }
 .chat-header-options-menu button:hover { background: rgb(255 255 255 / 0.08); }
-.chat-header-actions > button:hover { background: rgb(255 255 255 / 0.07); color: #f6f0e4; }
+.chat-header-actions > button:hover,
+.chat-header-options > button:hover { background: rgb(255 255 255 / 0.07); color: #f6f0e4; }
 .chat-header-actions > button.enabled {
   background: rgb(242 166 142 / 0.16);
   color: var(--peach);
