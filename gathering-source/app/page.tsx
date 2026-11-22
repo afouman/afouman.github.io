@@ -3456,8 +3456,8 @@ export default function Home() {
     if (!activity.read) counts[activity.eventId] = (counts[activity.eventId] || 0) + 1;
     return counts;
   }, {}), [eventActivities]);
-  const totalActivityUnread = useMemo(
-    () => eventActivities.filter((activity) => !activity.read).length,
+  const unreadInvitationCount = useMemo(
+    () => eventActivities.filter((activity) => activity.kind === 'invitation' && !activity.read).length,
     [eventActivities],
   );
   const openActivityCenter = (scope: 'event' | 'all' = 'event') => {
@@ -3472,9 +3472,9 @@ export default function Home() {
     setActivityCenterOpen(true);
     if (!accountUser) return;
     setEventActivities((current) => {
-      const next = current.map((activity) => (scope === 'all' || activity.eventId === menu.id)
+      const next = current.map((activity) => ((scope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id)
         ? { ...activity, read: true }
-        : activity);
+        : activity));
       localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
       return next;
     });
@@ -3492,6 +3492,18 @@ export default function Home() {
   useEffect(() => () => {
     if (activityCenterCloseTimer.current) clearTimeout(activityCenterCloseTimer.current);
   }, []);
+  const openActivityEvent = (activity: EventActivity) => {
+    const access = guestEvents.find((entry) => entry.event.id === activity.eventId);
+    if (!access) return;
+    setEventActivities((current) => {
+      const next = current.map((entry) => entry.id === activity.id ? { ...entry, read: true } : entry);
+      if (accountUser) localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
+      return next;
+    });
+    setActivityCenterOpen(false);
+    setActivityCenterClosing(false);
+    selectEvent(access);
+  };
   const notificationTargets = useMemo(() => {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
     const targets = new Map<string, { event: EventMenu; actor: ChatActor }>();
@@ -6495,11 +6507,11 @@ export default function Home() {
               type="button"
               className="persistent-notifications-button"
               onClick={() => openActivityCenter('all')}
-              aria-label={`Open notifications${totalActivityUnread ? `, ${totalActivityUnread} unread` : ''}`}
+              aria-label={`Open invitations${unreadInvitationCount ? `, ${unreadInvitationCount} unread` : ''}`}
               aria-haspopup="dialog"
             >
               <Bell size={18} />
-              {totalActivityUnread > 0 && <b>{totalActivityUnread > 9 ? '9+' : totalActivityUnread}</b>}
+              {unreadInvitationCount > 0 && <b>{unreadInvitationCount > 9 ? '9+' : unreadInvitationCount}</b>}
             </button>}
             {accountUser && <button
               type="button"
@@ -6832,16 +6844,17 @@ export default function Home() {
               <div><p className="eyebrow">{activityCenterScope === 'all' ? 'Nights' : menu.title}</p><h2 id="activity-center-title" className="font-display">Notifications</h2></div>
               <button type="button" onClick={closeActivityCenter} aria-label="Close notifications"><XCircle size={22} /></button>
             </header>
-            <p className="activity-center-note">{activityCenterScope === 'all' ? 'Invitations, event updates and expenses appear here. Chat messages stay in Chat.' : 'Event updates and expenses appear here. Chat messages stay in Chat.'}</p>
+            <p className="activity-center-note">{activityCenterScope === 'all' ? 'New event invitations appear here. Tap one to open the event.' : 'Event updates and expenses appear here. Chat messages stay in Chat.'}</p>
             <div className="activity-center-list">
-              {eventActivities.filter((activity) => activityCenterScope === 'all' || activity.eventId === menu.id).length ? eventActivities
-                .filter((activity) => activityCenterScope === 'all' || activity.eventId === menu.id)
+              {eventActivities.filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id).length ? eventActivities
+                .filter((activity) => activityCenterScope === 'all' ? activity.kind === 'invitation' : activity.eventId === menu.id)
                 .sort((a, b) => b.createdAt - a.createdAt)
                 .map((activity) => (
-                  <article key={activity.id}>
+                  <button type="button" className="activity-center-entry" key={activity.id} onClick={() => activityCenterScope === 'all' && openActivityEvent(activity)}>
                     <span>{activity.kind === 'expense' ? <DollarSign size={17} /> : activity.kind === 'location' ? <MapPin size={17} /> : activity.kind === 'schedule' ? <Clock3 size={17} /> : <Bell size={17} />}</span>
                     <div><strong>{activity.title}</strong><p>{activity.detail}</p><time>{new Date(activity.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</time></div>
-                  </article>
+                    {activityCenterScope === 'all' && <ChevronRight size={17} />}
+                  </button>
                 )) : <div className="activity-center-empty"><Bell size={24} /><strong>You’re caught up</strong><span>New event activity will appear here.</span></div>}
             </div>
           </dialog>

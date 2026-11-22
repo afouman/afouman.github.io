@@ -5973,9 +5973,14 @@ button.profile-balance:hover { background: #edf8f4; }
 .activity-center-dialog > header > button { display: grid; width: 40px; height: 40px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.08); color: #17363b; }
 .activity-center-note { padding: 0.8rem 1.35rem; color: rgb(23 54 59 / 0.58); font-size: 0.7rem; }
 .activity-center-list { max-height: min(610px, calc(100dvh - 12rem)); overflow-y: auto; padding: 0 1.35rem 1.35rem; scroll-behavior: smooth; -webkit-overflow-scrolling: touch; }
-.activity-center-list article { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 0.75rem; border-top: 1px solid rgb(18 59 66 / 0.09); padding: 0.9rem 0; }
-.activity-center-list article > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 0.8rem; background: #dcefe9; color: #176d64; }
-.activity-center-list article > div { display: grid; gap: 0.16rem; }
+.activity-center-list article,
+.activity-center-entry { display: grid; width: 100%; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: start; gap: 0.75rem; border-top: 1px solid rgb(18 59 66 / 0.09); background: transparent; padding: 0.9rem 0; color: inherit; text-align: left; }
+.activity-center-entry:hover { background: rgb(23 109 100 / 0.05); }
+.activity-center-list article > span,
+.activity-center-entry > span { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 0.8rem; background: #dcefe9; color: #176d64; }
+.activity-center-list article > div,
+.activity-center-entry > div { display: grid; gap: 0.16rem; }
+.activity-center-entry > svg { align-self: center; color: #176d64; }
 .activity-center-list strong { font-size: 0.78rem; }
 .activity-center-list p { color: rgb(23 54 59 / 0.68); font-size: 0.7rem; line-height: 1.45; }
 .activity-center-list time { color: rgb(23 54 59 / 0.42); font-size: 0.58rem; }
