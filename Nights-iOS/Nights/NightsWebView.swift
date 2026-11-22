@@ -170,7 +170,10 @@ struct NightsWebView: UIViewRepresentable {
                 webView?.scrollView.backgroundColor = color
                 return
             }
-            if message.name == "nightsNotification", isTrustedAppURL(message.frameInfo.request.url),
+            // WebKit may omit the frame URL for a main-frame script message.
+            // In that case the loaded web view URL is still the authoritative
+            // origin, so do not silently discard a legitimate app notification.
+            if message.name == "nightsNotification", isTrustedMessageURL(message.frameInfo.request.url),
                let body = message.body as? [String: Any],
                let title = body["title"] as? String,
                let detail = body["body"] as? String {
@@ -212,9 +215,11 @@ struct NightsWebView: UIViewRepresentable {
                 let request = UNNotificationRequest(
                     identifier: "nights-invitation-\(eventId)-\(UUID().uuidString)",
                     content: content,
-                    trigger: nil
+                    // A short explicit trigger is more reliable than `nil` for
+                    // foreground deliveries in a WKWebView-hosted application.
+                    trigger: UNTimeIntervalNotificationTrigger(timeInterval: 0.2, repeats: false)
                 )
-                center.add(request)
+                center.add(request) { _ in }
             }
             center.getNotificationSettings { settings in
                 switch settings.authorizationStatus {
@@ -303,6 +308,10 @@ struct NightsWebView: UIViewRepresentable {
         private func isTrustedAppURL(_ url: URL?) -> Bool {
             guard let url, url.scheme == "https" else { return false }
             return url.host == "gaemaj.tech" || url.host == "www.gaemaj.tech"
+        }
+
+        private func isTrustedMessageURL(_ frameURL: URL?) -> Bool {
+            isTrustedAppURL(frameURL) || isTrustedAppURL(webView?.url)
         }
 
         private func showOfflineIfNeeded(_ error: Error) {

@@ -6336,6 +6336,30 @@ body.native-ios-shell {
 .guest-home-dock {
   width: 100%;
 }
+/* The one-action home dock is deliberately compact on iPhone.  It must be
+   fully visible above the safe area and never cover the final event card. */
+.app-root.native-ios-app.guest-home-view .guest-access-portal {
+  padding-bottom: calc(8rem + env(safe-area-inset-bottom));
+}
+.app-root.native-ios-app .guest-home-dock {
+  position: fixed !important;
+  z-index: 60;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: block;
+  min-height: calc(4.25rem + env(safe-area-inset-bottom));
+  padding: 0.35rem max(0.65rem, env(safe-area-inset-right))
+    calc(0.35rem + env(safe-area-inset-bottom))
+    max(0.65rem, env(safe-area-inset-left));
+}
+.app-root.native-ios-app .guest-home-dock > button {
+  min-height: 3.5rem;
+  flex-direction: row;
+  gap: 0.55rem;
+  border-radius: 0.85rem;
+  font-size: 0.78rem;
+}
 /* While composing a chat message the keyboard owns the bottom of the screen.
    The chat itself moves above it; navigation controls do not remain visible
    between the composer and keyboard. */
