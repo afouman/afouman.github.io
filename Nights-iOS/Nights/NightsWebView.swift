@@ -21,7 +21,10 @@ final class NightsBrowserModel: ObservableObject {
     @Published var themeColor = UIColor(red: 0.024, green: 0.106, blue: 0.165, alpha: 1)
     fileprivate weak var webView: WKWebView?
 
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/")!
+    // The app is a native shell around a versioned web release. Keep the
+    // release marker in the URL so WKWebView cannot revive a previous HTML
+    // shell after an iOS reinstall while its website data is retained.
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-2")!
 
     func reload() {
         isOffline = false
@@ -76,7 +79,7 @@ struct NightsWebView: UIViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.beginKeyboardTracking(for: webView)
         model.webView = webView
-        webView.load(URLRequest(url: model.startURL, cachePolicy: .useProtocolCachePolicy))
+        webView.load(URLRequest(url: model.startURL, cachePolicy: .reloadIgnoringLocalCacheData))
         return webView
     }
 
