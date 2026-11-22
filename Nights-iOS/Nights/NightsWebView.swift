@@ -104,6 +104,7 @@ struct NightsWebView: UIViewRepresentable {
             self.model = model
             super.init()
             UNUserNotificationCenter.current().delegate = self
+            requestLocalNotificationPermissionIfNeeded()
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -235,6 +236,14 @@ struct NightsWebView: UIViewRepresentable {
                 default:
                     break
                 }
+            }
+        }
+
+        private func requestLocalNotificationPermissionIfNeeded() {
+            let center = UNUserNotificationCenter.current()
+            center.getNotificationSettings { settings in
+                guard settings.authorizationStatus == .notDetermined else { return }
+                center.requestAuthorization(options: [.alert, .badge, .sound]) { _, _ in }
             }
         }
 

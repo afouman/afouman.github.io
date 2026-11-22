@@ -6341,7 +6341,9 @@ body.native-ios-shell {
 .app-root.native-ios-app.guest-home-view .guest-access-portal {
   padding-bottom: calc(8rem + env(safe-area-inset-bottom));
 }
-.app-root.native-ios-app .guest-home-dock {
+/* The dock is portaled to document.body, so this must be scoped from the
+   native body class rather than the app root. */
+body.native-ios-shell .guest-home-dock {
   position: fixed !important;
   z-index: 60;
   right: 0;
@@ -6353,7 +6355,7 @@ body.native-ios-shell {
     calc(0.35rem + env(safe-area-inset-bottom))
     max(0.65rem, env(safe-area-inset-left));
 }
-.app-root.native-ios-app .guest-home-dock > button {
+body.native-ios-shell .guest-home-dock > button {
   min-height: 3.5rem;
   flex-direction: row;
   gap: 0.55rem;
