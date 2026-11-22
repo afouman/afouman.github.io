@@ -3154,6 +3154,8 @@ button.profile-balance:hover { background: #edf8f4; }
   pointer-events: auto;
   touch-action: pan-y;
   overscroll-behavior-x: none;
+  transform: translateY(var(--chat-modal-pull-y, 0));
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .chat-float-layer.guest .event-chat { height: min(720px, calc(100dvh - env(safe-area-inset-top) - var(--chat-bottom-space) - 5.25rem)); }
 .chat-minimized {
@@ -3196,8 +3198,6 @@ button.profile-balance:hover { background: #edf8f4; }
   min-height: 68px;
   border-bottom: 1px solid rgb(255 255 255 / 0.08);
   padding: 0.7rem 0.85rem;
-  transform: translateY(var(--chat-header-pull-y, 0));
-  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
   touch-action: pan-x;
 }
 .chat-top {
@@ -6303,9 +6303,6 @@ body.native-ios-shell {
 /* While composing a chat message the keyboard owns the bottom of the screen.
    The chat itself moves above it; navigation controls do not remain visible
    between the composer and keyboard. */
-body.chat-keyboard-open .host-event-dock,
-body.chat-keyboard-open .guest-event-dock,
-body.chat-keyboard-open .guest-home-dock,
 body.chat-composer-focused .host-event-dock,
 body.chat-composer-focused .guest-event-dock,
 body.chat-composer-focused .guest-home-dock {

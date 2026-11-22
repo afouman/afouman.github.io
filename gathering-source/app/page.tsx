@@ -9208,6 +9208,13 @@ function EventChat({
     };
   }, [settleComposerAtLatest, visible]);
 
+  useEffect(() => {
+    if (!visible) {
+      composerRef.current?.blur();
+      document.body.classList.remove('chat-composer-focused', 'chat-keyboard-open');
+    }
+  }, [visible]);
+
   const focusComposer = () => requestAnimationFrame(() => composerRef.current?.focus({ preventScroll: true }));
   const setComposerFocusState = (focused: boolean) => {
     document.body.classList.toggle('chat-composer-focused', focused);
@@ -9423,13 +9430,22 @@ function EventChat({
     state.node.style.setProperty('--chat-swipe-x', '0px');
     gestureRef.current = null;
   };
+  const closeChat = () => {
+    // Closing must restore the navigation dock even if WebKit has not yet
+    // delivered its keyboard-dismissal notification.
+    composerRef.current?.blur();
+    document.body.classList.remove('chat-composer-focused', 'chat-keyboard-open');
+    rememberReadPosition();
+    onMinimize();
+  };
   const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
+    const modal = event.currentTarget.closest<HTMLElement>('.event-chat');
     headerPullRef.current = {
       x: event.clientX,
       y: event.clientY,
-      node: event.currentTarget,
+      node: modal || event.currentTarget,
       pointerId: event.pointerId,
       active: true,
     };
@@ -9441,26 +9457,25 @@ function EventChat({
     const dy = event.clientY - state.y;
     if (dy <= 0 || Math.abs(dx) > dy) {
       state.active = false;
-      state.node.style.removeProperty('--chat-header-pull-y');
+      state.node.style.removeProperty('--chat-modal-pull-y');
       return;
     }
     event.preventDefault();
-    state.node.style.setProperty('--chat-header-pull-y', `${Math.min(92, dy * 0.55)}px`);
+    state.node.style.setProperty('--chat-modal-pull-y', `${Math.min(92, dy * 0.55)}px`);
   };
   const finishHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     const state = headerPullRef.current;
     if (!state || state.pointerId !== event.pointerId) return;
     const dy = event.clientY - state.y;
     const dx = event.clientX - state.x;
-    state.node.style.removeProperty('--chat-header-pull-y');
+    state.node.style.removeProperty('--chat-modal-pull-y');
     headerPullRef.current = null;
     if (state.active && dy > 76 && Math.abs(dy) > Math.abs(dx)) {
-      rememberReadPosition();
-      onMinimize();
+      closeChat();
     }
   };
   const cancelHeaderPull = () => {
-    headerPullRef.current?.node.style.removeProperty('--chat-header-pull-y');
+    headerPullRef.current?.node.style.removeProperty('--chat-modal-pull-y');
     headerPullRef.current = null;
   };
   const sendMessage = async () => {
@@ -9776,7 +9791,7 @@ function EventChat({
                       : <Bell size={18} />}
                 </button>
               )}
-              <button type="button" onClick={() => { rememberReadPosition(); onMinimize(); }} aria-label="Minimize chat"><Minus size={20} /></button>
+              <button type="button" onClick={closeChat} aria-label="Minimize chat"><Minus size={20} /></button>
             </div>
           </header>
           {visiblePinnedMessage && (
