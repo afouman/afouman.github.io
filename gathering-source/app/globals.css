@@ -6301,6 +6301,14 @@ body.chat-composer-focused .guest-event-dock,
 body.chat-composer-focused .guest-home-dock {
   display: none !important;
 }
+/* The dock is hidden while typing, so it must not keep reserving its old
+   height. The native keyboard inset is exact; on browsers that resize the
+   visual viewport it naturally resolves to zero and the composer still sits
+   flush with the visible bottom edge. */
+body.chat-composer-focused .chat-float-layer {
+  --chat-dock-space: 0px;
+  --chat-bottom-space: var(--nights-keyboard-inset, 0px);
+}
 .chat-unread-divider {
   display: flex;
   align-items: center;

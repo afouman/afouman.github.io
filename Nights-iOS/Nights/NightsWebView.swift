@@ -6,6 +6,14 @@ import WebKit
 import GoogleSignIn
 #endif
 
+// WKWebView hosts HTML text controls in an internal responder. Returning no
+// accessory view from the containing responder suppresses the system form bar
+// (previous, next, and Done) while retaining the standard Apple keyboard.
+// This uses the public UIResponder API only.
+final class NightsChatWebView: WKWebView {
+    override var inputAccessoryView: UIView? { nil }
+}
+
 @MainActor
 final class NightsBrowserModel: ObservableObject {
     @Published var isOffline = false
@@ -39,7 +47,7 @@ struct NightsWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "nightsAuth")
         configuration.userContentController.add(context.coordinator, name: "nightsTheme")
 
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
         webView.uiDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
