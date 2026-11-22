@@ -814,6 +814,7 @@ const HOST_PREVIEW_RETURN_ROUTE_KEY = 'nights-host-preview-return-route-v1';
 const eventActivityKey = (accountUid: string) => `nights-event-activity-v1:${accountUid}`;
 const eventActivityMarkerKey = (accountUid: string, activityId: string) =>
   `nights-event-activity-seen-v1:${accountUid}:${activityId}`;
+const EVENT_ACTIVITY_RESET_KEY = 'nights-event-activity-reset-v2';
 const APP_BADGE_CACHE = 'nights-chat-badge-v1';
 const APP_BADGE_STATE_PATH = '/__nights_chat_badge_state__';
 type AppBadgeState = { events: Record<string, number> };
@@ -2189,6 +2190,13 @@ export default function Home() {
     }
     queueMicrotask(() => {
       try {
+        const resetKey = `${EVENT_ACTIVITY_RESET_KEY}:${accountUser.uid}`;
+        if (!localStorage.getItem(resetKey)) {
+          localStorage.setItem(resetKey, '1');
+          localStorage.removeItem(eventActivityKey(accountUser.uid));
+          setEventActivities([]);
+          return;
+        }
         const saved = JSON.parse(localStorage.getItem(eventActivityKey(accountUser.uid)) || '[]') as EventActivity[];
         setEventActivities(saved.filter((activity) => activity?.eventId && activity?.title));
       } catch {
@@ -3502,7 +3510,7 @@ export default function Home() {
     });
     setActivityCenterOpen(false);
     setActivityCenterClosing(false);
-    selectEvent(access);
+    selectGuestEvent(access);
   };
   const notificationTargets = useMemo(() => {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
