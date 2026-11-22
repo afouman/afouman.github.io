@@ -2853,14 +2853,19 @@ button.profile-balance:hover { background: #edf8f4; }
     color 220ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.guest-event-nav > button:hover,
 .guest-event-nav > button:focus-visible,
 .guest-event-nav > button.event-nav-active,
-.guest-event-nav > .event-menu-control > button:hover,
 .guest-event-nav > .event-menu-control > button:focus-visible,
 .guest-event-nav > .event-menu-control > button.event-menu-active {
   background: rgb(255 255 255 / 0.1);
   color: #fff;
+}
+@media (hover: hover) {
+  .guest-event-nav > button:hover,
+  .guest-event-nav > .event-menu-control > button:hover {
+    background: rgb(255 255 255 / 0.1);
+    color: #fff;
+  }
 }
 .guest-event-nav > button:active,
 .guest-event-nav > .event-menu-control > button:active {
@@ -5939,7 +5944,11 @@ button.profile-balance:hover { background: #edf8f4; }
 
 /* Event games: library, AI-assisted editor, and isolated runtime */
 .game-panel-backdrop { position: fixed; z-index: 155; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(4 18 22 / 0.78); padding: 1.25rem; backdrop-filter: blur(14px); animation: overlay-fade-in 180ms ease-out both; }
-.game-panel { width: min(980px, 100%); max-height: min(900px, calc(100dvh - 2.5rem)); overflow-y: auto; border-radius: 1.75rem; background: #f5f1e9; color: #17363b; box-shadow: 0 38px 120px rgb(0 0 0 / 0.48); overscroll-behavior: contain; transform: translateY(var(--game-panel-pull-y, 0)); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.game-panel { width: min(980px, 100%); max-height: min(900px, calc(100dvh - 2.5rem)); overflow-y: auto; border-radius: 1.75rem; background: #f5f1e9; color: #17363b; box-shadow: 0 38px 120px rgb(0 0 0 / 0.48); overscroll-behavior: contain; transform: translate3d(0, var(--game-panel-pull-y, 0), 0); animation: panel-sheet-open 280ms cubic-bezier(0.22, 0.9, 0.28, 1) both; transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); will-change: transform, opacity; backface-visibility: hidden; }
+.game-panel-backdrop.is-closing { animation: none; transition: none; }
+.game-panel-backdrop.is-closing .game-panel { animation: none; }
+.game-panel-backdrop.is-closing.is-exiting { opacity: 0; transition: opacity 260ms ease-out; }
+.game-panel-backdrop.is-closing.is-exiting .game-panel { opacity: 0; transform: translate3d(0, calc(100% + 2rem), 0); transition: transform 380ms cubic-bezier(0.22, 0.9, 0.28, 1), opacity 250ms ease-out; }
 .game-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.95); padding: 1.35rem 1.5rem 1.1rem; backdrop-filter: blur(16px); touch-action: none; }
 .game-panel-header h2 { margin-top: 0.18rem; font-size: clamp(2.25rem, 6vw, 3.7rem); line-height: 0.92; }
 .game-panel-header > div > span { display: block; margin-top: 0.55rem; color: rgb(23 54 59 / 0.56); font-size: 0.72rem; }
@@ -6134,8 +6143,18 @@ html.game-overlay-open, body.game-overlay-open { overflow: hidden; overscroll-be
   .game-sandbox-backdrop.is-keyboard-open .game-review-messages { min-height: 0; }
 }
 
-.expense-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(5 15 18 / 0.72); padding: 1.25rem; backdrop-filter: blur(12px); }
-.expense-panel { width: min(920px, 100%); max-height: min(880px, calc(100dvh - 2.5rem)); overflow-y: auto; border: 0; border-radius: 1.7rem; background: #f5f1e9; color: #172f32; box-shadow: 0 35px 110px rgb(0 0 0 / 0.42); transform: translateY(var(--panel-pull-y, 0)); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.expense-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(5 15 18 / 0.72); padding: 1.25rem; backdrop-filter: blur(12px); animation: overlay-fade-in 180ms ease-out both; }
+.expense-panel { width: min(920px, 100%); max-height: min(880px, calc(100dvh - 2.5rem)); overflow-y: auto; border: 0; border-radius: 1.7rem; background: #f5f1e9; color: #172f32; box-shadow: 0 35px 110px rgb(0 0 0 / 0.42); transform: translate3d(0, var(--panel-pull-y, 0), 0); animation: panel-sheet-open 280ms cubic-bezier(0.22, 0.9, 0.28, 1) both; transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); will-change: transform, opacity; backface-visibility: hidden; }
+.expense-backdrop.is-closing { animation: none; transition: none; }
+.expense-backdrop.is-closing .expense-panel { animation: none; }
+.expense-backdrop.is-closing.is-exiting { opacity: 0; transition: opacity 260ms ease-out; }
+.expense-backdrop.is-closing.is-exiting .expense-panel { opacity: 0; transform: translate3d(0, calc(100% + 2rem), 0); transition: transform 380ms cubic-bezier(0.22, 0.9, 0.28, 1), opacity 250ms ease-out; }
+
+/* The native wrapper has a single WebKit compositor. Blurring the whole page
+   behind a moving sheet repeatedly forces full-frame repaints on iPhone, so
+   keep the same dimmed visual with a lightweight opaque overlay there. */
+.native-ios-shell .game-panel-backdrop,
+.native-ios-shell .expense-backdrop { backdrop-filter: none; -webkit-backdrop-filter: none; }
 .expense-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.94); padding: 1.4rem 1.5rem 1.15rem; backdrop-filter: blur(15px); touch-action: none; }
 .expense-panel-header h2 { margin-top: 0.2rem; font-size: clamp(2.1rem, 5vw, 3.35rem); line-height: 0.95; }
 .expense-panel-header > div > span { display: block; margin-top: 0.55rem; color: rgb(23 54 59 / 0.58); font-size: 0.72rem; }
@@ -6378,4 +6397,8 @@ body.chat-composer-focused .chat-float-layer {
 @keyframes dialog-rise-in {
   from { opacity: 0; transform: translateY(0.85rem) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes panel-sheet-open {
+  from { opacity: 0; transform: translate3d(0, 1.15rem, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
 }

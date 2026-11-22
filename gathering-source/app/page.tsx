@@ -188,6 +188,9 @@ type NightsNativeWindow = Window & {
       nightsTheme?: {
         postMessage: (color: string) => void;
       };
+      nightsNotification?: {
+        postMessage: (message: { title: string; body: string; eventId: string }) => void;
+      };
     };
   };
 };
@@ -2155,13 +2158,21 @@ export default function Home() {
             localStorage.setItem(marker, '1');
             const title = invitation.eventTitle || 'a new event';
             setToast(`You were invited to ${title}`);
-            if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && 'serviceWorker' in navigator)
+            const nativeNotifier = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsNotification;
+            if (nativeNotifier) {
+              nativeNotifier.postMessage({
+                title: 'You’re invited',
+                body: `${title} is now waiting on your Nights home page.`,
+                eventId: invitation.eventId || change.doc.id,
+              });
+            } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
               void navigator.serviceWorker.ready.then((registration) => registration.showNotification('You’re invited', {
                 body: `${title} is now waiting on your Nights home page.`,
                 icon: '/gathering/icons/nights-app-icon-192.png',
                 badge: '/gathering/icons/nights-favicon-48.png',
                 data: { url: guestHomeRoute() },
               })).catch(() => undefined);
+            }
           });
         },
       );
@@ -8373,6 +8384,10 @@ function ExpensePanel({
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const expenseComposerRef = useRef<HTMLElement>(null);
   const expensePullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; direction: 'pending' | 'vertical' | 'cancelled' } | null>(null);
+  const [closing, setClosing] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
 
   const startExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
     if ((event.pointerType === 'mouse' && event.button !== 0) || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
@@ -8404,7 +8419,7 @@ function ExpensePanel({
     const dx = event.clientX - state.x;
     state.panel.style.removeProperty('transition');
     expensePullRef.current = null;
-    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) onClose();
+    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) requestClose();
     else state.panel.style.removeProperty('--panel-pull-y');
   };
   const cancelExpensePull = () => {
@@ -8412,6 +8427,20 @@ function ExpensePanel({
     expensePullRef.current?.panel.style.removeProperty('transition');
     expensePullRef.current = null;
   };
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    cancelExpensePull();
+    setClosing(true);
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = window.requestAnimationFrame(() => setExiting(true));
+    });
+    closeTimerRef.current = window.setTimeout(onClose, 380);
+  }, [closing, onClose]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    if (closeFrameRef.current) window.cancelAnimationFrame(closeFrameRef.current);
+  }, []);
 
   useEffect(() => {
     queueMicrotask(() => setMobileDevice(
@@ -8798,8 +8827,8 @@ function ExpensePanel({
   const total = expenses.reduce((sum, expense) => sum + expenseTotal(expense), 0);
 
   return (
-    <div className="expense-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onClose();
+    <div className={`expense-backdrop ${closing ? 'is-closing' : ''} ${exiting ? 'is-exiting' : ''}`} role="presentation" onPointerDown={(event) => {
+      if (event.target === event.currentTarget) requestClose();
     }}>
       <div className="expense-panel" role="dialog" aria-modal="true" aria-labelledby="expense-panel-title">
         <header className="expense-panel-header" onPointerDown={startExpensePull} onPointerMove={moveExpensePull} onPointerUp={finishExpensePull} onPointerCancel={cancelExpensePull}>
@@ -8809,7 +8838,7 @@ function ExpensePanel({
             onPointerDown={(event) => {
               event.stopPropagation();
             }}
-            onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); requestClose(); }}
             aria-label="Close expenses"
           ><XCircle size={22} /></button>
         </header>

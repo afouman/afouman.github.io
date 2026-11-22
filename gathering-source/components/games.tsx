@@ -755,6 +755,10 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [exporting, setExporting] = useState<EventGame | null>(null);
   const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
   const [deleting, setDeleting] = useState<EventGame | null>(null);
+  const [closing, setClosing] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
   const panelPullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; direction: 'pending' | 'vertical' | 'cancelled' } | null>(null);
   const startPanelPull = (event: ReactPointerEvent<HTMLElement>) => {
     // Touch pointer events do not consistently report button=0 in iOS WebKit.
@@ -790,7 +794,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     const dx = event.clientX - state.x;
     state.panel.style.removeProperty('transition');
     panelPullRef.current = null;
-    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) onClose();
+    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) requestClose();
     else state.panel.style.removeProperty('--game-panel-pull-y');
   };
   const cancelPanelPull = () => {
@@ -798,6 +802,21 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     panelPullRef.current?.panel.style.removeProperty('transition');
     panelPullRef.current = null;
   };
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    cancelPanelPull();
+    setClosing(true);
+    // A separate resting frame makes the exit transition reliable in WKWebView.
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = window.requestAnimationFrame(() => setExiting(true));
+    });
+    closeTimerRef.current = window.setTimeout(onClose, 380);
+  }, [closing, onClose]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    if (closeFrameRef.current) window.cancelAnimationFrame(closeFrameRef.current);
+  }, []);
 
   useEffect(() => {
     if (!firebaseConfigured) {
@@ -1107,15 +1126,15 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   };
 
   return (
-    <div className="game-panel-backdrop" role="presentation" onClick={(event) => {
-      if (event.target === event.currentTarget) onClose();
+    <div className={`game-panel-backdrop ${closing ? 'is-closing' : ''} ${exiting ? 'is-exiting' : ''}`} role="presentation" onClick={(event) => {
+      if (event.target === event.currentTarget) requestClose();
     }}>
       <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
         <header className="game-panel-header" onPointerDown={startPanelPull} onPointerMove={movePanelPull} onPointerUp={finishPanelPull} onPointerCancel={cancelPanelPull}>
           <div><p className="eyebrow">{eventTitle}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
           <button type="button" onClick={(event) => {
             event.stopPropagation();
-            onClose();
+            requestClose();
           }} aria-label="Close games"><XCircle size={22} /></button>
         </header>
         {!editorOpen ? <>

@@ -1,6 +1,7 @@
 import AuthenticationServices
 import CryptoKit
 import SwiftUI
+import UserNotifications
 import WebKit
 #if canImport(GoogleSignIn)
 import GoogleSignIn
@@ -46,6 +47,7 @@ struct NightsWebView: UIViewRepresentable {
         configuration.applicationNameForUserAgent = "Nights-iOS/1.0"
         configuration.userContentController.add(context.coordinator, name: "nightsAuth")
         configuration.userContentController.add(context.coordinator, name: "nightsTheme")
+        configuration.userContentController.add(context.coordinator, name: "nightsNotification")
 
         let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -61,6 +63,8 @@ struct NightsWebView: UIViewRepresentable {
         webView.scrollView.showsHorizontalScrollIndicator = false
         webView.scrollView.isDirectionalLockEnabled = true
         webView.scrollView.decelerationRate = .normal
+        webView.scrollView.delaysContentTouches = false
+        webView.scrollView.canCancelContentTouches = true
         // Nights supplies its own message composer controls. The standard
         // WKWebView input assistant (previous/next arrows and Done button)
         // floats above the keyboard and obscures that composer on iPhone.
@@ -81,10 +85,11 @@ struct NightsWebView: UIViewRepresentable {
     static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsAuth")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsTheme")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsNotification")
         coordinator.endKeyboardTracking()
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler,
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate,
         ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
         private let model: NightsBrowserModel
         fileprivate weak var webView: WKWebView?
@@ -94,6 +99,7 @@ struct NightsWebView: UIViewRepresentable {
 
         init(model: NightsBrowserModel) {
             self.model = model
+            UNUserNotificationCenter.current().delegate = self
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -163,6 +169,13 @@ struct NightsWebView: UIViewRepresentable {
                 webView?.scrollView.backgroundColor = color
                 return
             }
+            if message.name == "nightsNotification", isTrustedAppURL(message.frameInfo.request.url),
+               let body = message.body as? [String: Any],
+               let title = body["title"] as? String,
+               let detail = body["body"] as? String {
+                scheduleForegroundNotification(title: title, body: detail, eventId: body["eventId"] as? String ?? "")
+                return
+            }
             guard message.name == "nightsAuth",
                   isTrustedAppURL(message.frameInfo.request.url),
                   let body = message.body as? [String: Any],
@@ -176,6 +189,43 @@ struct NightsWebView: UIViewRepresentable {
                 beginAppleSignIn()
             } else {
                 sendNativeAuthError("That sign-in provider is not supported.")
+            }
+        }
+
+        func userNotificationCenter(
+            _ center: UNUserNotificationCenter,
+            willPresent notification: UNNotification,
+            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+        ) {
+            completionHandler([.banner, .sound, .badge])
+        }
+
+        private func scheduleForegroundNotification(title: String, body: String, eventId: String) {
+            let center = UNUserNotificationCenter.current()
+            let schedule: () -> Void = {
+                let content = UNMutableNotificationContent()
+                content.title = title
+                content.body = body
+                content.sound = .default
+                content.userInfo = ["eventId": eventId]
+                let request = UNNotificationRequest(
+                    identifier: "nights-invitation-\(eventId)-\(UUID().uuidString)",
+                    content: content,
+                    trigger: nil
+                )
+                center.add(request)
+            }
+            center.getNotificationSettings { settings in
+                switch settings.authorizationStatus {
+                case .authorized, .provisional, .ephemeral:
+                    schedule()
+                case .notDetermined:
+                    center.requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
+                        if granted { schedule() }
+                    }
+                default:
+                    break
+                }
             }
         }
 
