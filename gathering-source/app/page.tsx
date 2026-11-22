@@ -1582,42 +1582,46 @@ export default function Home() {
     });
   }, [accountUser]);
 
+  // Every full-screen surface is rendered above the app. Lock the underlying
+  // page from a single place so one sheet cannot scroll or receive taps through
+  // another — especially in the native iOS shell where `.app-root` scrolls.
+  const blockingSurfaceOpen = settingsOpen
+    || moneyDetailsOpen !== null
+    || profileEditorOpen
+    || profileMenuOpen
+    || deleteAccountOpen
+    || rsvpPanelOpen
+    || guestEventPickerOpen
+    || activityCenterOpen
+    || expensesOpen
+    || gamesOpen
+    || backgroundEditor !== null
+    || chatOpen;
   useEffect(() => {
-    if (!settingsOpen && !moneyDetailsOpen && !profileEditorOpen) return;
+    if (!blockingSurfaceOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
     const previousBodyOverflow = document.body.style.overflow;
     const previousRootOverflow = document.documentElement.style.overflow;
     const previousAppOverflow = appScroller?.style.overflow || '';
+    const previousAppOverscrollBehavior = appScroller?.style.overscrollBehavior || '';
+    const previousAppTouchAction = appScroller?.style.touchAction || '';
     document.body.style.overflow = 'hidden';
     document.documentElement.style.overflow = 'hidden';
-    if (appScroller) appScroller.style.overflow = 'hidden';
+    if (appScroller) {
+      appScroller.style.overflow = 'hidden';
+      appScroller.style.overscrollBehavior = 'none';
+      appScroller.style.touchAction = 'none';
+    }
     return () => {
       document.body.style.overflow = previousBodyOverflow;
       document.documentElement.style.overflow = previousRootOverflow;
-      if (appScroller) appScroller.style.overflow = previousAppOverflow;
+      if (appScroller) {
+        appScroller.style.overflow = previousAppOverflow;
+        appScroller.style.overscrollBehavior = previousAppOverscrollBehavior;
+        appScroller.style.touchAction = previousAppTouchAction;
+      }
     };
-  }, [moneyDetailsOpen, profileEditorOpen, settingsOpen]);
-
-  // The native shell scrolls `.app-root`, rather than `body`. The normal dialog
-  // lock below therefore cannot stop the page from moving behind an open chat
-  // on iPhone/iPad. Chat is rendered in a portal, so freezing this scroller
-  // leaves the chat stream itself fully scrollable.
-  useEffect(() => {
-    if (!chatOpen) return;
-    const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
-    if (!appScroller) return;
-    const previousOverflow = appScroller.style.overflow;
-    const previousOverscrollBehavior = appScroller.style.overscrollBehavior;
-    const previousTouchAction = appScroller.style.touchAction;
-    appScroller.style.overflow = 'hidden';
-    appScroller.style.overscrollBehavior = 'none';
-    appScroller.style.touchAction = 'none';
-    return () => {
-      appScroller.style.overflow = previousOverflow;
-      appScroller.style.overscrollBehavior = previousOverscrollBehavior;
-      appScroller.style.touchAction = previousTouchAction;
-    };
-  }, [chatOpen]);
+  }, [blockingSurfaceOpen]);
 
   useEffect(() => {
     if (!firebaseConfigured) return;
@@ -3441,6 +3445,10 @@ export default function Home() {
   }, {}), [eventActivities]);
   const openActivityCenter = () => {
     if (menu.id === EMPTY_EVENT_ID) return;
+    setEventMenuOpen(false);
+    setExpensesOpen(false);
+    setGamesOpen(false);
+    setExpenseEditRequest(null);
     setActivityCenterOpen(true);
     if (!accountUser) return;
     setEventActivities((current) => {
@@ -3450,7 +3458,6 @@ export default function Home() {
       localStorage.setItem(eventActivityKey(accountUser.uid), JSON.stringify(next));
       return next;
     });
-    setEventMenuOpen(false);
   };
   const notificationTargets = useMemo(() => {
     if (!accountUser || !accountProfile) return [] as Array<{ event: EventMenu; actor: ChatActor }>;
@@ -6357,6 +6364,21 @@ export default function Home() {
     setCreatingEvent(false);
     if (returnRoute) window.location.replace(returnRoute);
   };
+  const closeEventPanels = () => {
+    setEventMenuOpen(false);
+    setActivityCenterOpen(false);
+    setExpensesOpen(false);
+    setGamesOpen(false);
+    setExpenseEditRequest(null);
+  };
+  const openExpenses = () => {
+    closeEventPanels();
+    setExpensesOpen(true);
+  };
+  const openGames = () => {
+    closeEventPanels();
+    setGamesOpen(true);
+  };
   const openEventChat = () => {
     if (!chatActor) {
       notify(mode === 'guest'
@@ -6364,6 +6386,7 @@ export default function Home() {
         : 'Sign in before joining this event chat.');
       return;
     }
+    closeEventPanels();
     primeChatAudio();
     setChatStarted(true);
     setChatOpen(true);
@@ -6733,7 +6756,7 @@ export default function Home() {
             canManage={canManageCurrentEvent}
             fallbackRsvps={rsvps}
             editRequest={expenseEditRequest}
-            onClose={() => { setExpenseEditRequest(null); setExpensesOpen(false); }}
+            onClose={closeEventPanels}
             notify={notify}
           />,
           document.body,
@@ -6749,10 +6772,7 @@ export default function Home() {
           accountUid={accountUser?.uid || ''}
           viewer={gameViewer}
           otherEvents={canManageGame ? events.filter((event) => event.id !== menu.id).map((event) => ({ id: event.id, title: event.title })) : []}
-          onClose={() => {
-            setEventMenuOpen(false);
-            setGamesOpen(false);
-          }}
+          onClose={closeEventPanels}
           notify={notify}
         />,
         document.body,
@@ -7305,7 +7325,7 @@ export default function Home() {
             <button type="button" onClick={navigateHome} disabled={hostPreview} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" className={chatOpen ? 'event-nav-active' : ''} aria-pressed={chatOpen} onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -7333,19 +7353,13 @@ export default function Home() {
                   type="button"
                   role="menuitem"
                   disabled={!expenseActor}
-                  onClick={() => {
-                    setExpensesOpen(true);
-                    setEventMenuOpen(false);
-                  }}
+                  onClick={openExpenses}
                   title={!expenseActor ? 'RSVP Going and receive approval to use expenses' : undefined}
                 >
                   <span><DollarSign size={18} /></span>
                   <div><strong>Expenses</strong><small>{expenseActor ? 'Receipts, splits and guest balances' : 'Available to approved Going guests'}</small></div>
                 </button>
-                <button type="button" role="menuitem" onClick={() => {
-                  setGamesOpen(true);
-                  setEventMenuOpen(false);
-                }}>
+                <button type="button" role="menuitem" onClick={openGames}>
                   <span><Gamepad2 size={18} /></span>
                   <div><strong>Games</strong><small>Play event games or build a new one</small></div>
                 </button>
@@ -7380,7 +7394,7 @@ export default function Home() {
             <button type="button" onClick={() => window.location.assign(guestHomeRoute())} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" className={chatOpen ? 'event-nav-active' : ''} aria-pressed={chatOpen} onClick={(event) => { event.currentTarget.blur(); toggleEventChat(); }} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -7409,18 +7423,12 @@ export default function Home() {
                   type="button"
                   role="menuitem"
                   disabled={!expenseActor}
-                  onClick={() => {
-                    setExpensesOpen(true);
-                    setEventMenuOpen(false);
-                  }}
+                  onClick={openExpenses}
                 >
                   <span><DollarSign size={18} /></span>
                   <div><strong>Expenses</strong><small>Receipts, splits and guest balances</small></div>
                 </button>
-                <button type="button" role="menuitem" onClick={() => {
-                  setGamesOpen(true);
-                  setEventMenuOpen(false);
-                }}>
+                <button type="button" role="menuitem" onClick={openGames}>
                   <span><Gamepad2 size={18} /></span>
                   <div><strong>Games</strong><small>Manage and play this event’s games</small></div>
                 </button>
@@ -8364,22 +8372,23 @@ function ExpensePanel({
   const [mobileDevice, setMobileDevice] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const expenseComposerRef = useRef<HTMLElement>(null);
-  const expensePullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; active: boolean } | null>(null);
+  const expensePullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; direction: 'pending' | 'vertical' | 'cancelled' } | null>(null);
 
   const startExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    if ((event.pointerType === 'mouse' && event.button !== 0) || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
     const panel = event.currentTarget.closest<HTMLElement>('.expense-panel');
     if (!panel) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    expensePullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, active: true };
+    expensePullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, direction: 'pending' };
   };
   const moveExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
     const state = expensePullRef.current;
-    if (!state?.active || state.pointerId !== event.pointerId) return;
+    if (!state || state.pointerId !== event.pointerId || state.direction === 'cancelled') return;
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    if (dy <= 0 || Math.abs(dx) > dy) {
-      state.active = false;
+    if (state.direction === 'pending' && Math.hypot(dx, dy) < 8) return;
+    if (state.direction === 'pending') state.direction = dy > 0 && Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'cancelled';
+    if (state.direction !== 'vertical') {
       state.panel.style.removeProperty('--panel-pull-y');
       state.panel.style.removeProperty('transition');
       return;
@@ -8395,7 +8404,7 @@ function ExpensePanel({
     const dx = event.clientX - state.x;
     state.panel.style.removeProperty('transition');
     expensePullRef.current = null;
-    if (state.active && dy > 84 && Math.abs(dy) > Math.abs(dx)) onClose();
+    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) onClose();
     else state.panel.style.removeProperty('--panel-pull-y');
   };
   const cancelExpensePull = () => {
@@ -8989,7 +8998,7 @@ function EventChat({
   const closeTimerRef = useRef<number | null>(null);
   const closeFrameRef = useRef<number | null>(null);
   const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; timer: number | null; active: boolean; opened: boolean } | null>(null);
-  const headerPullRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; active: boolean } | null>(null);
+  const headerPullRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; direction: 'pending' | 'vertical' | 'cancelled' } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
   const highlightTimerRef = useRef<number | null>(null);
   const knownMessageIds = useRef<Set<string> | null>(null);
@@ -9496,7 +9505,7 @@ function EventChat({
     return () => window.removeEventListener('nights-close-event-chat', closeChat);
   }, [closeChat, visible]);
   const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    if ((event.pointerType === 'mouse' && event.button !== 0) || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
     const modal = event.currentTarget.closest<HTMLElement>('.event-chat');
     headerPullRef.current = {
@@ -9504,16 +9513,17 @@ function EventChat({
       y: event.clientY,
       node: modal || event.currentTarget,
       pointerId: event.pointerId,
-      active: true,
+      direction: 'pending',
     };
   };
   const moveHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     const state = headerPullRef.current;
-    if (!state?.active || state.pointerId !== event.pointerId) return;
+    if (!state || state.pointerId !== event.pointerId || state.direction === 'cancelled') return;
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    if (dy <= 0 || Math.abs(dx) > dy) {
-      state.active = false;
+    if (state.direction === 'pending' && Math.hypot(dx, dy) < 8) return;
+    if (state.direction === 'pending') state.direction = dy > 0 && Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'cancelled';
+    if (state.direction !== 'vertical') {
       state.node.style.removeProperty('--chat-modal-pull-y');
       state.node.style.removeProperty('transition');
       return;
@@ -9529,7 +9539,7 @@ function EventChat({
     const dx = event.clientX - state.x;
     state.node.style.removeProperty('transition');
     headerPullRef.current = null;
-    if (state.active && dy > 76 && Math.abs(dy) > Math.abs(dx)) {
+    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) {
       closeChat();
     } else {
       state.node.style.removeProperty('--chat-modal-pull-y');

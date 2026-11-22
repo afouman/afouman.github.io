@@ -2855,6 +2855,7 @@ button.profile-balance:hover { background: #edf8f4; }
 }
 .guest-event-nav > button:hover,
 .guest-event-nav > button:focus-visible,
+.guest-event-nav > button.event-nav-active,
 .guest-event-nav > .event-menu-control > button:hover,
 .guest-event-nav > .event-menu-control > button:focus-visible,
 .guest-event-nav > .event-menu-control > button.event-menu-active {
@@ -3214,7 +3215,7 @@ button.profile-balance:hover { background: #edf8f4; }
   min-height: 68px;
   border-bottom: 1px solid rgb(255 255 255 / 0.08);
   padding: 0.7rem 0.85rem;
-  touch-action: pan-x;
+  touch-action: none;
 }
 .chat-top {
   position: relative;
@@ -6135,7 +6136,7 @@ html.game-overlay-open, body.game-overlay-open { overflow: hidden; overscroll-be
 
 .expense-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(5 15 18 / 0.72); padding: 1.25rem; backdrop-filter: blur(12px); }
 .expense-panel { width: min(920px, 100%); max-height: min(880px, calc(100dvh - 2.5rem)); overflow-y: auto; border: 0; border-radius: 1.7rem; background: #f5f1e9; color: #172f32; box-shadow: 0 35px 110px rgb(0 0 0 / 0.42); transform: translateY(var(--panel-pull-y, 0)); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
-.expense-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.94); padding: 1.4rem 1.5rem 1.15rem; backdrop-filter: blur(15px); touch-action: pan-x; }
+.expense-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.94); padding: 1.4rem 1.5rem 1.15rem; backdrop-filter: blur(15px); touch-action: none; }
 .expense-panel-header h2 { margin-top: 0.2rem; font-size: clamp(2.1rem, 5vw, 3.35rem); line-height: 0.95; }
 .expense-panel-header > div > span { display: block; margin-top: 0.55rem; color: rgb(23 54 59 / 0.58); font-size: 0.72rem; }
 .expense-panel-header > button { display: grid; width: 40px; height: 40px; flex: none; place-items: center; border: 0; border-radius: 50%; background: rgb(18 59 66 / 0.08); color: #17363b; }
