@@ -8002,6 +8002,7 @@ function GuestAccessPortal({
   const [hostPickerOpen, setHostPickerOpen] = useState(false);
   const [rsvpScopes, setRsvpScopes] = useState<Array<'pending' | 'yes' | 'maybe' | 'no'>>([]);
   const [rsvpPickerOpen, setRsvpPickerOpen] = useState(false);
+  const [resolvedHostNames, setResolvedHostNames] = useState<Record<string, string>>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
   const invitedHosts = useMemo(() => {
@@ -8009,9 +8010,38 @@ function GuestAccessPortal({
     events.filter((access) => !access.hosted).forEach((access) => {
       const id = access.invitation?.hostUid || access.event.ownerUid || '';
       if (!id || hosts.has(id)) return;
-      hosts.set(id, access.invitation?.hostName || access.event.ownerName || 'Host');
+      hosts.set(id, resolvedHostNames[id] || access.invitation?.hostName || access.event.ownerName || 'Host');
     });
     return [...hosts.entries()].map(([uid, name]) => ({ uid, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [events, resolvedHostNames]);
+  const hostNameFor = useCallback((access: GuestEventAccess) => {
+    const hostUid = access.invitation?.hostUid || access.event.ownerUid || '';
+    return resolvedHostNames[hostUid] || access.invitation?.hostName || access.event.ownerName || 'Host';
+  }, [resolvedHostNames]);
+  useEffect(() => {
+    const hostUids = [...new Set(events.filter((access) => !access.hosted)
+      .map((access) => access.invitation?.hostUid || access.event.ownerUid)
+      .filter((uid): uid is string => Boolean(uid)))];
+    if (!firebaseConfigured || hostUids.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [{ getApp }, store] = await Promise.all([
+          import('firebase/app'), import('firebase/firestore'),
+        ]);
+        const db = store.getFirestore(getApp());
+        const records = await Promise.all(hostUids.map(async (uid) => {
+          const snapshot = await store.getDoc(store.doc(db, 'account-directory', uid));
+          const data = snapshot.data();
+          return [uid, data?.displayName || `${data?.firstName || ''} ${data?.lastName || ''}`.trim()] as const;
+        }));
+        if (cancelled) return;
+        setResolvedHostNames(Object.fromEntries(records.filter(([, name]) => Boolean(name))));
+      } catch {
+        // Invitation and event records remain the safe fallback if a directory record is unavailable.
+      }
+    })();
+    return () => { cancelled = true; };
   }, [events]);
   const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUids.length ? 1 : 0) + (rsvpScopes.length ? 1 : 0);
   useEffect(() => {
@@ -8106,6 +8136,7 @@ function GuestAccessPortal({
                   activityUnreadCount={activityUnreadCounts[access.event.id] || 0}
                   hosted={Boolean(access.hosted || accountCanManageEvent(access.event, user?.uid, user?.email))}
                   invited={Boolean(access.invitation || (pendingEvent && guestEventMatchesPending(access, pendingEvent)))}
+                  hostName={access.hosted || accountCanManageEvent(access.event, user?.uid, user?.email) ? accountDisplayName(profile) : hostNameFor(access)}
                   onSelect={() => selectEvent(access)}
                 />
               ))}
@@ -8126,6 +8157,7 @@ function GuestEventCard({
   hosted = false,
   chatUnreadCount = 0,
   activityUnreadCount = 0,
+  hostName,
   onSelect,
 }: {
   access: GuestEventAccess;
@@ -8134,6 +8166,7 @@ function GuestEventCard({
   hosted?: boolean;
   chatUnreadCount?: number;
   activityUnreadCount?: number;
+  hostName?: string;
   onSelect: () => void;
 }) {
   const response = hosted
@@ -8155,6 +8188,7 @@ function GuestEventCard({
         <small>{eventTypeLabel(access.event)}{current ? ' · Current event' : ''}</small>
         {hosted && <em className="guest-event-hosting-mark font-display">Your event</em>}
         <strong className="font-display">{access.event.title}</strong>
+        <span className="guest-event-card-host">Hosted by {hostName || access.invitation?.hostName || access.event.ownerName || 'Host'}</span>
         <span><Clock3 size={13} /> {access.event.date}</span>
         {access.event.address && <span><MapPin size={13} /> {access.event.address}</span>}
       </span>
