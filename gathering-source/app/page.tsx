@@ -6317,7 +6317,9 @@ export default function Home() {
       HOST_PREVIEW_RETURN_ROUTE_KEY,
       `${window.location.pathname}${window.location.search}${window.location.hash}`,
     );
-    window.location.replace(hostPreviewRoute(menu.id, automaticPublicEventPath(menu)));
+    // Keep the editor in browser history so iOS's left-edge swipe returns to
+    // the event host view instead of jumping to the previous Home entry.
+    window.location.assign(hostPreviewRoute(menu.id, automaticPublicEventPath(menu)));
   };
   const navigateBack = () => {
     if (hostPreview) {
@@ -8945,6 +8947,7 @@ function EventChat({
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [unreadStartMessageId, setUnreadStartMessageId] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -8952,6 +8955,7 @@ function EventChat({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
+  const closeTimerRef = useRef<number | null>(null);
   const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; timer: number | null; active: boolean; opened: boolean } | null>(null);
   const headerPullRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; active: boolean } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -9152,6 +9156,7 @@ function EventChat({
 
   useEffect(() => () => {
     if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
+    if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
     recorderRef.current?.stop();
     recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
     document.body.classList.remove('chat-composer-focused');
@@ -9431,12 +9436,18 @@ function EventChat({
     gestureRef.current = null;
   };
   const closeChat = () => {
+    if (closing) return;
     // Closing must restore the navigation dock even if WebKit has not yet
     // delivered its keyboard-dismissal notification.
     composerRef.current?.blur();
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     document.body.classList.remove('chat-composer-focused', 'chat-keyboard-open');
     rememberReadPosition();
-    onMinimize();
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      setClosing(false);
+      onMinimize();
+    }, 260);
   };
   const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
@@ -9468,10 +9479,11 @@ function EventChat({
     if (!state || state.pointerId !== event.pointerId) return;
     const dy = event.clientY - state.y;
     const dx = event.clientX - state.x;
-    state.node.style.removeProperty('--chat-modal-pull-y');
     headerPullRef.current = null;
     if (state.active && dy > 76 && Math.abs(dy) > Math.abs(dx)) {
       closeChat();
+    } else {
+      state.node.style.removeProperty('--chat-modal-pull-y');
     }
   };
   const cancelHeaderPull = () => {
@@ -9738,7 +9750,7 @@ function EventChat({
 
   return (
     <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
-      <dialog open className="event-chat" aria-labelledby="event-chat-title">
+      <dialog open className={`event-chat ${closing ? 'is-closing' : ''}`} aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header
             className="chat-header"
