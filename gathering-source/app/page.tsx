@@ -6718,33 +6718,16 @@ export default function Home() {
       )}
 
       {expensesOpen && expenseActor && (
-        <div onPointerDownCapture={(event) => {
-          const control = (event.target as Element).closest<HTMLElement>('[data-expense-action]');
-          if (!control) return;
-          const action = control.dataset.expenseAction;
-          if (action === 'close') {
-            event.preventDefault();
-            event.stopPropagation();
-            setExpensesOpen(false);
-            return;
-          }
-          if (action === 'edit' && control.dataset.expenseId) {
-            event.preventDefault();
-            event.stopPropagation();
-            setExpenseEditRequest({ id: control.dataset.expenseId, nonce: Date.now() });
-          }
-        }}>
-          <ExpensePanel
-            key={menu.id}
-            menu={menu}
-            actor={expenseActor}
-            canManage={canManageCurrentEvent}
-            fallbackRsvps={rsvps}
-            editRequest={expenseEditRequest}
-            onClose={() => setExpensesOpen(false)}
-            notify={notify}
-          />
-        </div>
+        <ExpensePanel
+          key={menu.id}
+          menu={menu}
+          actor={expenseActor}
+          canManage={canManageCurrentEvent}
+          fallbackRsvps={rsvps}
+          editRequest={expenseEditRequest}
+          onClose={() => { setExpenseEditRequest(null); setExpensesOpen(false); }}
+          notify={notify}
+        />
       )}
 
       {appEnvironmentReady && gamesOpen && menu.id !== EMPTY_EVENT_ID && createPortal(
@@ -7312,7 +7295,7 @@ export default function Home() {
             <button type="button" onClick={navigateHome} disabled={hostPreview} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={openEventChat} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" onClick={(event) => { event.currentTarget.blur(); openEventChat(); }} disabled={!chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -7387,7 +7370,7 @@ export default function Home() {
             <button type="button" onClick={() => window.location.assign(guestHomeRoute())} aria-label="Home">
               <House size={20} /><span>Home</span>
             </button>
-            <button type="button" onClick={openEventChat} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
+            <button type="button" onClick={(event) => { event.currentTarget.blur(); openEventChat(); }} disabled={creatingEvent || !chatActor} aria-label={`Open event chat${eventNotificationCounts[menu.id] ? `, ${eventNotificationCounts[menu.id]} unread` : ''}`}>
               <span className="event-nav-icon"><MessageCircle size={20} />
                 {eventNotificationCounts[menu.id] > 0 && <b>{eventNotificationCounts[menu.id] > 9 ? '9+' : eventNotificationCounts[menu.id]}</b>}
               </span><span>Chat</span>
@@ -8371,6 +8354,45 @@ function ExpensePanel({
   const [mobileDevice, setMobileDevice] = useState(false);
   const receiptInputRef = useRef<HTMLInputElement>(null);
   const expenseComposerRef = useRef<HTMLElement>(null);
+  const expensePullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; active: boolean } | null>(null);
+
+  const startExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    const panel = event.currentTarget.closest<HTMLElement>('.expense-panel');
+    if (!panel) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    expensePullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, active: true };
+  };
+  const moveExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = expensePullRef.current;
+    if (!state?.active || state.pointerId !== event.pointerId) return;
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+    if (dy <= 0 || Math.abs(dx) > dy) {
+      state.active = false;
+      state.panel.style.removeProperty('--panel-pull-y');
+      state.panel.style.removeProperty('transition');
+      return;
+    }
+    event.preventDefault();
+    state.panel.style.setProperty('transition', 'none');
+    state.panel.style.setProperty('--panel-pull-y', `${Math.min(150, dy * 0.65)}px`);
+  };
+  const finishExpensePull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = expensePullRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const dy = event.clientY - state.y;
+    const dx = event.clientX - state.x;
+    state.panel.style.removeProperty('transition');
+    expensePullRef.current = null;
+    if (state.active && dy > 84 && Math.abs(dy) > Math.abs(dx)) onClose();
+    else state.panel.style.removeProperty('--panel-pull-y');
+  };
+  const cancelExpensePull = () => {
+    expensePullRef.current?.panel.style.removeProperty('--panel-pull-y');
+    expensePullRef.current?.panel.style.removeProperty('transition');
+    expensePullRef.current = null;
+  };
 
   useEffect(() => {
     queueMicrotask(() => setMobileDevice(
@@ -8761,16 +8783,14 @@ function ExpensePanel({
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className="expense-panel" role="dialog" aria-modal="true" aria-labelledby="expense-panel-title">
-        <header className="expense-panel-header">
+        <header className="expense-panel-header" onPointerDown={startExpensePull} onPointerMove={moveExpensePull} onPointerUp={finishExpensePull} onPointerCancel={cancelExpensePull}>
           <div><p className="eyebrow">{menu.title}</p><h2 id="expense-panel-title" className="font-display">Expenses</h2><span>Receipts, shared items and a clear total for every guest.</span></div>
           <button
             type="button"
-            data-expense-action="close"
             onPointerDown={(event) => {
               event.stopPropagation();
-              onClose();
             }}
-            onClick={onClose}
+            onClick={(event) => { event.preventDefault(); event.stopPropagation(); onClose(); }}
             aria-label="Close expenses"
           ><XCircle size={22} /></button>
         </header>
@@ -9444,10 +9464,11 @@ function EventChat({
     document.body.classList.remove('chat-composer-focused', 'chat-keyboard-open');
     rememberReadPosition();
     setClosing(true);
+    document.querySelectorAll<HTMLButtonElement>('.guest-event-nav button[aria-label^="Open event chat"]').forEach((button) => button.blur());
     closeTimerRef.current = window.setTimeout(() => {
       setClosing(false);
       onMinimize();
-    }, 260);
+    }, 440);
   };
   const startHeaderPull = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
@@ -9749,7 +9770,7 @@ function EventChat({
   }
 
   return (
-    <div className={`chat-float-layer ${actor.role}`} style={{ '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
+    <div className={`chat-float-layer ${actor.role}`} style={{ ...eventThemeStyle(menu), '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
       <dialog open className={`event-chat ${closing ? 'is-closing' : ''}`} aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header

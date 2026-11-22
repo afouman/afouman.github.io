@@ -3088,7 +3088,7 @@ button.profile-balance:hover { background: #edf8f4; }
   align-items: stretch;
   border: 1px solid rgb(255 255 255/0.1);
   border-radius: 0.35rem;
-  background: #171a15;
+  background: var(--wine-deep);
   box-shadow: 0 30px 80px rgb(0 0 0/0.2);
   overflow: hidden;
 }
@@ -3148,21 +3148,26 @@ button.profile-balance:hover { background: #edf8f4; }
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 0.1);
   border-radius: 1.35rem;
-  background: #171a15;
+  background: var(--wine-deep);
   color: #f6f0e4;
   box-shadow: 0 24px 70px rgb(0 0 0 / 0.4), 0 2px 8px rgb(0 0 0 / 0.22);
   pointer-events: auto;
   touch-action: pan-y;
   overscroll-behavior-x: none;
   transform: translateY(var(--chat-modal-pull-y, 0));
+  animation: chat-sheet-open 420ms cubic-bezier(0.22, 0.9, 0.28, 1) both;
   transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .event-chat.is-closing {
   opacity: 0;
   transform: translateY(calc(100% + 2rem));
   transition:
-    transform 260ms cubic-bezier(0.22, 0.9, 0.28, 1),
-    opacity 180ms ease-out;
+    transform 420ms cubic-bezier(0.22, 0.9, 0.28, 1),
+    opacity 280ms ease-out;
+}
+@keyframes chat-sheet-open {
+  from { opacity: 0; transform: translateY(calc(100% + 2rem)); }
+  to { opacity: 1; transform: translateY(var(--chat-modal-pull-y, 0)); }
 }
 .chat-float-layer.guest .event-chat { height: min(720px, calc(100dvh - env(safe-area-inset-top) - var(--chat-bottom-space) - 5.25rem)); }
 .chat-minimized {
@@ -3210,7 +3215,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .chat-top {
   position: relative;
   z-index: 3;
-  background: #171a15;
+  background: var(--wine-deep);
   box-shadow: 0 8px 22px rgb(0 0 0 / 0.08);
 }
 .chat-header-identity { display: flex; min-width: 0; align-items: center; gap: 0.7rem; }
@@ -3342,7 +3347,7 @@ button.profile-balance:hover { background: #edf8f4; }
   overscroll-behavior-x: none;
   overflow-x: clip;
   overflow-y: auto;
-  background: #171a15;
+  background: linear-gradient(180deg, var(--wine-deep), color-mix(in srgb, var(--wine-deep) 88%, var(--wine)));
   padding: 1rem 0.85rem 1.25rem;
   scroll-padding-block: 4rem;
   scrollbar-color: rgb(246 240 228 / 0.18) transparent;
@@ -3366,7 +3371,7 @@ button.profile-balance:hover { background: #edf8f4; }
   margin: 0 0 0.7rem;
   border: 1px solid rgb(255 255 255 / 0.08);
   border-radius: 1rem 1rem 1rem 0.32rem;
-  background: #22261f;
+  background: color-mix(in srgb, var(--wine-deep) 77%, var(--wine));
   padding: 0.62rem 0.76rem 0.58rem;
   box-shadow: 0 4px 12px rgb(0 0 0 / 0.13);
   transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
@@ -3381,7 +3386,7 @@ button.profile-balance:hover { background: #edf8f4; }
   margin-left: auto;
   border-color: rgb(242 166 142 / 0.2);
   border-radius: 1rem 1rem 0.32rem 1rem;
-  background: #351f24;
+  background: color-mix(in srgb, var(--wine) 72%, var(--wine-deep));
   box-shadow: 0 5px 15px rgb(0 0 0 / 0.18);
 }
 .chat-message.poll-message { width: min(94%, 360px); }
@@ -3630,7 +3635,7 @@ button.profile-balance:hover { background: #edf8f4; }
   max-height: 52vh;
   overflow-y: auto;
   border-top: 1px solid rgb(255 255 255 / 0.08);
-  background: #20231e;
+  background: color-mix(in srgb, var(--wine-deep) 88%, var(--wine));
   padding: 1rem 1.25rem;
 }
 .chat-poll-composer > div { display: flex; align-items: center; gap: 0.45rem; }
@@ -3638,7 +3643,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .chat-poll-composer > div input { flex: 1; }
 .chat-poll-composer label { display: flex; align-items: center; gap: 0.45rem; color: rgb(246 240 228 / 0.65); font-size: 0.72rem; }
 .chat-poll-composer .primary-button { justify-content: center; }
-.chat-composer { position: relative; z-index: 2; border-top: 1px solid rgb(255 255 255 / 0.08); background: #1c1f1a; padding: 0.65rem 0.7rem max(0.7rem, env(safe-area-inset-bottom)); }
+.chat-composer { position: relative; z-index: 2; border-top: 1px solid rgb(255 255 255 / 0.08); background: color-mix(in srgb, var(--wine-deep) 86%, var(--wine)); padding: 0.65rem 0.7rem max(0.7rem, env(safe-area-inset-bottom)); }
 .chat-composer-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 0.4rem; }
 .chat-composer textarea { width: 100%; resize: none; min-height: 42px; max-height: 112px; border-radius: 1.15rem; background: rgb(255 255 255 / 0.1); font: inherit; font-size: 16px; line-height: 1.35; }
 .chat-tool-button,
@@ -5929,8 +5934,8 @@ button.profile-balance:hover { background: #edf8f4; }
 
 /* Event games: library, AI-assisted editor, and isolated runtime */
 .game-panel-backdrop { position: fixed; z-index: 155; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(4 18 22 / 0.78); padding: 1.25rem; backdrop-filter: blur(14px); animation: overlay-fade-in 180ms ease-out both; }
-.game-panel { width: min(980px, 100%); max-height: min(900px, calc(100dvh - 2.5rem)); overflow-y: auto; border-radius: 1.75rem; background: #f5f1e9; color: #17363b; box-shadow: 0 38px 120px rgb(0 0 0 / 0.48); overscroll-behavior: contain; }
-.game-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.95); padding: 1.35rem 1.5rem 1.1rem; backdrop-filter: blur(16px); }
+.game-panel { width: min(980px, 100%); max-height: min(900px, calc(100dvh - 2.5rem)); overflow-y: auto; border-radius: 1.75rem; background: #f5f1e9; color: #17363b; box-shadow: 0 38px 120px rgb(0 0 0 / 0.48); overscroll-behavior: contain; transform: translateY(var(--game-panel-pull-y, 0)); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.game-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.95); padding: 1.35rem 1.5rem 1.1rem; backdrop-filter: blur(16px); touch-action: pan-x; }
 .game-panel-header h2 { margin-top: 0.18rem; font-size: clamp(2.25rem, 6vw, 3.7rem); line-height: 0.92; }
 .game-panel-header > div > span { display: block; margin-top: 0.55rem; color: rgb(23 54 59 / 0.56); font-size: 0.72rem; }
 .game-panel-header > button { display: grid; width: 42px; height: 42px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.08); color: #17363b; }
@@ -6125,8 +6130,8 @@ html.game-overlay-open, body.game-overlay-open { overflow: hidden; overscroll-be
 }
 
 .expense-backdrop { position: fixed; z-index: 150; inset: 0; display: grid; place-items: center; overflow: hidden; background: rgb(5 15 18 / 0.72); padding: 1.25rem; backdrop-filter: blur(12px); }
-.expense-panel { width: min(920px, 100%); max-height: min(880px, calc(100dvh - 2.5rem)); overflow-y: auto; border: 0; border-radius: 1.7rem; background: #f5f1e9; color: #172f32; box-shadow: 0 35px 110px rgb(0 0 0 / 0.42); }
-.expense-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.94); padding: 1.4rem 1.5rem 1.15rem; backdrop-filter: blur(15px); }
+.expense-panel { width: min(920px, 100%); max-height: min(880px, calc(100dvh - 2.5rem)); overflow-y: auto; border: 0; border-radius: 1.7rem; background: #f5f1e9; color: #172f32; box-shadow: 0 35px 110px rgb(0 0 0 / 0.42); transform: translateY(var(--panel-pull-y, 0)); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1); }
+.expense-panel-header { position: sticky; z-index: 4; top: 0; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid rgb(18 59 66 / 0.1); background: rgb(245 241 233 / 0.94); padding: 1.4rem 1.5rem 1.15rem; backdrop-filter: blur(15px); touch-action: pan-x; }
 .expense-panel-header h2 { margin-top: 0.2rem; font-size: clamp(2.1rem, 5vw, 3.35rem); line-height: 0.95; }
 .expense-panel-header > div > span { display: block; margin-top: 0.55rem; color: rgb(23 54 59 / 0.58); font-size: 0.72rem; }
 .expense-panel-header > button { display: grid; width: 40px; height: 40px; flex: none; place-items: center; border: 0; border-radius: 50%; background: rgb(18 59 66 / 0.08); color: #17363b; }

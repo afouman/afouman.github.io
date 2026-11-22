@@ -9,6 +9,7 @@
 // view over a WebSocket. Phones draw that view in the sandbox and send actions.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Check, Copy, Gamepad2, LogOut, MessageCircle, EllipsisVertical, Pencil, Play, Plus, RotateCcw, Save, Send, ShieldCheck, Sparkles, Trash2, Users, XCircle } from 'lucide-react';
 import {
   isPlayableRuntime,
@@ -754,6 +755,44 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [exporting, setExporting] = useState<EventGame | null>(null);
   const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
   const [deleting, setDeleting] = useState<EventGame | null>(null);
+  const panelPullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; active: boolean } | null>(null);
+  const startPanelPull = (event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    const panel = event.currentTarget.closest<HTMLElement>('.game-panel');
+    if (!panel) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    panelPullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, active: true };
+  };
+  const movePanelPull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = panelPullRef.current;
+    if (!state?.active || state.pointerId !== event.pointerId) return;
+    const dx = event.clientX - state.x;
+    const dy = event.clientY - state.y;
+    if (dy <= 0 || Math.abs(dx) > dy) {
+      state.active = false;
+      state.panel.style.removeProperty('--game-panel-pull-y');
+      state.panel.style.removeProperty('transition');
+      return;
+    }
+    event.preventDefault();
+    state.panel.style.setProperty('transition', 'none');
+    state.panel.style.setProperty('--game-panel-pull-y', `${Math.min(150, dy * 0.65)}px`);
+  };
+  const finishPanelPull = (event: ReactPointerEvent<HTMLElement>) => {
+    const state = panelPullRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const dy = event.clientY - state.y;
+    const dx = event.clientX - state.x;
+    state.panel.style.removeProperty('transition');
+    panelPullRef.current = null;
+    if (state.active && dy > 84 && Math.abs(dy) > Math.abs(dx)) onClose();
+    else state.panel.style.removeProperty('--game-panel-pull-y');
+  };
+  const cancelPanelPull = () => {
+    panelPullRef.current?.panel.style.removeProperty('--game-panel-pull-y');
+    panelPullRef.current?.panel.style.removeProperty('transition');
+    panelPullRef.current = null;
+  };
 
   useEffect(() => {
     if (!firebaseConfigured) {
@@ -1067,7 +1106,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
       if (event.target === event.currentTarget) onClose();
     }}>
       <div className="game-panel" role="dialog" aria-modal="true" aria-labelledby="game-panel-title">
-        <header className="game-panel-header">
+        <header className="game-panel-header" onPointerDown={startPanelPull} onPointerMove={movePanelPull} onPointerUp={finishPanelPull} onPointerCancel={cancelPanelPull}>
           <div><p className="eyebrow">{eventTitle}</p><h2 id="game-panel-title" className="font-display">Games</h2><span>Small, custom games designed for the people at this event.</span></div>
           <button type="button" onClick={(event) => {
             event.stopPropagation();
