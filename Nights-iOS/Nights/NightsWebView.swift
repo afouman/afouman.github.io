@@ -99,6 +99,7 @@ struct NightsWebView: UIViewRepresentable {
 
         init(model: NightsBrowserModel) {
             self.model = model
+            super.init()
             UNUserNotificationCenter.current().delegate = self
         }
 
