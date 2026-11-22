@@ -7999,7 +7999,7 @@ function GuestAccessPortal({
   const [dateEnd, setDateEnd] = useState('');
   const [hostScope, setHostScope] = useState<'all' | 'mine' | 'from'>('all');
   const [selectedHostUid, setSelectedHostUid] = useState('');
-  const [pendingRsvpOnly, setPendingRsvpOnly] = useState(false);
+  const [rsvpScope, setRsvpScope] = useState<'all' | 'pending' | 'yes' | 'maybe' | 'no'>('all');
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filterReferenceTime] = useState(() => Date.now());
   const invitedHosts = useMemo(() => {
@@ -8011,7 +8011,7 @@ function GuestAccessPortal({
     });
     return [...hosts.entries()].map(([uid, name]) => ({ uid, name })).sort((a, b) => a.name.localeCompare(b.name));
   }, [events]);
-  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUid ? 1 : 0) + (pendingRsvpOnly ? 1 : 0);
+  const activeFilterCount = (dateOrder === 'desc' ? 1 : 0) + (dateScope === 'all' ? 0 : 1) + (hostScope === 'all' ? 0 : 1) + (selectedHostUid ? 1 : 0) + (rsvpScope === 'all' ? 0 : 1);
   useEffect(() => {
     if (!filtersOpen) return;
     const appScroller = document.querySelector<HTMLElement>('.app-root.native-ios-app');
@@ -8043,9 +8043,12 @@ function GuestAccessPortal({
         || (hostScope === 'mine'
           ? Boolean(access.hosted)
           : !access.hosted && (!selectedHostUid || (access.invitation?.hostUid || access.event.ownerUid) === selectedHostUid)))
-      .filter((access) => !pendingRsvpOnly || Boolean(access.invitation && !access.rsvp && !access.hosted))
+      .filter((access) => rsvpScope === 'all'
+        || (rsvpScope === 'pending'
+          ? Boolean(access.invitation && !access.rsvp && !access.hosted)
+          : access.rsvp?.status === rsvpScope))
       .sort((a, b) => (eventTime(a) - eventTime(b)) * (dateOrder === 'asc' ? 1 : -1));
-  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, hostScope, pendingRsvpOnly, selectedHostUid]);
+  }, [dateEnd, dateOrder, dateScope, dateStart, events, filterReferenceTime, hostScope, rsvpScope, selectedHostUid]);
   return (
     <section className="guest-access-portal">
       <div className="guest-access-intro">
@@ -8079,9 +8082,9 @@ function GuestAccessPortal({
                     {dateScope === 'custom' && <div className="guest-event-filter-date-range"><label><span>From</span><input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /></label><label><span>To</span><input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></label></div>}
                     <label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'mine' | 'from'; setHostScope(next); if (next !== 'from') setSelectedHostUid(''); }}><option value="all">All hosts</option><option value="mine">Hosted by me</option><option value="from">From host…</option></select></label>
                     {hostScope === 'from' && <label><span>From host</span><select value={selectedHostUid} onChange={(event) => setSelectedHostUid(event.target.value)}><option value="">All invited hosts</option>{invitedHosts.map((host) => <option key={host.uid} value={host.uid}>{host.name}</option>)}</select></label>}
-                    <label><span>RSVP</span><select value={pendingRsvpOnly ? 'pending' : 'all'} onChange={(event) => setPendingRsvpOnly(event.target.value === 'pending')}><option value="all">All RSVP states</option><option value="pending">Needs my RSVP</option></select></label>
+                    <label><span>RSVP</span><select value={rsvpScope} onChange={(event) => setRsvpScope(event.target.value as 'all' | 'pending' | 'yes' | 'maybe' | 'no')}><option value="all">All RSVP states</option><option value="pending">Pending my RSVP</option><option value="yes">Going</option><option value="maybe">Maybe</option><option value="no">Not going</option></select></label>
                   </div>
-                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUid(''); setPendingRsvpOnly(false); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
+                  <footer><button type="button" onClick={() => { setDateOrder('asc'); setDateScope('all'); setDateStart(''); setDateEnd(''); setHostScope('all'); setSelectedHostUid(''); setRsvpScope('all'); }}>Reset</button><button type="button" className="primary-button" onClick={() => setFiltersOpen(false)}>Show events</button></footer>
                 </section>
                 </div>,
                 document.body,
