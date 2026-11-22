@@ -755,21 +755,26 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
   const [exporting, setExporting] = useState<EventGame | null>(null);
   const [exportTargets, setExportTargets] = useState<GameEventOption[] | null>(null);
   const [deleting, setDeleting] = useState<EventGame | null>(null);
-  const panelPullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; active: boolean } | null>(null);
+  const panelPullRef = useRef<{ x: number; y: number; panel: HTMLElement; pointerId: number; direction: 'pending' | 'vertical' | 'cancelled' } | null>(null);
   const startPanelPull = (event: ReactPointerEvent<HTMLElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
+    // Touch pointer events do not consistently report button=0 in iOS WebKit.
+    // Only reject a non-primary *mouse* button, leaving touch drags reliable.
+    if ((event.pointerType === 'mouse' && event.button !== 0) || (event.target as HTMLElement).closest('button, input, textarea, label, a')) return;
     const panel = event.currentTarget.closest<HTMLElement>('.game-panel');
     if (!panel) return;
     event.currentTarget.setPointerCapture?.(event.pointerId);
-    panelPullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, active: true };
+    panelPullRef.current = { x: event.clientX, y: event.clientY, panel, pointerId: event.pointerId, direction: 'pending' };
   };
   const movePanelPull = (event: ReactPointerEvent<HTMLElement>) => {
     const state = panelPullRef.current;
-    if (!state?.active || state.pointerId !== event.pointerId) return;
+    if (!state || state.pointerId !== event.pointerId || state.direction === 'cancelled') return;
     const dx = event.clientX - state.x;
     const dy = event.clientY - state.y;
-    if (dy <= 0 || Math.abs(dx) > dy) {
-      state.active = false;
+    // Decide direction only after a small movement threshold. This prevents a
+    // tiny sideways wobble at touch-down from permanently cancelling a close.
+    if (state.direction === 'pending' && Math.hypot(dx, dy) < 8) return;
+    if (state.direction === 'pending') state.direction = dy > 0 && Math.abs(dy) >= Math.abs(dx) ? 'vertical' : 'cancelled';
+    if (state.direction !== 'vertical') {
       state.panel.style.removeProperty('--game-panel-pull-y');
       state.panel.style.removeProperty('transition');
       return;
@@ -785,7 +790,7 @@ export function GamePanel({ eventId, eventTitle, canManage, accountUid, viewer, 
     const dx = event.clientX - state.x;
     state.panel.style.removeProperty('transition');
     panelPullRef.current = null;
-    if (state.active && dy > 84 && Math.abs(dy) > Math.abs(dx)) onClose();
+    if (state.direction === 'vertical' && dy > 54 && Math.abs(dy) >= Math.abs(dx)) onClose();
     else state.panel.style.removeProperty('--game-panel-pull-y');
   };
   const cancelPanelPull = () => {

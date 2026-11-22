@@ -8978,6 +8978,7 @@ function EventChat({
   const [keyboardInset, setKeyboardInset] = useState(0);
   const [unreadStartMessageId, setUnreadStartMessageId] = useState<string | null>(null);
   const [closing, setClosing] = useState(false);
+  const [exiting, setExiting] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
   const streamRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -8986,6 +8987,7 @@ function EventChat({
   const recorderStreamRef = useRef<MediaStream | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
   const gestureRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; timer: number | null; active: boolean; opened: boolean } | null>(null);
   const headerPullRef = useRef<{ x: number; y: number; node: HTMLElement; pointerId: number; active: boolean } | null>(null);
   const messageRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -9187,6 +9189,7 @@ function EventChat({
   useEffect(() => () => {
     if (recordingTimerRef.current) window.clearInterval(recordingTimerRef.current);
     if (closeTimerRef.current) window.clearTimeout(closeTimerRef.current);
+    if (closeFrameRef.current) window.cancelAnimationFrame(closeFrameRef.current);
     recorderRef.current?.stop();
     recorderStreamRef.current?.getTracks().forEach((track) => track.stop());
     document.body.classList.remove('chat-composer-focused');
@@ -9475,8 +9478,15 @@ function EventChat({
     rememberReadPosition();
     setClosing(true);
     document.querySelectorAll<HTMLButtonElement>('.guest-event-nav button[aria-label^="Open event chat"]').forEach((button) => button.blur());
+    // The first frame cancels the opening animation while retaining the sheet in
+    // place. The second frame gives the browser a stable start point for the
+    // actual close transition (WebKit otherwise removes it without animating).
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = window.requestAnimationFrame(() => setExiting(true));
+    });
     closeTimerRef.current = window.setTimeout(() => {
       setClosing(false);
+      setExiting(false);
       onMinimize();
     }, 440);
   }, [closing, onMinimize, rememberReadPosition]);
@@ -9790,7 +9800,7 @@ function EventChat({
 
   return (
     <div className={`chat-float-layer ${actor.role}`} style={{ ...eventThemeStyle(menu), '--nights-keyboard-inset': `max(${keyboardInset}px, var(--nights-native-keyboard-inset, 0px))` } as CSSProperties}>
-      <dialog open className={`event-chat ${closing ? 'is-closing' : ''}`} aria-labelledby="event-chat-title">
+      <dialog open className={`event-chat ${closing ? 'is-closing' : ''} ${exiting ? 'is-exiting' : ''}`} aria-labelledby="event-chat-title">
         <div className="chat-top">
           <header
             className="chat-header"
