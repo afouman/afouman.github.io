@@ -6808,7 +6808,7 @@ export default function Home() {
         document.body,
       )}
 
-      {activityCenterOpen && (
+      {activityCenterOpen && createPortal(
         <div className={`activity-center-backdrop ${activityCenterClosing ? 'is-closing' : ''}`} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) closeActivityCenter();
         }}>
@@ -6830,7 +6830,8 @@ export default function Home() {
                 )) : <div className="activity-center-empty"><Bell size={24} /><strong>You’re caught up</strong><span>New event activity will appear here.</span></div>}
             </div>
           </dialog>
-        </div>
+        </div>,
+        document.body,
       )}
 
       {deleteAccountOpen && accountUser && (
