@@ -1,5 +1,4 @@
 import AuthenticationServices
-import Contacts
 import CryptoKit
 import SwiftUI
 import UserNotifications
@@ -25,7 +24,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-12")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-11")!
 
     func reload() {
         isOffline = false
@@ -53,7 +52,6 @@ struct NightsWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "nightsTheme")
         configuration.userContentController.add(context.coordinator, name: "nightsNotification")
         configuration.userContentController.add(context.coordinator, name: "nightsDatePicker")
-        configuration.userContentController.add(context.coordinator, name: "nightsContacts")
 
         let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -93,7 +91,6 @@ struct NightsWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsTheme")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsNotification")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsDatePicker")
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsContacts")
         coordinator.endKeyboardTracking()
     }
 
@@ -194,12 +191,6 @@ struct NightsWebView: UIViewRepresentable {
                let field = body["field"] as? String,
                ["start", "end"].contains(field) {
                 showWheelDatePicker(field: field, initialValue: body["value"] as? String)
-                return
-            }
-            if message.name == "nightsContacts", message.frameInfo.isMainFrame,
-               isTrustedMessageURL(message.frameInfo.request.url),
-               let body = message.body as? [String: String], body["action"] == "sync" {
-                syncContacts()
                 return
             }
             guard message.name == "nightsAuth",
@@ -483,46 +474,6 @@ struct NightsWebView: UIViewRepresentable {
                   let data = try? JSONSerialization.data(withJSONObject: ["field": field, "value": value]),
                   let payload = String(data: data, encoding: .utf8) else { return }
             webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-date-picked', { detail: \(payload) }));")
-        }
-
-        private func syncContacts() {
-            let store = CNContactStore()
-            store.requestAccess(for: .contacts) { [weak self] granted, _ in
-                guard granted else {
-                    DispatchQueue.main.async { self?.sendNativeContacts([], error: "Allow Contacts access in iPhone Settings to sync your address book.") }
-                    return
-                }
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let keys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactOrganizationNameKey,
-                                CNContactPhoneNumbersKey, CNContactEmailAddressesKey] as [CNKeyDescriptor]
-                    let request = CNContactFetchRequest(keysToFetch: keys)
-                    var contacts: [[String: Any]] = []
-                    do {
-                        try store.enumerateContacts(with: request) { contact, stop in
-                            let phones = contact.phoneNumbers.map { $0.value.stringValue }
-                            let emails = contact.emailAddresses.map { String($0.value) }
-                            guard !phones.isEmpty || !emails.isEmpty else { return }
-                            let name = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
-                            contacts.append(["name": name.isEmpty ? contact.organizationName : name,
-                                             "phones": phones, "emails": emails])
-                            if contacts.count >= 5000 { stop.pointee = true }
-                        }
-                        contacts.sort { ($0["name"] as? String ?? "").localizedCaseInsensitiveCompare($1["name"] as? String ?? "") == .orderedAscending }
-                        DispatchQueue.main.async { self?.sendNativeContacts(contacts) }
-                    } catch {
-                        DispatchQueue.main.async { self?.sendNativeContacts([], error: "Nights could not read your phone contacts.") }
-                    }
-                }
-            }
-        }
-
-        private func sendNativeContacts(_ contacts: [[String: Any]], error: String? = nil) {
-            guard isTrustedAppURL(webView?.url) else { return }
-            var detail: [String: Any] = ["contacts": contacts]
-            if let error { detail["error"] = error }
-            guard let data = try? JSONSerialization.data(withJSONObject: detail),
-                  let payload = String(data: data, encoding: .utf8) else { return }
-            webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: \(payload) }));")
         }
 
         private static let dayFormatter: DateFormatter = {

@@ -4,8 +4,6 @@
 <dict>
     <key>CFBundleDisplayName</key>
     <string>Nights</string>
-    <key>NSContactsUsageDescription</key>
-    <string>Choose people from your address book to invite to your Nights events.</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleName</key>

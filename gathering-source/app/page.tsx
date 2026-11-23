@@ -195,13 +195,9 @@ type NightsNativeWindow = Window & {
       nightsDatePicker?: {
         postMessage: (message: { field: 'start' | 'end'; value: string }) => void;
       };
-      nightsContacts?: {
-        postMessage: (message: { action: 'sync' }) => void;
-      };
     };
   };
 };
-type DeviceInviteContact = { name: string; phones: string[]; emails: string[] };
 type AccountProfile = {
   uid: string;
   email: string;
@@ -1021,9 +1017,6 @@ const guestEventUrl = (eventId: string, publicPath?: string) =>
   )}`, window.location.origin).toString();
 const manualInvitationMessage = (event: EventMenu, guestName?: string) =>
   `${guestName?.trim() ? `Hi ${guestName.trim()}, you’re` : 'You’re'} invited to ${event.title} on Nights. Open this link to sign in or create your account: ${guestEventUrl(event.id, event.publicPath)}`;
-const openManualEmailInvitation = (event: EventMenu, email: string, guestName?: string) => {
-  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Invitation to ${event.title}`)}&body=${encodeURIComponent(manualInvitationMessage(event, guestName))}`;
-};
 const openManualInvitation = async (event: EventMenu, phone: string, guestName?: string) => {
   const message = manualInvitationMessage(event, guestName);
   const digits = phoneDigits(phone);
@@ -4818,25 +4811,7 @@ export default function Home() {
         targetUid = phoneIndex.data()?.accountUid || legacyPhoneIndex?.data()?.accountUid || '';
       }
       if (!targetUid) {
-        if (isEmail) {
-          const contactUid = `email-${await guestNameIndexId(email)}`;
-          const contactRef = store.doc(db, 'users', accountUser.uid, 'contacts', contactUid);
-          const existingContact = await store.getDoc(contactRef);
-          await store.setDoc(contactRef, {
-            accountUid: contactUid,
-            guestUid: '',
-            email,
-            phone: '',
-            firstName: optionalName.trim().slice(0, 80),
-            lastName: '',
-            inviteCount: (existingContact.data()?.inviteCount || 0) + 1,
-            eventIds: [...new Set([...(existingContact.data()?.eventIds || []), event.id])],
-            lastInvitedAt: store.serverTimestamp(),
-          });
-          openManualEmailInvitation(event, email, optionalName);
-          notify('Review the invitation email and tap Send.');
-          return true;
-        }
+        if (isEmail) throw new Error('not-registered-email');
         const normalizedPhone = `+1${phoneDigits(formattedPhone || '')}`;
         const recipientGuestUid = await guestNameIndexId(normalizedPhone);
         const invitationId = `${event.id}--${recipientGuestUid}`;
@@ -4956,8 +4931,8 @@ export default function Home() {
     } catch (error) {
       const firebaseCode = (error as { code?: string }).code || '';
       const reason = (error as Error).message;
-      notify(reason === 'directory-missing'
-        ? 'This account is missing its profile. Ask the guest to complete sign-up.'
+      notify(reason === 'not-registered-email' || reason === 'directory-missing'
+        ? 'No completed Nights account matches that email address. Use a phone number to prepare a manual invitation.'
         : reason === 'self'
           ? 'You already host this event'
           : reason === 'permission-denied' || firebaseCode === 'permission-denied' || firebaseCode === 'firestore/permission-denied'
@@ -10417,33 +10392,7 @@ function HostWorkspace({
   const [inviteIdentifier, setInviteIdentifier] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
-  const [deviceContacts, setDeviceContacts] = useState<DeviceInviteContact[]>([]);
-  const [deviceContactSearch, setDeviceContactSearch] = useState('');
-  const [deviceContactsBusy, setDeviceContactsBusy] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState('');
-  useEffect(() => {
-    const receiveContacts = (event: Event) => {
-      const detail = (event as CustomEvent<{ contacts?: DeviceInviteContact[]; error?: string }>).detail;
-      setDeviceContactsBusy(false);
-      if (detail?.error) { notify(detail.error); return; }
-      setDeviceContacts((detail?.contacts || []).filter((contact) => contact.phones?.length || contact.emails?.length));
-    };
-    window.addEventListener('nights-native-contacts', receiveContacts);
-    return () => window.removeEventListener('nights-native-contacts', receiveContacts);
-  }, [notify]);
-  const syncDeviceContacts = async () => {
-    const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
-    if (native) { setDeviceContactsBusy(true); native.postMessage({ action: 'sync' }); return; }
-    const picker = (navigator as Navigator & { contacts?: { select: (properties: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[]; email?: string[] }>> } }).contacts;
-    if (!picker?.select) { notify('Phone contacts are available in the Nights iPhone app or a browser that supports contact picking.'); return; }
-    try {
-      const selected = await picker.select(['name', 'tel', 'email'], { multiple: true });
-      setDeviceContacts(selected.map((contact) => ({ name: contact.name?.[0] || '', phones: contact.tel || [], emails: contact.email || [] })));
-    } catch { notify('Contacts were not selected.'); }
-  };
-  const visibleDeviceContacts = deviceContacts.filter((contact) =>
-    `${contact.name} ${contact.phones.join(' ')} ${contact.emails.join(' ')}`.toLowerCase().includes(deviceContactSearch.trim().toLowerCase()),
-  ).slice(0, 60);
   const eventInvitations = invitations.filter((invitation) => invitation.eventId === menu.id);
   const activeOrders = orders.filter(
     (order) => order.status === 'new' || order.status === 'preparing',
@@ -10635,11 +10584,7 @@ function HostWorkspace({
               <div><p className="eyebrow">Invite to</p><h2 className="font-display">{menu.title}</h2></div>
               <button type="button" className="icon-button" onClick={() => setInviteOpen(false)} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
             </header>
-            <p className="invite-dialog-copy">Choose a phone contact or enter an email or phone number. Nights members receive an in-app invitation; for anyone else, review and send the prepared text or email.</p>
-            <section className="invite-device-contacts">
-              <button type="button" className="invite-device-sync" disabled={deviceContactsBusy} onClick={() => void syncDeviceContacts()}><BookUser size={17} />{deviceContactsBusy ? 'Loading contacts…' : deviceContacts.length ? 'Refresh phone contacts' : 'Sync phone contacts'}</button>
-              {deviceContacts.length > 0 && <><label className="invite-device-search"><span>Find a contact</span><input type="search" value={deviceContactSearch} onChange={(event) => setDeviceContactSearch(event.target.value)} placeholder={`Search ${deviceContacts.length} contacts`} /></label><div className="invite-device-list">{visibleDeviceContacts.map((contact, index) => <div className="invite-device-row" key={`${contact.name}-${index}`}><strong>{contact.name || 'Unnamed contact'}</strong><div>{contact.phones.map((phone) => <button type="button" key={`phone-${phone}`} onClick={() => { setInviteName(contact.name); setInviteIdentifier(phone); document.querySelector('.invite-dialog')?.scrollTo({ top: 0, behavior: 'smooth' }); }}>Text {phone}</button>)}{contact.emails.map((email) => <button type="button" key={`email-${email}`} onClick={() => { setInviteName(contact.name); setInviteIdentifier(email); document.querySelector('.invite-dialog')?.scrollTo({ top: 0, behavior: 'smooth' }); }}>Email {email}</button>)}</div></div>)}</div></>}
-            </section>
+            <p className="invite-dialog-copy">Invite a Nights member by email or phone. If the phone number is not registered yet, Nights will save their place and prepare a text message for you to send.</p>
             <div className="invite-entry-row">
               <div className="invite-entry-fields">
                 <label>

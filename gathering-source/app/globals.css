@@ -4011,15 +4011,6 @@ body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summar
 }
 .invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
 .invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
-.invite-device-contacts { display: grid; gap: 0.65rem; margin-top: 0.9rem; }
-.invite-device-sync { display: flex; min-height: 42px; align-items: center; justify-content: center; gap: 0.45rem; border: 1px solid rgb(21 109 100 / 0.2); border-radius: 0.75rem; background: #eaf5f0; padding: 0.55rem 0.75rem; color: #146b66; font-size: 0.76rem; font-weight: 850; }
-.invite-device-search { display: grid; gap: 0.3rem; color: rgb(23 54 59 / 0.6); font-size: 0.68rem; font-weight: 850; }
-.invite-device-search input { width: 100%; min-height: 40px; border: 1px solid rgb(18 59 66 / 0.14); border-radius: 0.7rem; background: white; padding: 0.5rem 0.7rem; color: #17363b; font-size: 16px; }
-.invite-device-list { display: grid; max-height: 230px; gap: 0.4rem; overflow-y: auto; overscroll-behavior: contain; }
-.invite-device-row { display: grid; gap: 0.3rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 0.7rem; background: #f6f7f3; padding: 0.55rem 0.65rem; }
-.invite-device-row > strong { color: #17363b; font-size: 0.78rem; }
-.invite-device-row > div { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.invite-device-row > div > button { min-height: 30px; border-radius: 0.5rem; background: #e3f1ec; padding: 0.3rem 0.55rem; color: #146b66; font-size: 0.7rem; font-weight: 800; }
 .invite-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; margin-top: 1.1rem; }
 .invite-entry-fields { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(9rem, 0.65fr); gap: 0.7rem; }
 .invite-entry-row label { display: grid; gap: 0.42rem; color: rgb(23 54 59 / 0.6); font-size: 0.68rem; font-weight: 850; }
