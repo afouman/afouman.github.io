@@ -4918,13 +4918,17 @@ export default function Home() {
       batch.delete(pendingInvitationRef);
       batch.delete(pendingContactRef);
       await batch.commit();
-      const currentUser = authModule.getAuth(getApp()).currentUser;
-      if (currentUser) {
+      try {
+        const currentUser = authModule.getAuth(getApp()).currentUser;
+        if (!currentUser) throw new Error('No signed-in session');
         const idToken = await currentUser.getIdToken();
         await callPushApi('invite', 'POST', {
           eventId: event.id,
           recipientUid: targetUid,
-        }, idToken).catch(() => undefined);
+        }, idToken);
+      } catch {
+        notify(`${displayName || directory.email} was invited, but the notification could not be sent.`);
+        return true;
       }
       notify(`${displayName || directory.email} was invited`);
       return true;
@@ -10662,8 +10666,11 @@ function HostWorkspace({
                         type="button"
                         key={contact.accountUid}
                         className={invited ? 'invited' : ''}
-                        disabled={invited}
-                        onClick={() => setInviteIdentifier(identifier)}
+                        disabled={invited || inviteBusy}
+                        onClick={() => {
+                          setInviteBusy(true);
+                          void inviteGuest(menu, identifier, name).finally(() => setInviteBusy(false));
+                        }}
                       >
                         <span className="host-contact-avatar">{name.slice(0, 1).toUpperCase()}</span>
                         <span><strong>{name}</strong><small>{contact.email}</small><small>{formatPhone(contact.phone)}</small></span>
