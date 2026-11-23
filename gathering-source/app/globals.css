@@ -4011,6 +4011,7 @@ body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summar
 }
 .invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
 .invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
+.invite-diagnostics-button { margin-top: 0.5rem; color: #146b66; font-size: 0.72rem; font-weight: 750; text-decoration: underline; }
 .invite-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; margin-top: 1.1rem; }
 .invite-entry-fields { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(9rem, 0.65fr); gap: 0.7rem; }
 .invite-entry-row label { display: grid; gap: 0.42rem; color: rgb(23 54 59 / 0.6); font-size: 0.68rem; font-weight: 850; }

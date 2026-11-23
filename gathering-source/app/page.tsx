@@ -4781,12 +4781,21 @@ export default function Home() {
     }
   };
   const inviteRegisteredGuest = async (event: EventMenu, identifier: string, optionalName = '') => {
+    let stage = 'validate';
+    const record = (status: string, error?: unknown) => {
+      const failure = error as { code?: string; message?: string } | undefined;
+      const entry = { time: new Date().toISOString(), stage, status, code: failure?.code || '', message: (failure?.message || '').replace(/[\w.+-]+@[\w.-]+/g, '[email]').replace(/\+?\d[\d\s()-]{7,}\d/g, '[phone]').slice(0, 500) };
+      try { const logs = JSON.parse(localStorage.getItem('nights-invitation-diagnostics') || '[]'); localStorage.setItem('nights-invitation-diagnostics', JSON.stringify([...(Array.isArray(logs) ? logs : []), entry].slice(-80))); } catch { /* Diagnostics must not block invitations. */ }
+      console.info('[Nights invitation]', entry);
+    };
+    record('started');
     if (!accountUser || !accountProfile) return false;
     const value = identifier.trim();
     const isEmail = value.includes('@');
     const formattedPhone = isEmail ? null : normalizeOptionalPhone(value);
     const email = isEmail ? normalizedAccountEmail(value) : '';
     if ((isEmail && !/^\S+@\S+\.\S+$/.test(email)) || (!isEmail && !formattedPhone)) {
+      record('invalid input');
       notify('Enter a registered email or a complete phone number');
       return false;
     }
@@ -4795,6 +4804,7 @@ export default function Home() {
         import('firebase/app'), import('firebase/auth'), import('firebase/firestore'),
       ]);
       const db = store.getFirestore(getApp());
+      stage = isEmail ? 'email account lookup' : 'phone account lookup';
       let targetUid = '';
       if (isEmail) {
         const emailIndex = await store.getDoc(
@@ -4810,6 +4820,7 @@ export default function Home() {
           : await store.getDoc(store.doc(db, 'guest-identities', phoneHash));
         targetUid = phoneIndex.data()?.accountUid || legacyPhoneIndex?.data()?.accountUid || '';
       }
+      record(targetUid ? 'account found' : 'account not found');
       if (!targetUid) {
         if (isEmail) throw new Error('not-registered-email');
         const normalizedPhone = `+1${phoneDigits(formattedPhone || '')}`;
@@ -4818,6 +4829,7 @@ export default function Home() {
         const contactUid = `phone-${recipientGuestUid}`;
         const invitationRef = store.doc(db, 'users', accountUser.uid, 'phone-invitations', invitationId);
         const contactRef = store.doc(db, 'users', accountUser.uid, 'contacts', contactUid);
+        stage = 'read pending invitation and contact';
         const [existingInvitation, existingContact] = await Promise.all([
           store.getDoc(invitationRef),
           store.getDoc(contactRef),
@@ -4847,18 +4859,24 @@ export default function Home() {
           eventIds: [...new Set([...(existingContact.data()?.eventIds || []), event.id])],
           lastInvitedAt: store.serverTimestamp(),
         });
+        stage = 'save pending invitation';
         await batch.commit();
+        record('saved');
         try {
+          stage = 'open text draft';
           const delivery = await openManualInvitation(event, normalizedPhone, optionalName);
+          record(delivery);
           notify(delivery === 'message'
             ? `Invitation saved. Review the message and tap Send.`
             : `Invitation saved and copied. Send it to ${formatPhone(normalizedPhone)}.`);
-        } catch {
+        } catch (error) {
+          record('failed', error);
           notify(`Invitation saved. Copy the event link and send it to ${formatPhone(normalizedPhone)}.`);
         }
         return true;
       }
       if (targetUid === accountUser.uid) throw new Error('self');
+      stage = 'read account profile';
       const directoryRef = store.doc(db, 'account-directory', targetUid);
       const directorySnapshot = await store.getDoc(directoryRef);
       if (!directorySnapshot.exists()) throw new Error('directory-missing');
@@ -4887,6 +4905,7 @@ export default function Home() {
         'contacts',
         `phone-${directory.guestUid}`,
       );
+      stage = 'read invitation and contact';
       const [invitation, contact] = await Promise.all([
         store.getDoc(invitationRef),
         store.getDoc(contactRef),
@@ -4917,22 +4936,28 @@ export default function Home() {
       });
       batch.delete(pendingInvitationRef);
       batch.delete(pendingContactRef);
+      stage = 'save invitation';
       await batch.commit();
+      record('saved');
       try {
+        stage = 'send notification';
         const currentUser = authModule.getAuth(getApp()).currentUser;
         if (!currentUser) throw new Error('No signed-in session');
         const idToken = await currentUser.getIdToken();
-        await callPushApi('invite', 'POST', {
+        const result = await callPushApi('invite', 'POST', {
           eventId: event.id,
           recipientUid: targetUid,
         }, idToken);
-      } catch {
+        record(`request accepted; subscriptions: ${typeof result.recipients === 'number' ? result.recipients : 'unknown'}`);
+      } catch (error) {
+        record('failed', error);
         notify(`${displayName || directory.email} was invited, but the notification could not be sent.`);
         return true;
       }
       notify(`${displayName || directory.email} was invited`);
       return true;
     } catch (error) {
+      record('failed', error);
       const firebaseCode = (error as { code?: string }).code || '';
       const reason = (error as Error).message;
       notify(reason === 'not-registered-email' || reason === 'directory-missing'
@@ -10589,6 +10614,7 @@ function HostWorkspace({
               <button type="button" className="icon-button" onClick={() => setInviteOpen(false)} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
             </header>
             <p className="invite-dialog-copy">Invite a Nights member by email or phone. If the phone number is not registered yet, Nights will save their place and prepare a text message for you to send.</p>
+            <button type="button" className="invite-diagnostics-button" onClick={() => { const logs = localStorage.getItem('nights-invitation-diagnostics') || '[]'; void navigator.clipboard.writeText(logs).then(() => notify('Invitation diagnostics copied.')).catch(() => notify('Could not copy diagnostics on this device.')); }}>Copy invitation diagnostics</button>
             <div className="invite-entry-row">
               <div className="invite-entry-fields">
                 <label>
