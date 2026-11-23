@@ -1488,6 +1488,45 @@ async function compressImageForDocument(file: File, maxDataUrlLength: number) {
 
 export default function Home() {
   useScrollMemory();
+  useEffect(() => {
+    let dismissedTarget: EventTarget | null = null;
+    let dismissedAt = 0;
+    const editable = (element: Element | null) => {
+      if (!(element instanceof HTMLElement)) return false;
+      if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true;
+      return element instanceof HTMLInputElement && !['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'file', 'date', 'datetime-local', 'time', 'color'].includes(element.type);
+    };
+    const keyboardVisible = () => {
+      if (document.body.classList.contains('chat-keyboard-open')) return true;
+      const viewport = window.visualViewport;
+      return Boolean(viewport && window.innerHeight - viewport.height - viewport.offsetTop > 100);
+    };
+    const dismissFirst = (event: PointerEvent) => {
+      dismissedTarget = null;
+      if (!editable(document.activeElement) || !keyboardVisible()) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (editable(target?.closest('input, textarea, [contenteditable="true"]') || null)) return;
+      dismissedTarget = event.target;
+      dismissedAt = Date.now();
+      if (event.cancelable) event.preventDefault();
+      event.stopImmediatePropagation();
+      (document.activeElement as HTMLElement).blur();
+    };
+    const swallowFollowup = (event: MouseEvent) => {
+      if (!dismissedTarget || event.target !== dismissedTarget || Date.now() - dismissedAt > 800) return;
+      if (event.cancelable) event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.type === 'click') dismissedTarget = null;
+    };
+    document.addEventListener('pointerdown', dismissFirst, true);
+    document.addEventListener('mousedown', swallowFollowup, true);
+    document.addEventListener('click', swallowFollowup, true);
+    return () => {
+      document.removeEventListener('pointerdown', dismissFirst, true);
+      document.removeEventListener('mousedown', swallowFollowup, true);
+      document.removeEventListener('click', swallowFollowup, true);
+    };
+  }, []);
   const [mode, setMode] = useState<'guest' | 'host'>('guest');
   const [menu, setMenu] = useState<EventMenu>(firebaseConfigured ? emptyEventMenu : demoMenu);
   const [events, setEvents] = useState<EventMenu[]>(firebaseConfigured ? [] : [demoMenu]);
