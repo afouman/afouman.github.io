@@ -2252,6 +2252,8 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filter-popover > header > button { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.07); }
 .guest-event-filters { display: grid; gap: 0.55rem; margin-top: 0.8rem; }
 .guest-filter-accordion { overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; }
+.guest-filter-accordion.is-disabled { opacity: 0.48; }
+.guest-filter-accordion-trigger:disabled { cursor: not-allowed; }
 .guest-filter-accordion-reveal { display: grid; grid-template-rows: 0fr; overflow: hidden; pointer-events: none; transition: grid-template-rows 420ms cubic-bezier(0.22, 1, 0.36, 1); }
 .guest-filter-accordion-reveal[data-open='true'] { grid-template-rows: 1fr; pointer-events: auto; }
 .guest-filter-accordion-reveal > .guest-filter-accordion-options { min-height: 0; overflow: hidden; }
