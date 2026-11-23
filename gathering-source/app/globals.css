@@ -2265,7 +2265,6 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-filter-accordion-options > button[aria-pressed='true'] { background: #e1f1eb; }
 .guest-event-filters .guest-filter-accordion-multiple > label { display: flex; min-height: 38px; align-items: center; gap: 0.6rem; border: 0; border-radius: 0.55rem; padding: 0.4rem 0.55rem; color: #146b66; font-size: 13px; font-weight: 850; }
 .guest-filter-accordion-multiple input { width: 17px; height: 17px; accent-color: #159776; }
-.guest-filter-accordion-options > .guest-filter-accordion-done { background: #176d64; color: white; text-align: center; }
 .guest-filter-accordion-summary { display: block; overflow: hidden; padding: 0 0.7rem 0.55rem; color: rgb(19 40 44 / 0.48); font-size: 13px; font-weight: 750; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .guest-event-filters label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.7rem; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; padding: 0.38rem 0.48rem 0.38rem 0.7rem; }
 .guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
