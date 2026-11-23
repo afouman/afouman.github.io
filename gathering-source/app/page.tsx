@@ -1491,6 +1491,8 @@ export default function Home() {
   useEffect(() => {
     let dismissedTarget: EventTarget | null = null;
     let dismissedAt = 0;
+    let lastEditable: HTMLElement | null = null;
+    let blurredAt = 0;
     const editable = (element: Element | null) => {
       if (!(element instanceof HTMLElement)) return false;
       if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true;
@@ -1501,16 +1503,29 @@ export default function Home() {
       const viewport = window.visualViewport;
       return Boolean(viewport && window.innerHeight - viewport.height - viewport.offsetTop > 100);
     };
-    const dismissFirst = (event: PointerEvent) => {
+    const rememberFocus = (event: FocusEvent) => { if (event.target instanceof HTMLElement && editable(event.target)) { lastEditable = event.target; blurredAt = 0; } };
+    const rememberBlur = (event: FocusEvent) => { if (event.target === lastEditable) blurredAt = Date.now(); };
+    const dismissFirst = (event: Event) => {
+      if (event.type === 'touchstart' && dismissedTarget === event.target && Date.now() - dismissedAt < 200) {
+        if (event.cancelable) event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
       dismissedTarget = null;
-      if (!editable(document.activeElement) || !keyboardVisible()) return;
+      const current = editable(document.activeElement) ? document.activeElement as HTMLElement : null;
+      const recent = lastEditable && blurredAt > 0 && Date.now() - blurredAt < 500 ? lastEditable : null;
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || document.documentElement.classList.contains('native-ios-shell');
+      const field = current || (isMobile ? recent : null);
+      if (!field || (!keyboardVisible() && !isMobile)) return;
       const target = event.target instanceof Element ? event.target : null;
       if (editable(target?.closest('input, textarea, [contenteditable="true"]') || null)) return;
       dismissedTarget = event.target;
       dismissedAt = Date.now();
       if (event.cancelable) event.preventDefault();
       event.stopImmediatePropagation();
-      (document.activeElement as HTMLElement).blur();
+      field.blur();
+      lastEditable = null;
+      blurredAt = 0;
     };
     const swallowFollowup = (event: MouseEvent) => {
       if (!dismissedTarget || event.target !== dismissedTarget || Date.now() - dismissedAt > 800) return;
@@ -1518,11 +1533,17 @@ export default function Home() {
       event.stopImmediatePropagation();
       if (event.type === 'click') dismissedTarget = null;
     };
+    document.addEventListener('focusin', rememberFocus, true);
+    document.addEventListener('focusout', rememberBlur, true);
     document.addEventListener('pointerdown', dismissFirst, true);
+    document.addEventListener('touchstart', dismissFirst, { capture: true, passive: false });
     document.addEventListener('mousedown', swallowFollowup, true);
     document.addEventListener('click', swallowFollowup, true);
     return () => {
+      document.removeEventListener('focusin', rememberFocus, true);
+      document.removeEventListener('focusout', rememberBlur, true);
       document.removeEventListener('pointerdown', dismissFirst, true);
+      document.removeEventListener('touchstart', dismissFirst, true);
       document.removeEventListener('mousedown', swallowFollowup, true);
       document.removeEventListener('click', swallowFollowup, true);
     };
@@ -1559,6 +1580,9 @@ export default function Home() {
   const [accountLastName, setAccountLastName] = useState('');
   const [accountPhone, setAccountPhone] = useState('');
   const [deleteAccountOpen, setDeleteAccountOpen] = useState(false);
+  const [signOutOpen, setSignOutOpen] = useState(false);
+  const [signOutBusy, setSignOutBusy] = useState(false);
+  const [switchGuestAfterConfirmation, setSwitchGuestAfterConfirmation] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [profileEditorOpen, setProfileEditorOpen] = useState(false);
   const [profileEditorBusy, setProfileEditorBusy] = useState(false);
@@ -1666,6 +1690,7 @@ export default function Home() {
     || profileEditorOpen
     || profileMenuOpen
     || deleteAccountOpen
+    || signOutOpen
     || rsvpPanelOpen
     || guestEventPickerOpen
     || activityCenterOpen
@@ -5212,8 +5237,8 @@ export default function Home() {
     }
     window.location.assign(nextRoute);
   };
-  const clearGuestAccess = () => {
-    void signOutAccount();
+  const clearGuestAccess = async () => {
+    await signOutAccount();
     writeGuestSession(null);
     localStorage.removeItem(GUEST_EVENTS_CACHE_KEY);
     localStorage.removeItem(TRUSTED_GUEST_ROUTE_KEY);
@@ -6795,7 +6820,7 @@ export default function Home() {
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
             changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
-            signOut={() => void signOutAccount()}
+            signOut={() => { setSwitchGuestAfterConfirmation(false); setSignOutOpen(true); }}
             completeProfile={() => void completeProviderProfile()}
             selectEvent={selectGuestEvent}
           />
@@ -6867,7 +6892,7 @@ export default function Home() {
           busy={guestEventsBusy}
           onSelect={selectGuestEvent}
           onClose={() => setGuestEventPickerOpen(false)}
-          onUseAnotherGuest={clearGuestAccess}
+          onUseAnotherGuest={() => { setSwitchGuestAfterConfirmation(true); setSignOutOpen(true); }}
         />
       )}
 
@@ -6899,7 +6924,7 @@ export default function Home() {
               setSettingsContactsOpen(false);
               setSettingsOpen(true);
             }}><Settings2 size={16} /><span><strong>Settings</strong><small>Notifications and app preferences</small></span></button>
-            <button type="button" className="profile-menu-action" onClick={() => void signOutAccount()}>
+            <button type="button" className="profile-menu-action" onClick={() => { setProfileMenuOpen(false); setSwitchGuestAfterConfirmation(false); setSignOutOpen(true); }}>
               <LogOut size={16} /><span><strong>Sign out</strong><small>Return to the login page</small></span>
             </button>
             <button type="button" className="profile-menu-delete" onClick={() => {
@@ -7087,6 +7112,19 @@ export default function Home() {
         document.body,
       )}
 
+      {signOutOpen && createPortal(
+        <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !signOutBusy) setSignOutOpen(false); }}>
+          <dialog open className="delete-account-dialog" aria-labelledby="sign-out-title">
+            <span className="settings-dialog-icon"><LogOut size={24} /></span>
+            <h2 id="sign-out-title" className="font-display">Sign out?</h2>
+            <p>Are you sure you want to sign out of Nights?</p>
+            <div className="delete-account-actions">
+              <button type="button" disabled={signOutBusy} onClick={() => setSignOutOpen(false)}>Cancel</button>
+              <button type="button" className="danger-button" disabled={signOutBusy} onClick={() => { setSignOutBusy(true); void (switchGuestAfterConfirmation ? clearGuestAccess() : signOutAccount()).catch(() => { setSignOutBusy(false); notify('Could not sign out. Please try again.'); }); }}>{signOutBusy ? 'Signing out…' : 'Yes, sign out'}</button>
+            </div>
+          </dialog>
+        </div>, document.body,
+      )}
       {deleteAccountOpen && accountUser && (
         <div className="delete-account-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !deleteAccountBusy) setDeleteAccountOpen(false);
@@ -7162,7 +7200,7 @@ export default function Home() {
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
             changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
-            signOut={() => void signOutAccount()}
+            signOut={() => { setSwitchGuestAfterConfirmation(false); setSignOutOpen(true); }}
             completeProfile={() => void completeProviderProfile()}
           />
         </div>
@@ -7196,7 +7234,7 @@ export default function Home() {
             resendVerification={() => void resendAccountVerification()}
             checkVerification={() => void checkAccountVerification()}
             changeEmail={(email) => void changeUnverifiedAccountEmail(email)}
-            signOut={() => void signOutAccount()}
+            signOut={() => { setSwitchGuestAfterConfirmation(false); setSignOutOpen(true); }}
             completeProfile={() => void completeProviderProfile()}
           />
         </div>
