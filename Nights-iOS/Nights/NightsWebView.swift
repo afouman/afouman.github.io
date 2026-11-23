@@ -16,6 +16,20 @@ final class NightsChatWebView: WKWebView {
     override var inputAccessoryView: UIView? { nil }
 }
 
+private final class NightsInvitationShareItem: NSObject, UIActivityItemSource {
+    let body: String
+    let subject: String
+
+    init(body: String, subject: String) {
+        self.body = body
+        self.subject = subject
+    }
+
+    func activityViewControllerPlaceholderItem(_ activityViewController: UIActivityViewController) -> Any { body }
+    func activityViewController(_ activityViewController: UIActivityViewController, itemForActivityType activityType: UIActivity.ActivityType?) -> Any? { body }
+    func activityViewController(_ activityViewController: UIActivityViewController, subjectForActivityType activityType: UIActivity.ActivityType?) -> String { subject }
+}
+
 @MainActor
 final class NightsBrowserModel: ObservableObject {
     @Published var isOffline = false
@@ -25,7 +39,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-12")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261123-1")!
 
     func reload() {
         isOffline = false
@@ -54,6 +68,7 @@ struct NightsWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "nightsNotification")
         configuration.userContentController.add(context.coordinator, name: "nightsDatePicker")
         configuration.userContentController.add(context.coordinator, name: "nightsContacts")
+        configuration.userContentController.add(context.coordinator, name: "nightsEmailShare")
 
         let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -94,6 +109,7 @@ struct NightsWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsNotification")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsDatePicker")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsContacts")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsEmailShare")
         coordinator.endKeyboardTracking()
     }
 
@@ -200,6 +216,14 @@ struct NightsWebView: UIViewRepresentable {
                isTrustedMessageURL(message.frameInfo.request.url),
                let body = message.body as? [String: String], body["action"] == "sync" {
                 syncContacts()
+                return
+            }
+            if message.name == "nightsEmailShare", message.frameInfo.isMainFrame,
+               isTrustedMessageURL(message.frameInfo.request.url),
+               let body = message.body as? [String: String],
+               let recipient = body["recipient"], let subject = body["subject"],
+               let message = body["body"] {
+                showEmailAppChoices(recipient: recipient, subject: subject, body: message)
                 return
             }
             guard message.name == "nightsAuth",
@@ -523,6 +547,17 @@ struct NightsWebView: UIViewRepresentable {
             guard let data = try? JSONSerialization.data(withJSONObject: detail),
                   let payload = String(data: data, encoding: .utf8) else { return }
             webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: \(payload) }));")
+        }
+
+        private func showEmailAppChoices(recipient: String, subject: String, body: String) {
+            guard let presenter = presentingViewController() else { return }
+            let item = NightsInvitationShareItem(body: "To: \(recipient)\n\n\(body)", subject: subject)
+            let chooser = UIActivityViewController(activityItems: [item], applicationActivities: nil)
+            if let popover = chooser.popoverPresentationController {
+                popover.sourceView = presenter.view
+                popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1)
+            }
+            presenter.present(chooser, animated: true)
         }
 
         private static let dayFormatter: DateFormatter = {

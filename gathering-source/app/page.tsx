@@ -198,6 +198,9 @@ type NightsNativeWindow = Window & {
       nightsContacts?: {
         postMessage: (message: { action: 'sync' }) => void;
       };
+      nightsEmailShare?: {
+        postMessage: (message: { recipient: string; subject: string; body: string }) => void;
+      };
     };
   };
 };
@@ -1022,7 +1025,14 @@ const guestEventUrl = (eventId: string, publicPath?: string) =>
 const manualInvitationMessage = (event: EventMenu, guestName?: string) =>
   `${guestName?.trim() ? `Hi ${guestName.trim()}, you’re` : 'You’re'} invited to ${event.title} on Nights. Open this link to sign in or create your account: ${guestEventUrl(event.id, event.publicPath)}`;
 const openManualEmailInvitation = (event: EventMenu, email: string, guestName?: string) => {
-  window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Invitation to ${event.title}`)}&body=${encodeURIComponent(manualInvitationMessage(event, guestName))}`;
+  const subject = `Invitation to ${event.title}`;
+  const body = manualInvitationMessage(event, guestName);
+  const nativeShare = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsEmailShare;
+  if (nativeShare) {
+    nativeShare.postMessage({ recipient: email, subject, body });
+    return;
+  }
+  window.dispatchEvent(new CustomEvent('nights-email-invite-choice', { detail: { recipient: email, subject, body } }));
 };
 const openManualInvitation = async (event: EventMenu, phone: string, guestName?: string) => {
   const message = manualInvitationMessage(event, guestName);
@@ -4787,7 +4797,7 @@ export default function Home() {
       setDeleteAccountBusy(false);
     }
   };
-  const inviteRegisteredGuest = async (event: EventMenu, identifier: string, optionalName = '') => {
+  const inviteRegisteredGuest = async (event: EventMenu, identifier: string, optionalName = '', savedAccountUid = '') => {
     if (!accountUser || !accountProfile) return false;
     const value = identifier.trim();
     const isEmail = value.includes('@');
@@ -4803,12 +4813,16 @@ export default function Home() {
       ]);
       const db = store.getFirestore(getApp());
       let targetUid = '';
-      if (isEmail) {
+      if (savedAccountUid && !savedAccountUid.startsWith('email-') && !savedAccountUid.startsWith('phone-')) {
+        const savedAccount = await store.getDoc(store.doc(db, 'account-directory', savedAccountUid));
+        if (savedAccount.exists()) targetUid = savedAccountUid;
+      }
+      if (!targetUid && isEmail) {
         const emailIndex = await store.getDoc(
           store.doc(db, 'account-emails', await guestNameIndexId(email)),
         );
         targetUid = emailIndex.data()?.accountUid || '';
-      } else {
+      } else if (!targetUid) {
         const normalizedPhone = `+1${phoneDigits(formattedPhone || '')}`;
         const phoneHash = await guestNameIndexId(normalizedPhone);
         const phoneIndex = await store.getDoc(store.doc(db, 'account-phones', phoneHash));
@@ -4834,7 +4848,7 @@ export default function Home() {
             lastInvitedAt: store.serverTimestamp(),
           });
           openManualEmailInvitation(event, email, optionalName);
-          notify('Review the invitation email and tap Send.');
+          notify('Choose an email app, then review and send the invitation.');
           return true;
         }
         const normalizedPhone = `+1${phoneDigits(formattedPhone || '')}`;
@@ -10409,7 +10423,7 @@ function HostWorkspace({
   setAccepting: (accepting: boolean) => Promise<void>;
   setRsvpOpen: (rsvpOpen: boolean) => Promise<void>;
   setChatOpen: (chatOpen: boolean) => Promise<void>;
-  inviteGuest: (event: EventMenu, identifier: string, optionalName?: string) => Promise<boolean>;
+  inviteGuest: (event: EventMenu, identifier: string, optionalName?: string, savedAccountUid?: string) => Promise<boolean>;
   revokeInvitation: (event: EventMenu, invitation: EventInvitation) => Promise<boolean>;
   notify: (message: string) => void;
 }) {
@@ -10420,7 +10434,13 @@ function HostWorkspace({
   const [deviceContacts, setDeviceContacts] = useState<DeviceInviteContact[]>([]);
   const [deviceContactSearch, setDeviceContactSearch] = useState('');
   const [deviceContactsBusy, setDeviceContactsBusy] = useState(false);
+  const [emailInviteChoice, setEmailInviteChoice] = useState<{ recipient: string; subject: string; body: string } | null>(null);
   const [revokeBusy, setRevokeBusy] = useState('');
+  useEffect(() => {
+    const receiveEmailInvite = (event: Event) => setEmailInviteChoice((event as CustomEvent<{ recipient: string; subject: string; body: string }>).detail);
+    window.addEventListener('nights-email-invite-choice', receiveEmailInvite);
+    return () => window.removeEventListener('nights-email-invite-choice', receiveEmailInvite);
+  }, []);
   useEffect(() => {
     const receiveContacts = (event: Event) => {
       const detail = (event as CustomEvent<{ contacts?: DeviceInviteContact[]; error?: string }>).detail;
@@ -10717,8 +10737,11 @@ function HostWorkspace({
                         type="button"
                         key={contact.accountUid}
                         className={invited ? 'invited' : ''}
-                        disabled={invited}
-                        onClick={() => setInviteIdentifier(identifier)}
+                        disabled={invited || inviteBusy}
+                        onClick={() => {
+                          setInviteBusy(true);
+                          void inviteGuest(menu, identifier, name, contact.accountUid).finally(() => setInviteBusy(false));
+                        }}
                       >
                         <span className="host-contact-avatar">{name.slice(0, 1).toUpperCase()}</span>
                         <span><strong>{name}</strong><small>{contact.email}</small><small>{formatPhone(contact.phone)}</small></span>
@@ -10732,6 +10755,17 @@ function HostWorkspace({
           </dialog>
         </div>,
         document.body,
+      )}
+      {emailInviteChoice && createPortal(
+        <div className="invite-email-choice-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setEmailInviteChoice(null); }}>
+          <dialog open className="invite-email-choice" aria-label="Choose an email app">
+            <h2>Send with</h2><p>{emailInviteChoice.recipient}</p>
+            <button type="button" onClick={() => { const { recipient, subject, body } = emailInviteChoice; setEmailInviteChoice(null); window.open(`https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`, '_blank', 'noopener,noreferrer'); }}>Gmail (web)</button>
+            <button type="button" onClick={() => { const { recipient, subject, body } = emailInviteChoice; setEmailInviteChoice(null); window.location.href = `mailto:${encodeURIComponent(recipient)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`; }}>Default email app</button>
+            {navigator.share && <button type="button" onClick={() => { const { recipient, subject, body } = emailInviteChoice; setEmailInviteChoice(null); void navigator.share({ title: subject, text: `To: ${recipient}\n\n${body}` }).catch(() => undefined); }}>More apps…</button>}
+            <button type="button" className="invite-email-cancel" onClick={() => setEmailInviteChoice(null)}>Cancel</button>
+          </dialog>
+        </div>, document.body,
       )}
     </div>
   );
