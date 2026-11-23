@@ -2251,13 +2251,26 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filter-popover > header small { color: rgb(23 54 59 / 0.55); font-size: 0.62rem; }
 .guest-event-filter-popover > header > button { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.07); }
 .guest-event-filters { display: grid; gap: 0.55rem; margin-top: 0.8rem; }
+.guest-filter-accordion { overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; }
+.guest-filter-accordion-trigger { display: grid; width: 100%; min-height: 50px; grid-template-columns: minmax(0, 1fr) auto 15px; align-items: center; gap: 0.55rem; padding: 0.38rem 0.48rem 0.38rem 0.7rem; text-align: right; }
+.guest-filter-accordion-trigger > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
+.guest-filter-accordion-trigger > strong { min-width: 0; overflow: hidden; color: #146b66; font-size: 13px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
+.guest-filter-accordion-trigger > svg { color: #146b66; transition: transform 160ms ease; }
+.guest-filter-accordion-trigger[aria-expanded='true'] > svg { transform: rotate(180deg); }
+.guest-filter-accordion-options { display: grid; gap: 0.15rem; border-top: 1px solid rgb(13 52 59 / 0.1); padding: 0.35rem; }
+.guest-filter-accordion-options > button { min-height: 38px; border-radius: 0.55rem; padding: 0.4rem 0.55rem; color: #146b66; font-size: 13px; font-weight: 850; text-align: right; }
+.guest-filter-accordion-options > button[aria-pressed='true'] { background: #e1f1eb; }
+.guest-event-filters .guest-filter-accordion-multiple > label { display: flex; min-height: 38px; align-items: center; gap: 0.6rem; border: 0; border-radius: 0.55rem; padding: 0.4rem 0.55rem; color: #146b66; font-size: 13px; font-weight: 850; }
+.guest-filter-accordion-multiple input { width: 17px; height: 17px; accent-color: #159776; }
+.guest-filter-accordion-options > .guest-filter-accordion-done { background: #176d64; color: white; text-align: center; }
+.guest-filter-accordion-summary { display: block; overflow: hidden; padding: 0 0.7rem 0.55rem; color: rgb(19 40 44 / 0.48); font-size: 13px; font-weight: 750; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .guest-event-filters label { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0.7rem; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; padding: 0.38rem 0.48rem 0.38rem 0.7rem; }
 .guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .guest-event-filters select { justify-self: end; min-height: 38px; max-width: 190px; border: 0; background: transparent; color: #146b66; font-size: 12px; font-weight: 850; outline: 0; text-align: right; text-align-last: right; }
 .guest-event-filter-date-range { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); align-items: center; gap: 8px; }
 .guest-event-filter-date-range > span { display: grid; place-items: center; color: rgb(19 40 44 / 0.38); font-size: 1rem; font-weight: 850; }
 .guest-event-filter-date-range > input,
-.guest-event-filter-date-button { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 40px; overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.75rem; background: #f4f7f3; padding: 0.25rem 0.35rem; color: #146b66; font-size: 12px; font-weight: 800; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
+.guest-event-filter-date-button { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 40px; overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.75rem; background: #f4f7f3; padding: 0.25rem 0.35rem; color: #146b66; font-size: 13px; font-weight: 800; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .guest-filter-host-field { overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; }
 .guest-event-filters .guest-filter-host-field > label { border: 0; border-radius: 0; background: transparent; }
 .guest-filter-host-field.has-selection > label { padding-bottom: 0.18rem; }
@@ -2267,7 +2280,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-filter-host-options { display: grid; gap: 0.15rem; border-top: 1px solid rgb(13 52 59 / 0.1); padding: 0.35rem; }
 .guest-filter-host-options > button { min-height: 36px; border-radius: 0.55rem; padding: 0.4rem 0.55rem; color: #146b66; font-size: 12px; font-weight: 850; text-align: right; }
 .guest-filter-host-options > button[aria-selected='true'] { background: #e1f1eb; }
-.guest-filter-selection-summary { display: block; width: 100%; overflow: hidden; padding: 0 0.7rem 0.55rem; color: rgb(19 40 44 / 0.48); font-size: 12px; font-weight: 750; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.guest-filter-selection-summary { display: block; width: 100%; overflow: hidden; padding: 0 0.7rem 0.55rem; color: rgb(19 40 44 / 0.48); font-size: 13px; font-weight: 750; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .guest-filter-rsvp-field { overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; }
 .guest-filter-rsvp-field .guest-filter-picker-trigger { border: 0; border-radius: 0; background: transparent; }
 .guest-filter-rsvp-field.has-selection .guest-filter-picker-trigger { padding-bottom: 0.18rem; }
@@ -2275,16 +2288,13 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-filter-picker-trigger { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 0.55rem; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; padding: 0.38rem 0.48rem 0.38rem 0.7rem; color: #146b66; text-align: right; }
 .guest-filter-picker-trigger > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
 .guest-filter-picker-trigger > strong { min-width: 0; overflow: hidden; color: #146b66; font-size: 12px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
-body.native-ios-shell .guest-event-filter-popover .guest-event-filters label > span,
-body.native-ios-shell .guest-event-filter-popover .guest-event-filters select,
+body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-trigger > span { font-family: var(--font-body), Arial, sans-serif !important; font-size: 12px !important; -webkit-text-size-adjust: 100%; }
+body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-trigger > strong,
+body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-options > button,
+body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-multiple > label,
 body.native-ios-shell .guest-event-filter-popover .guest-event-filter-date-button,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-host-trigger > span,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-host-trigger > button,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-host-options > button,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-picker-trigger > span,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-picker-trigger > strong,
 body.native-ios-shell .guest-event-filter-popover .guest-filter-selection-summary,
-body.native-ios-shell .guest-event-filter-popover .guest-filter-rsvp-field > small { font-family: var(--font-body), Arial, sans-serif !important; font-size: 12px !important; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summary { font-family: var(--font-body), Arial, sans-serif !important; font-size: 13px !important; -webkit-text-size-adjust: 100%; }
 .guest-filter-multi-picker { display: grid; gap: 0.5rem; border: 1px solid rgb(21 109 100 / 0.18); border-radius: 0.9rem; background: #eaf5f0; padding: 0.68rem; box-shadow: inset 0 1px rgb(255 255 255 / 0.65); }
 .guest-filter-multi-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 0.7rem; }
 .guest-filter-multi-picker > header strong { color: #146b66; font-size: 0.8rem; font-weight: 900; }
