@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Contacts
+import ContactsUI
 import CryptoKit
 import SwiftUI
 import UserNotifications
@@ -25,7 +26,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261123-3")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261123-4")!
 
     func reload() {
         isOffline = false
@@ -100,7 +101,7 @@ struct NightsWebView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate,
-        ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {
+        ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding, CNContactPickerDelegate {
         private let model: NightsBrowserModel
         fileprivate weak var webView: WKWebView?
         private var appleNonce: String?
@@ -209,8 +210,15 @@ struct NightsWebView: UIViewRepresentable {
                 return
             }
             if message.name == "nightsContacts", message.frameInfo.isMainFrame,
-               isTrustedMessageURL(message.frameInfo.request.url) {
-                syncContacts()
+               isTrustedMessageURL(message.frameInfo.request.url),
+               let body = message.body as? [String: String], let action = body["action"] {
+                if action == "select" { showContactsPicker() }
+                else if action == "sync" { syncContacts() }
+                else if action == "refresh" {
+                    let status = CNContactStore.authorizationStatus(for: .contacts)
+                    if status == .authorized { syncContacts() }
+                    else if #available(iOS 18.0, *), status == .limited { syncContacts() }
+                }
                 return
             }
             guard message.name == "nightsAuth",
@@ -496,6 +504,26 @@ struct NightsWebView: UIViewRepresentable {
             webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-date-picked', { detail: \(payload) }));")
         }
 
+        private func showContactsPicker() {
+            guard let presenter = presentingViewController() else { sendContacts([], error: "Unable to open contact selection."); return }
+            let picker = CNContactPickerViewController()
+            picker.delegate = self
+            picker.displayedPropertyKeys = [CNContactPhoneNumbersKey, CNContactEmailAddressesKey]
+            presenter.present(picker, animated: true)
+        }
+        func contactPicker(_ picker: CNContactPickerViewController, didSelect contacts: [CNContact]) {
+            let result: [[String: Any]] = contacts.map { contact in
+                let name = [contact.givenName, contact.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+                return ["name": name.isEmpty ? contact.organizationName : name,
+                        "phones": contact.phoneNumbers.map { $0.value.stringValue },
+                        "emails": contact.emailAddresses.map { String($0.value) }]
+            }
+            sendContacts(result)
+        }
+        func contactPickerDidCancel(_ picker: CNContactPickerViewController) {
+            guard isTrustedAppURL(webView?.url) else { return }
+            webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-contacts-cancelled')); ")
+        }
         private func syncContacts() {
             let store = CNContactStore()
             store.requestAccess(for: .contacts) { [weak self] granted, _ in

@@ -195,7 +195,7 @@ type NightsNativeWindow = Window & {
       nightsDatePicker?: {
         postMessage: (message: { field: 'start' | 'end'; value: string }) => void;
       };
-      nightsContacts?: { postMessage: (message: { action: 'sync' }) => void };
+      nightsContacts?: { postMessage: (message: { action: 'sync' | 'select' | 'refresh' }) => void };
       nightsShare?: { postMessage: (message: { title: string; url: string }) => void };
     };
   };
@@ -3563,8 +3563,13 @@ export default function Home() {
       void checkContacts(contacts);
     };
     window.addEventListener('nights-native-contacts', receiveContacts);
+    const cancelledContacts = () => setSyncingContacts(false);
+    window.addEventListener('nights-native-contacts-cancelled', cancelledContacts);
     try { const saved = JSON.parse(localStorage.getItem(`nights-synced-contacts:${accountUid}`) || '[]'); if (Array.isArray(saved)) void checkContacts(saved); } catch { setSyncedContacts([]); }
-    return () => { active = false; window.removeEventListener('nights-native-contacts', receiveContacts); };
+    const refreshContacts = () => { if (document.visibilityState === 'visible') (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts?.postMessage({ action: 'refresh' }); };
+    refreshContacts();
+    document.addEventListener('visibilitychange', refreshContacts);
+    return () => { active = false; window.removeEventListener('nights-native-contacts', receiveContacts); window.removeEventListener('nights-native-contacts-cancelled', cancelledContacts); document.removeEventListener('visibilitychange', refreshContacts); };
   }, [accountUser?.uid]);
   const syncAccountContacts = () => {
     const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
@@ -3573,6 +3578,11 @@ export default function Home() {
     if (!picker) { notify('Contact selection is not supported by this browser. Use the iPhone app.'); return; }
     setSyncingContacts(true);
     void picker.select(['name', 'tel', 'email'], { multiple: true }).then((items) => window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: { contacts: items.map((item) => ({ name: item.name?.[0] || '', phones: item.tel || [], emails: item.email || [] })) } }))).catch(() => setSyncingContacts(false));
+  };
+  const selectAccountContacts = () => {
+    const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
+    if (native) { setSyncingContacts(true); native.postMessage({ action: 'select' }); return; }
+    syncAccountContacts();
   };
   const activityUnreadCounts = useMemo(() => eventActivities.reduce<Record<string, number>>((counts, activity) => {
     if (!activity.read) counts[activity.eventId] = (counts[activity.eventId] || 0) + 1;
@@ -6887,7 +6897,7 @@ export default function Home() {
                 </button>
               </section>
             )}
-            <section className="settings-notification-row"><div><strong>Contacts</strong><small>Sync contacts on this device for your account. Your address book is kept on this device.</small></div><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={syncAccountContacts}>{syncingContacts ? 'Checking…' : 'Sync contacts'}</button></section>
+            <section className="settings-notification-row"><div><strong>Contacts</strong><small>Select contacts or sync all. With access allowed, contacts refresh automatically on this device.</small></div><div className="settings-contact-actions"><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={selectAccountContacts}>Select contacts</button><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={syncAccountContacts}>{syncingContacts ? 'Checking…' : 'Sync all'}</button></div></section>
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
             </div>
@@ -10516,12 +10526,20 @@ function HostWorkspace({
   notify: (message: string) => void;
 }) {
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteClosing, setInviteClosing] = useState(false);
+  const inviteCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const invitePullStart = useRef<number | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
   const [contactSearch, setContactSearch] = useState('');
   const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState('');
-  const closeInvitations = () => { setContactPickerOpen(false); setContactSearch(''); setInviteOpen(false); };
+  useEffect(() => () => { if (inviteCloseTimer.current) clearTimeout(inviteCloseTimer.current); }, []);
+  const closeInvitations = () => {
+    if (inviteClosing) return;
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    setContactPickerOpen(false); setContactSearch(''); setInviteClosing(true);
+    inviteCloseTimer.current = setTimeout(() => { setInviteOpen(false); setInviteClosing(false); inviteCloseTimer.current = null; }, 380);
+  };
   const eventInvitations = invitations.filter((invitation) => invitation.eventId === menu.id);
   const activeOrders = orders.filter(
     (order) => order.status === 'new' || order.status === 'preparing',
@@ -10629,8 +10647,9 @@ function HostWorkspace({
                   <span>Preview</span>
                 </button>
                 <button
-                  onClick={() => setInviteOpen(true)}
-                  className="invite"
+                  onClick={(event) => { event.currentTarget.blur(); setInviteClosing(false); setInviteOpen(true); }}
+                  className={`invite ${inviteOpen && !inviteClosing ? 'invite-active' : ''}`}
+                  aria-pressed={inviteOpen && !inviteClosing}
                 >
                   <UserPlus size={16} />
                   <span>Invite</span>
@@ -10705,7 +10724,7 @@ function HostWorkspace({
         )}
       </div>
       {inviteOpen && createPortal(
-        <div className="invite-dialog-backdrop" role="presentation" onMouseDown={(event) => {
+        <div className={`invite-dialog-backdrop ${inviteClosing ? 'is-closing' : ''}`} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget && !inviteBusy) closeInvitations();
         }}>
           <dialog open className="invite-dialog" aria-label={`Invite guests to ${menu.title}`}>
@@ -10713,7 +10732,7 @@ function HostWorkspace({
               <div><p className="eyebrow">Invite to</p><h2 className="font-display">{menu.title}</h2></div>
               <button type="button" className="icon-button" onClick={closeInvitations} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
             </header>
-            <button type="button" className="invite-share-link" onClick={() => { const url = guestEventUrl(menu.id, menu.publicPath); const nativeShare = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsShare; if (nativeShare) nativeShare.postMessage({ title: menu.title, url }); else if (navigator.share) { void navigator.share({ title: menu.title, text: `You’re invited to ${menu.title}`, url }).catch(() => undefined); } else { void navigator.clipboard.writeText(url).then(() => notify('Invite link copied.')).catch(() => notify('Could not copy the invite link.')); } }}><Send size={16} /> Share invite link</button>
+            <button type="button" className="invite-share-link" onClick={() => { const url = guestEventUrl(menu.id, menu.publicPath); const nativeShare = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsShare; if (nativeShare) nativeShare.postMessage({ title: menu.title, url }); else if (navigator.share) { void navigator.share({ title: menu.title, text: `You’re invited to ${menu.title}`, url }).catch(() => undefined); } else { void navigator.clipboard.writeText(url).then(() => notify('Invite link copied.')).catch(() => notify('Could not copy the invite link.')); } }}><Share2 size={16} /> Share invite link</button>
             <p className="invite-dialog-copy">Share the link or invite Nights members from your contacts.</p>
             <button type="button" className="invite-diagnostics-button" onClick={() => { const logs = localStorage.getItem('nights-invitation-diagnostics') || '[]'; void navigator.clipboard.writeText(logs).then(() => notify('Invitation diagnostics copied.')).catch(() => notify('Could not copy diagnostics on this device.')); }}>Copy invitation diagnostics</button>
             <section className="host-invitation-list">
@@ -10762,7 +10781,7 @@ function HostWorkspace({
               {!syncingContacts && syncedContacts.some((contact) => contact.status === 'error') && <p>Some contacts could not be checked. Sync again in Settings.</p>}
               {!syncingContacts && !contacts.some((contact) => !contact.accountUid.startsWith('phone-') && !contact.accountUid.startsWith('email-')) && !syncedContacts.some((contact) => contact.status === 'member') && <p>No Nights contacts found. Sync contacts in Settings.</p>}
             </section>}
-            <footer className="invite-fixed-actions"><button type="button" className="primary-button" onClick={() => setContactPickerOpen(true)} disabled={inviteBusy}><BookUser size={17} /> Send invite</button></footer>
+            <footer className="invite-fixed-actions"><button type="button" className="primary-button" onClick={() => setContactPickerOpen(true)} disabled={inviteBusy}><Send size={17} /> Send invite</button></footer>
           </dialog>
         </div>,
         document.body,
