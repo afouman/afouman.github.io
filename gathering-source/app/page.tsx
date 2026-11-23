@@ -195,6 +195,7 @@ type NightsNativeWindow = Window & {
       nightsDatePicker?: {
         postMessage: (message: { field: 'start' | 'end'; value: string }) => void;
       };
+      nightsContacts?: { postMessage: (message: { action: 'sync' }) => void };
     };
   };
 };
@@ -10418,6 +10419,41 @@ function HostWorkspace({
   const [inviteIdentifier, setInviteIdentifier] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [syncedContacts, setSyncedContacts] = useState<Array<{ name: string; phones: string[]; emails: string[]; match?: string; status: 'checking' | 'member' | 'none' | 'error' }>>([]);
+  const [contactSearch, setContactSearch] = useState('');
+  const [syncingContacts, setSyncingContacts] = useState(false);
+  useEffect(() => {
+    const receiveContacts = (event: Event) => {
+      const detail = (event as CustomEvent<{ contacts?: Array<{ name: string; phones: string[]; emails: string[] }>; error?: string }>).detail;
+      if (detail?.error) { setSyncingContacts(false); notify(detail.error); return; }
+      const contacts = detail?.contacts || [];
+      setSyncedContacts(contacts.map((contact) => ({ ...contact, status: 'checking' })));
+      void (async () => {
+        try {
+          const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+          const db = store.getFirestore(getApp());
+          let next = 0;
+          const check = async () => {
+            while (next < contacts.length) {
+              const index = next++;
+              const contact = contacts[index];
+              let match = '';
+              let failed = false;
+              const candidates = [...contact.emails.filter((email) => /^\S+@\S+\.\S+$/.test(email)).map((email) => ({ value: normalizedAccountEmail(email), collection: 'account-emails' })), ...contact.phones.flatMap((phone) => { const normalized = normalizeOptionalPhone(phone); return normalized ? [{ value: `+1${phoneDigits(normalized)}`, collection: 'account-phones' }] : []; })];
+              for (const candidate of candidates) {
+                try { const snapshot = await store.getDoc(store.doc(db, candidate.collection, await guestNameIndexId(candidate.value))); if (snapshot.data()?.accountUid) { match = candidate.value; break; } } catch { failed = true; }
+              }
+              setSyncedContacts((current) => current.map((item, i) => i === index ? { ...item, match, status: match ? 'member' : failed ? 'error' : 'none' } : item));
+            }
+          };
+          await Promise.all(Array.from({ length: Math.min(5, contacts.length) }, () => check()));
+        } catch { setSyncedContacts((current) => current.map((item) => item.status === 'checking' ? { ...item, status: 'error' } : item)); }
+        finally { setSyncingContacts(false); }
+      })();
+    };
+    window.addEventListener('nights-native-contacts', receiveContacts);
+    return () => window.removeEventListener('nights-native-contacts', receiveContacts);
+  }, [notify]);
   const [revokeBusy, setRevokeBusy] = useState('');
   const eventInvitations = invitations.filter((invitation) => invitation.eventId === menu.id);
   const activeOrders = orders.filter(
@@ -10611,6 +10647,14 @@ function HostWorkspace({
               <button type="button" className="icon-button" onClick={() => setInviteOpen(false)} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
             </header>
             <p className="invite-dialog-copy">Invite a Nights member by email or phone. If the phone number is not registered yet, Nights will save their place and prepare a text message for you to send.</p>
+            <div className="sync-contact-panel"><button type="button" disabled={syncingContacts} onClick={() => {
+              const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
+              if (native) { setSyncingContacts(true); native.postMessage({ action: 'sync' }); return; }
+              const picker = (navigator as Navigator & { contacts?: { select: (properties: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[]; email?: string[] }>> } }).contacts;
+              if (!picker) { notify('Contact selection is not supported by this browser. Use the iPhone app or enter an address.'); return; }
+              setSyncingContacts(true);
+              void picker.select(['name', 'tel', 'email'], { multiple: true }).then((items) => window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: { contacts: items.map((item) => ({ name: item.name?.[0] || '', phones: item.tel || [], emails: item.email || [] })) } }))).catch(() => { setSyncingContacts(false); });
+            }}><BookUser size={16} /> {syncingContacts ? 'Checking contacts…' : 'Sync contacts'}</button>{syncedContacts.length > 0 && <><input type="search" placeholder="Search contacts" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} /><div className="sync-contact-list">{syncedContacts.filter((contact) => `${contact.name} ${contact.emails.join(' ')} ${contact.phones.join(' ')}`.toLowerCase().includes(contactSearch.toLowerCase())).slice(0, 100).map((contact, index) => <div key={`${contact.name}-${index}`}><span><strong>{contact.name || 'Contact'}</strong><small>{contact.status === 'member' ? 'Nights member' : contact.status === 'none' ? 'Needs an invitation link' : contact.status === 'error' ? 'Could not check account' : 'Checking…'}</small></span>{contact.status === 'member' && <button type="button" disabled={inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, contact.match || '', contact.name).finally(() => setInviteBusy(false)); }}>Invite</button>}{contact.status === 'none' && contact.phones.find((phone) => normalizeOptionalPhone(phone)) && <button type="button" disabled={inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, contact.phones.find((phone) => normalizeOptionalPhone(phone)) || '', contact.name).finally(() => setInviteBusy(false)); }}>Text link</button>}{contact.status === 'none' && contact.emails[0] && <a href={`mailto:${encodeURIComponent(contact.emails[0])}?subject=${encodeURIComponent(`Invitation to ${menu.title}`)}&body=${encodeURIComponent(manualInvitationMessage(menu, contact.name))}`}>Email link</a>}</div>)}</div></>}</div>
             <button type="button" className="invite-diagnostics-button" onClick={() => { const logs = localStorage.getItem('nights-invitation-diagnostics') || '[]'; void navigator.clipboard.writeText(logs).then(() => notify('Invitation diagnostics copied.')).catch(() => notify('Could not copy diagnostics on this device.')); }}>Copy invitation diagnostics</button>
             <div className="invite-entry-row">
               <div className="invite-entry-fields">

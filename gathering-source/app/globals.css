@@ -4011,6 +4011,13 @@ body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summar
 }
 .invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
 .invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
+.sync-contact-panel { display: grid; gap: 0.6rem; margin-top: 0.8rem; }
+.sync-contact-panel > button, .sync-contact-list button, .sync-contact-list a { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; border-radius: 0.7rem; background: #e4f1ec; padding: 0.6rem; color: #146b66; font-size: 0.75rem; font-weight: 850; }
+.sync-contact-panel > input { width: 100%; min-height: 42px; border: 1px solid #d6e0da; border-radius: 0.7rem; background: white; padding: 0.5rem 0.7rem; color: #17363b; font-size: 16px; }
+.sync-contact-list { display: grid; gap: 0.4rem; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
+.sync-contact-list > div { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; border-radius: 0.7rem; background: #f0f5f1; padding: 0.55rem; }
+.sync-contact-list > div > span { display: grid; flex: 1; min-width: 120px; color: #17363b; font-size: 0.78rem; }
+.sync-contact-list small { color: rgb(23 54 59 / 0.6); font-size: 0.68rem; }
 .invite-diagnostics-button { margin-top: 0.5rem; color: #146b66; font-size: 0.72rem; font-weight: 750; text-decoration: underline; }
 .invite-entry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 0.7rem; margin-top: 1.1rem; }
 .invite-entry-fields { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(9rem, 0.65fr); gap: 0.7rem; }
