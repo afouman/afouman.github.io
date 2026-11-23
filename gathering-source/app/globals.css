@@ -2191,16 +2191,25 @@ button.profile-balance:hover { background: #edf8f4; }
 .settings-contacts-entry small { color: rgb(23 54 59 / 0.58); font-size: 0.67rem; }
 .settings-contacts-header > button { display: inline-flex; align-items: center; gap: 0.35rem; color: #176d64; font-size: 0.78rem; font-weight: 850; }
 .settings-contacts-header h2 { margin-top: 0.75rem; }
-.settings-contacts-toolbar { margin-top: 1rem; }
-.settings-contacts-sync-toggle { display: flex; width: 100%; min-height: 46px; align-items: center; gap: 0.55rem; border-radius: 0.8rem; background: #176d64; padding: 0.6rem 0.8rem; color: white; font-size: 0.8rem; font-weight: 850; }
-.settings-contacts-sync-toggle > svg:last-child { margin-left: auto; }
-.settings-contacts-sync-options { display: grid; gap: 0.35rem; padding: 0.45rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 0 0 0.8rem 0.8rem; background: #fffdf8; }
-.settings-contacts-sync-options > button { min-height: 40px; border-radius: 0.6rem; background: #eaf5f0; color: #146b66; font-size: 0.75rem; font-weight: 850; }
+.settings-contacts-toolbar { display: flex; align-items: center; min-width: 0; margin-top: 1rem; }
+.settings-contacts-sync-toggle { display: grid; width: 46px; height: 46px; flex: none; place-items: center; border-radius: 0.8rem; background: #176d64; color: white; }
+.settings-contacts-sync-toggle > svg { transition: transform 360ms cubic-bezier(0.22, 1, 0.36, 1); }
+.settings-contacts-sync-toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
+.settings-contacts-sync-reveal { display: grid; min-width: 0; grid-template-columns: 0fr; opacity: 0; pointer-events: none; transition: grid-template-columns 360ms cubic-bezier(0.22, 1, 0.36, 1), opacity 260ms ease; }
+.settings-contacts-sync-reveal[data-open='true'] { grid-template-columns: 1fr; opacity: 1; pointer-events: auto; }
+.settings-contacts-sync-options { display: flex; min-width: 0; overflow: hidden; gap: 0.4rem; }
+.settings-contacts-sync-options > button { min-height: 40px; flex: none; border-radius: 0.6rem; background: #eaf5f0; padding: 0.45rem 0.8rem; color: #146b66; font-size: 0.75rem; font-weight: 850; white-space: nowrap; }
+.settings-contacts-sync-options > button:first-child { margin-left: 0.4rem; }
 .settings-contacts-sync-options > button:disabled { opacity: 0.5; }
-.settings-contacts-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
-.settings-contacts-controls input, .settings-contacts-controls select { min-width: 0; min-height: 42px; border: 1px solid rgb(18 59 66 / 0.14); border-radius: 0.7rem; background: #fffdf8; padding: 0.5rem 0.65rem; color: #17363b; font-size: 16px; }
-.settings-contacts-controls input { flex: 1 1 150px; }
-.settings-contacts-controls label { display: flex; align-items: center; gap: 0.35rem; color: #526360; font-size: 0.7rem; font-weight: 850; }
+.settings-contacts-controls { display: grid; gap: 0.65rem; margin-top: 0.8rem; }
+.settings-contacts-controls > input { width: 100%; min-width: 0; min-height: 42px; border: 1px solid rgb(18 59 66 / 0.14); border-radius: 0.7rem; background: #fffdf8; padding: 0.5rem 0.65rem; color: #17363b; font-size: 16px; }
+.settings-contacts-segmented { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-radius: 0.75rem; background: #e7eeea; padding: 3px; }
+.settings-contacts-segmented::before { position: absolute; inset: 3px auto 3px 3px; width: calc((100% - 6px) / 3); border-radius: 0.6rem; background: #176d64; box-shadow: 0 2px 5px rgb(13 52 59 / 0.12); content: ''; transition: transform 300ms cubic-bezier(0.22, 1, 0.36, 1); }
+.settings-contacts-segmented[data-selection='member']::before { transform: translateX(100%); }
+.settings-contacts-segmented[data-selection='none']::before { transform: translateX(200%); }
+.settings-contacts-segmented > button { position: relative; min-height: 38px; padding: 0.4rem 0.15rem; color: #526360; font-size: 0.7rem; font-weight: 850; text-align: center; transition: color 200ms ease; }
+.settings-contacts-segmented > button[aria-pressed='true'] { color: white; }
+@media (prefers-reduced-motion: reduce) { .settings-contacts-sync-reveal, .settings-contacts-sync-toggle > svg, .settings-contacts-segmented::before { transition-duration: 1ms; } }
 .settings-contacts-list { display: grid; gap: 0.45rem; margin-top: 0.8rem; }
 .settings-contact-row { display: flex; align-items: center; gap: 0.6rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.8rem; background: #fffdf8; padding: 0.65rem; }
 .settings-contact-row > span { display: grid; min-width: 0; flex: 1; gap: 0.2rem; }
