@@ -24,7 +24,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-3")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-4")!
 
     func reload() {
         isOffline = false
@@ -51,6 +51,7 @@ struct NightsWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "nightsAuth")
         configuration.userContentController.add(context.coordinator, name: "nightsTheme")
         configuration.userContentController.add(context.coordinator, name: "nightsNotification")
+        configuration.userContentController.add(context.coordinator, name: "nightsDatePicker")
 
         let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -89,6 +90,7 @@ struct NightsWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsAuth")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsTheme")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsNotification")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsDatePicker")
         coordinator.endKeyboardTracking()
     }
 
@@ -182,6 +184,13 @@ struct NightsWebView: UIViewRepresentable {
                let title = body["title"] as? String,
                let detail = body["body"] as? String {
                 scheduleForegroundNotification(title: title, body: detail, eventId: body["eventId"] as? String ?? "")
+                return
+            }
+            if message.name == "nightsDatePicker", isTrustedMessageURL(message.frameInfo.request.url),
+               let body = message.body as? [String: Any],
+               let field = body["field"] as? String,
+               ["start", "end"].contains(field) {
+                showWheelDatePicker(field: field, initialValue: body["value"] as? String)
                 return
             }
             guard message.name == "nightsAuth",
@@ -408,6 +417,72 @@ struct NightsWebView: UIViewRepresentable {
             while let presented = controller?.presentedViewController { controller = presented }
             return controller
         }
+
+        private func showWheelDatePicker(field: String, initialValue: String?) {
+            guard let presenter = presentingViewController() else { return }
+            let sheet = UIViewController()
+            sheet.view.backgroundColor = .systemBackground
+            sheet.modalPresentationStyle = .pageSheet
+            if let presentation = sheet.sheetPresentationController {
+                presentation.detents = [.medium()]
+                presentation.prefersGrabberVisible = true
+            }
+
+            let picker = UIDatePicker()
+            picker.datePickerMode = .date
+            picker.preferredDatePickerStyle = .wheels
+            picker.translatesAutoresizingMaskIntoConstraints = false
+            if let initialValue, let date = Self.dayFormatter.date(from: initialValue) {
+                picker.date = date
+            }
+
+            let cancel = UIButton(type: .system)
+            cancel.setTitle("Cancel", for: .normal)
+            cancel.titleLabel?.font = .systemFont(ofSize: 17, weight: .semibold)
+            let done = UIButton(type: .system)
+            done.setTitle("Done", for: .normal)
+            done.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
+            let actions = UIStackView(arrangedSubviews: [cancel, done])
+            actions.axis = .horizontal
+            actions.distribution = .fillEqually
+            actions.spacing = 12
+            actions.translatesAutoresizingMaskIntoConstraints = false
+
+            sheet.view.addSubview(picker)
+            sheet.view.addSubview(actions)
+            NSLayoutConstraint.activate([
+                picker.topAnchor.constraint(equalTo: sheet.view.safeAreaLayoutGuide.topAnchor, constant: 8),
+                picker.leadingAnchor.constraint(equalTo: sheet.view.leadingAnchor, constant: 16),
+                picker.trailingAnchor.constraint(equalTo: sheet.view.trailingAnchor, constant: -16),
+                actions.topAnchor.constraint(equalTo: picker.bottomAnchor, constant: 8),
+                actions.leadingAnchor.constraint(equalTo: sheet.view.leadingAnchor, constant: 24),
+                actions.trailingAnchor.constraint(equalTo: sheet.view.trailingAnchor, constant: -24),
+                actions.heightAnchor.constraint(equalToConstant: 48),
+                actions.bottomAnchor.constraint(lessThanOrEqualTo: sheet.view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            ])
+            cancel.addAction(UIAction { _ in sheet.dismiss(animated: true) }, for: .touchUpInside)
+            done.addAction(UIAction { [weak self, weak sheet, weak picker] _ in
+                guard let self, let picker else { return }
+                self.sendNativeDate(field: field, value: Self.dayFormatter.string(from: picker.date))
+                sheet?.dismiss(animated: true)
+            }, for: .touchUpInside)
+            presenter.present(sheet, animated: true)
+        }
+
+        private func sendNativeDate(field: String, value: String) {
+            guard isTrustedAppURL(webView?.url),
+                  let data = try? JSONSerialization.data(withJSONObject: ["field": field, "value": value]),
+                  let payload = String(data: data, encoding: .utf8) else { return }
+            webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('nights-native-date-picked', { detail: \(payload) }));")
+        }
+
+        private static let dayFormatter: DateFormatter = {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.dateFormat = "yyyy-MM-dd"
+            return formatter
+        }()
 
         private func sendNativeAuthError(_ message: String) {
             callWebAuth("fail", values: [message])

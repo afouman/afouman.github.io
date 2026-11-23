@@ -192,6 +192,9 @@ type NightsNativeWindow = Window & {
       nightsNotification?: {
         postMessage: (message: { title: string; body: string; eventId: string }) => void;
       };
+      nightsDatePicker?: {
+        postMessage: (message: { field: 'start' | 'end'; value: string }) => void;
+      };
     };
   };
 };
@@ -520,6 +523,10 @@ const formatPhoneInput = (value: string) => {
   if (digits.length <= 3) return digits;
   if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+};
+const formatFilterDate = (value: string) => {
+  const [year, month, day] = value.split('-');
+  return year && month && day ? `${month}/${day}/${year}` : 'Select date';
 };
 const externalHttpUrl = (value: string) => {
   const candidate = value.trim();
@@ -8032,6 +8039,23 @@ function GuestAccessPortal({
     no: 'Not going',
   } as const), []);
   const selectedRsvpSummary = rsvpScopes.map((scope) => selectedRsvpNames[scope]).join(', ');
+  const nativeDatePickerAvailable = typeof window !== 'undefined'
+    && Boolean((window as NightsNativeWindow).webkit?.messageHandlers?.nightsDatePicker);
+  const openNativeDatePicker = (field: 'start' | 'end') => {
+    const handler = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsDatePicker;
+    if (!handler) return;
+    handler.postMessage({ field, value: field === 'start' ? dateStart : dateEnd });
+  };
+  useEffect(() => {
+    const receiveNativeDate = (event: Event) => {
+      const detail = (event as CustomEvent<{ field?: string; value?: string }>).detail;
+      if (!detail?.value || !/^\d{4}-\d{2}-\d{2}$/.test(detail.value)) return;
+      if (detail.field === 'start') setDateStart(detail.value);
+      if (detail.field === 'end') setDateEnd(detail.value);
+    };
+    window.addEventListener('nights-native-date-picked', receiveNativeDate);
+    return () => window.removeEventListener('nights-native-date-picked', receiveNativeDate);
+  }, []);
   useEffect(() => {
     const hostUids = [...new Set(events.filter((access) => !access.hosted)
       .map((access) => access.invitation?.hostUid || access.event.ownerUid)
@@ -8127,7 +8151,7 @@ function GuestAccessPortal({
                   <div className="guest-event-filters">
                     <label><span>Sort by date</span><select value={dateOrder} onChange={(event) => setDateOrder(event.target.value as 'asc' | 'desc')}><option value="asc">Soonest first</option><option value="desc">Latest first</option></select></label>
                     <label><span>When</span><select value={dateScope} onChange={(event) => setDateScope(event.target.value as 'all' | 'upcoming' | 'past' | 'custom')}><option value="all">All dates</option><option value="upcoming">Upcoming only</option><option value="past">Past only</option><option value="custom">Custom range</option></select></label>
-                    {dateScope === 'custom' && <div className="guest-event-filter-date-range"><input aria-label="From date" type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} /><span aria-hidden="true">—</span><input aria-label="To date" type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} /></div>}
+                    {dateScope === 'custom' && <div className="guest-event-filter-date-range">{nativeDatePickerAvailable ? <button type="button" className="guest-event-filter-date-button" onClick={() => openNativeDatePicker('start')}>{formatFilterDate(dateStart)}</button> : <input aria-label="From date" type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />}<span aria-hidden="true">—</span>{nativeDatePickerAvailable ? <button type="button" className="guest-event-filter-date-button" onClick={() => openNativeDatePicker('end')}>{formatFilterDate(dateEnd)}</button> : <input aria-label="To date" type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />}</div>}
                     <div className={`guest-filter-host-field ${hostScope === 'specific' && selectedHostNames ? 'has-selection' : ''}`}><label><span>Host</span><select value={hostScope} onChange={(event) => { const next = event.target.value as 'all' | 'hosting' | 'invited' | 'specific'; if (next === 'specific') { setHostPickerReturnScope(hostScope); setHostPickerDraftUids(selectedHostUids); setHostScope('specific'); setHostPickerOpen(true); return; } setHostScope(next); setSelectedHostUids([]); }}><option value="all">All events</option><option value="hosting">Events I host</option><option value="invited">Events I’m invited to</option><option value="specific">Event by host…</option></select></label>{hostScope === 'specific' && selectedHostNames && <small>{selectedHostNames}</small>}</div>
                     <div className={`guest-filter-rsvp-field ${selectedRsvpSummary ? 'has-selection' : ''}`}><button type="button" className="guest-filter-picker-trigger" onClick={() => { setRsvpPickerDraftScopes(rsvpScopes); setRsvpPickerOpen(true); }} aria-expanded={rsvpPickerOpen}><span>RSVP</span><strong>{selectedRsvpSummary || 'All RSVPs'}</strong><ChevronDown size={15} /></button>{selectedRsvpSummary && <small>{selectedRsvpSummary}</small>}</div>
                   </div>
