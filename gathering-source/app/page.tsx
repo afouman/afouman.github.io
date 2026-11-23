@@ -196,6 +196,7 @@ type NightsNativeWindow = Window & {
         postMessage: (message: { field: 'start' | 'end'; value: string }) => void;
       };
       nightsContacts?: { postMessage: (message: { action: 'sync' }) => void };
+      nightsShare?: { postMessage: (message: { title: string; url: string }) => void };
     };
   };
 };
@@ -221,6 +222,7 @@ type AccountUser = {
   emailVerified: boolean;
   providerIds: string[];
 };
+type SyncedContact = { name: string; phones: string[]; emails: string[]; match?: string; status: 'checking' | 'member' | 'none' | 'error' };
 type AccountAuthMode = 'signin' | 'signup' | 'profile' | 'recovery';
 type EventInvitation = {
   eventId: string;
@@ -1529,6 +1531,8 @@ export default function Home() {
   const [moneyDetailsOpen, setMoneyDetailsOpen] = useState<'owed' | 'owes' | null>(null);
   const [moneyDetailsReturnTo, setMoneyDetailsReturnTo] = useState<'menu' | 'editor' | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [syncedContacts, setSyncedContacts] = useState<SyncedContact[]>([]);
+  const [syncingContacts, setSyncingContacts] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
   const [expensesOpen, setExpensesOpen] = useState(false);
   const [gamesOpen, setGamesOpen] = useState(false);
@@ -2242,6 +2246,43 @@ export default function Home() {
   }, [accountUser, addEventActivity, guestEvents]);
 
   const guestEventIdentity = guestEvents.map((access) => access.event.id).sort().join('|');
+  useEffect(() => {
+    if (!firebaseConfigured || !accountUser || !accountProfile) return;
+    let active = true;
+    const stops: Array<() => void> = [];
+    void (async () => {
+      try {
+        const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+        if (!active) return;
+        const db = store.getFirestore(getApp());
+        guestEvents.filter((access) => accountCanManageEvent(access.event, accountUser.uid, accountUser.email)).forEach((access) => {
+          stops.push(store.onSnapshot(store.collection(db, 'events', access.event.id, 'guests'), (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type !== 'added' || change.doc.id === accountProfile.guestUid) return;
+              const data = change.doc.data();
+              const createdAt = data.createdAt?.toMillis?.();
+              if (!createdAt) return;
+              addEventActivity({ id: `guest-joined:${access.event.id}:${change.doc.id}:${createdAt}`, eventId: access.event.id, kind: 'event', title: 'Guest joined', detail: `${data.guestName || 'A guest'} joined ${access.event.title}.`, createdAt });
+            });
+          }, (error) => console.error('Could not load host guest activity', error.code)));
+          stops.push(store.onSnapshot(store.collection(db, 'events', access.event.id, 'rsvps'), (snapshot) => {
+            snapshot.docChanges().forEach((change) => {
+              if (change.type === 'removed' || change.doc.id === accountProfile.guestUid) return;
+              const data = change.doc.data();
+              const pending = data.status === 'yes' && data.approvalStatus === 'pending';
+              if (change.type !== 'added' && !pending) return;
+              const createdAt = (change.type === 'added' ? data.createdAt : data.updatedAt)?.toMillis?.();
+              if (!createdAt) return;
+              addEventActivity({ id: `guest-rsvp:${access.event.id}:${change.doc.id}:${createdAt}`, eventId: access.event.id, kind: 'event', title: pending ? 'Guest awaiting approval' : 'Guest responded', detail: `${data.guestName || 'A guest'} responded to ${access.event.title}.`, createdAt });
+            });
+          }, (error) => console.error('Could not load host guest activity', error.code)));
+        });
+      } catch (error) { console.error('Could not start host guest activity', error); }
+    })();
+    return () => { active = false; stops.forEach((stop) => stop()); };
+  // Event IDs determine the set of owned-event listeners.
+  // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountUser, accountProfile, addEventActivity, guestEventIdentity]);
   useEffect(() => {
     if (accountUser && accountProfile && guestEventIdentity) return;
     queueMicrotask(() => setAccountMoney(emptyAccountMoney()));
@@ -3480,6 +3521,58 @@ export default function Home() {
   const notify = (message: string) => {
     setToast(message);
     setTimeout(() => setToast(''), 2200);
+  };
+  useEffect(() => {
+    if (!accountUser?.uid) { setSyncedContacts([]); setSyncingContacts(false); return; }
+    const accountUid = accountUser.uid;
+    let active = true;
+    let generation = 0;
+    setSyncedContacts([]);
+    setSyncingContacts(false);
+    const checkContacts = async (contacts: Array<{ name: string; phones: string[]; emails: string[] }>) => {
+      if (!active) return;
+      const currentGeneration = ++generation;
+      setSyncingContacts(true);
+      setSyncedContacts(contacts.map((contact) => ({ ...contact, status: 'checking' })));
+      try {
+        const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
+        const db = store.getFirestore(getApp());
+        let next = 0;
+        const check = async () => {
+          while (active && generation === currentGeneration && next < contacts.length) {
+            const index = next++;
+            const contact = contacts[index];
+            let match = '';
+            let failed = false;
+            const candidates = [...contact.emails.filter((email) => /^\S+@\S+\.\S+$/.test(email)).map((email) => ({ value: normalizedAccountEmail(email), collection: 'account-emails' })), ...contact.phones.flatMap((phone) => { const normalized = normalizeOptionalPhone(phone); return normalized ? [{ value: `+1${phoneDigits(normalized)}`, collection: 'account-phones' }] : []; })];
+            for (const candidate of candidates) {
+              try { const snapshot = await store.getDoc(store.doc(db, candidate.collection, await guestNameIndexId(candidate.value))); if (snapshot.data()?.accountUid) { match = candidate.value; break; } } catch { failed = true; }
+            }
+            if (active && generation === currentGeneration) setSyncedContacts((current) => current.map((item, i) => i === index ? { ...item, match, status: match ? 'member' : failed ? 'error' : 'none' } : item));
+          }
+        };
+        await Promise.all(Array.from({ length: Math.min(5, contacts.length) }, () => check()));
+      } catch { if (active && generation === currentGeneration) setSyncedContacts((current) => current.map((item) => item.status === 'checking' ? { ...item, status: 'error' } : item)); }
+      finally { if (active && generation === currentGeneration) setSyncingContacts(false); }
+    };
+    const receiveContacts = (event: Event) => {
+      const detail = (event as CustomEvent<{ contacts?: Array<{ name: string; phones: string[]; emails: string[] }>; error?: string }>).detail;
+      if (detail?.error) { setSyncingContacts(false); setToast(detail.error); return; }
+      const contacts = detail?.contacts || [];
+      try { localStorage.setItem(`nights-synced-contacts:${accountUid}`, JSON.stringify(contacts)); } catch { setToast('Contacts were loaded but could not be saved on this device.'); }
+      void checkContacts(contacts);
+    };
+    window.addEventListener('nights-native-contacts', receiveContacts);
+    try { const saved = JSON.parse(localStorage.getItem(`nights-synced-contacts:${accountUid}`) || '[]'); if (Array.isArray(saved)) void checkContacts(saved); } catch { setSyncedContacts([]); }
+    return () => { active = false; window.removeEventListener('nights-native-contacts', receiveContacts); };
+  }, [accountUser?.uid]);
+  const syncAccountContacts = () => {
+    const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
+    if (native) { setSyncingContacts(true); native.postMessage({ action: 'sync' }); return; }
+    const picker = (navigator as Navigator & { contacts?: { select: (properties: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[]; email?: string[] }>> } }).contacts;
+    if (!picker) { notify('Contact selection is not supported by this browser. Use the iPhone app.'); return; }
+    setSyncingContacts(true);
+    void picker.select(['name', 'tel', 'email'], { multiple: true }).then((items) => window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: { contacts: items.map((item) => ({ name: item.name?.[0] || '', phones: item.tel || [], emails: item.email || [] })) } }))).catch(() => setSyncingContacts(false));
   };
   const activityUnreadCounts = useMemo(() => eventActivities.reduce<Record<string, number>>((counts, activity) => {
     if (!activity.read) counts[activity.eventId] = (counts[activity.eventId] || 0) + 1;
@@ -6674,6 +6767,8 @@ export default function Home() {
           orders={orders}
           rsvps={rsvps}
           contacts={hostContacts}
+          syncedContacts={syncedContacts}
+          syncingContacts={syncingContacts}
           invitations={[...hostInvitations, ...pendingHostInvitations]}
           eventIncomingCounts={eventIncomingCounts}
           editing={editing}
@@ -6792,6 +6887,7 @@ export default function Home() {
                 </button>
               </section>
             )}
+            <section className="settings-notification-row"><div><strong>Contacts</strong><small>Sync contacts on this device for your account. Your address book is kept on this device.</small></div><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={syncAccountContacts}>{syncingContacts ? 'Checking…' : 'Sync contacts'}</button></section>
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
             </div>
@@ -7467,7 +7563,7 @@ export default function Home() {
                 </span><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
-                <button type="button" role="menuitem" onClick={openActivityCenter}>
+                <button type="button" role="menuitem" onClick={() => openActivityCenter('event')}>
                   <span><Bell size={18} /></span>
                   <div><strong>Notification center</strong><small>Invitations, event changes and expenses</small></div>
                   {activityUnreadCounts[menu.id] > 0 && <b className="event-option-count">{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
@@ -7537,7 +7633,7 @@ export default function Home() {
                 </span><span>Options</span>
               </button>
               {eventMenuOpen && <div className="event-feature-menu" role="menu" aria-label={`${menu.title} features`}>
-                <button type="button" role="menuitem" onClick={openActivityCenter}>
+                <button type="button" role="menuitem" onClick={() => openActivityCenter('event')}>
                   <span><Bell size={18} /></span>
                   <div><strong>Notification center</strong><small>Invitations, event changes and expenses</small></div>
                   {activityUnreadCounts[menu.id] > 0 && <b className="event-option-count">{activityUnreadCounts[menu.id] > 9 ? '9+' : activityUnreadCounts[menu.id]}</b>}
@@ -10352,6 +10448,8 @@ function HostWorkspace({
   orders,
   rsvps,
   contacts,
+  syncedContacts,
+  syncingContacts,
   invitations,
   eventIncomingCounts,
   editing,
@@ -10386,6 +10484,8 @@ function HostWorkspace({
   orders: Order[];
   rsvps: Rsvp[];
   contacts: HostContact[];
+  syncedContacts: SyncedContact[];
+  syncingContacts: boolean;
   invitations: EventInvitation[];
   eventIncomingCounts: Record<string, number>;
   editing: boolean;
@@ -10416,45 +10516,12 @@ function HostWorkspace({
   notify: (message: string) => void;
 }) {
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [inviteIdentifier, setInviteIdentifier] = useState('');
-  const [inviteName, setInviteName] = useState('');
+  const invitePullStart = useRef<number | null>(null);
   const [inviteBusy, setInviteBusy] = useState(false);
-  const [syncedContacts, setSyncedContacts] = useState<Array<{ name: string; phones: string[]; emails: string[]; match?: string; status: 'checking' | 'member' | 'none' | 'error' }>>([]);
   const [contactSearch, setContactSearch] = useState('');
-  const [syncingContacts, setSyncingContacts] = useState(false);
-  useEffect(() => {
-    const receiveContacts = (event: Event) => {
-      const detail = (event as CustomEvent<{ contacts?: Array<{ name: string; phones: string[]; emails: string[] }>; error?: string }>).detail;
-      if (detail?.error) { setSyncingContacts(false); notify(detail.error); return; }
-      const contacts = detail?.contacts || [];
-      setSyncedContacts(contacts.map((contact) => ({ ...contact, status: 'checking' })));
-      void (async () => {
-        try {
-          const [{ getApp }, store] = await Promise.all([import('firebase/app'), import('firebase/firestore')]);
-          const db = store.getFirestore(getApp());
-          let next = 0;
-          const check = async () => {
-            while (next < contacts.length) {
-              const index = next++;
-              const contact = contacts[index];
-              let match = '';
-              let failed = false;
-              const candidates = [...contact.emails.filter((email) => /^\S+@\S+\.\S+$/.test(email)).map((email) => ({ value: normalizedAccountEmail(email), collection: 'account-emails' })), ...contact.phones.flatMap((phone) => { const normalized = normalizeOptionalPhone(phone); return normalized ? [{ value: `+1${phoneDigits(normalized)}`, collection: 'account-phones' }] : []; })];
-              for (const candidate of candidates) {
-                try { const snapshot = await store.getDoc(store.doc(db, candidate.collection, await guestNameIndexId(candidate.value))); if (snapshot.data()?.accountUid) { match = candidate.value; break; } } catch { failed = true; }
-              }
-              setSyncedContacts((current) => current.map((item, i) => i === index ? { ...item, match, status: match ? 'member' : failed ? 'error' : 'none' } : item));
-            }
-          };
-          await Promise.all(Array.from({ length: Math.min(5, contacts.length) }, () => check()));
-        } catch { setSyncedContacts((current) => current.map((item) => item.status === 'checking' ? { ...item, status: 'error' } : item)); }
-        finally { setSyncingContacts(false); }
-      })();
-    };
-    window.addEventListener('nights-native-contacts', receiveContacts);
-    return () => window.removeEventListener('nights-native-contacts', receiveContacts);
-  }, [notify]);
+  const [contactPickerOpen, setContactPickerOpen] = useState(false);
   const [revokeBusy, setRevokeBusy] = useState('');
+  const closeInvitations = () => { setContactPickerOpen(false); setContactSearch(''); setInviteOpen(false); };
   const eventInvitations = invitations.filter((invitation) => invitation.eventId === menu.id);
   const activeOrders = orders.filter(
     (order) => order.status === 'new' || order.status === 'preparing',
@@ -10639,60 +10706,16 @@ function HostWorkspace({
       </div>
       {inviteOpen && createPortal(
         <div className="invite-dialog-backdrop" role="presentation" onMouseDown={(event) => {
-          if (event.target === event.currentTarget && !inviteBusy) setInviteOpen(false);
+          if (event.target === event.currentTarget && !inviteBusy) closeInvitations();
         }}>
           <dialog open className="invite-dialog" aria-label={`Invite guests to ${menu.title}`}>
-            <header>
+            <header onTouchStart={(event) => { if ((event.target as HTMLElement).closest('button')) return; invitePullStart.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={(event) => { const start = invitePullStart.current; invitePullStart.current = null; if (start !== null && (event.changedTouches[0]?.clientY ?? start) - start > 80 && !inviteBusy) closeInvitations(); }} onTouchCancel={() => { invitePullStart.current = null; }}>
               <div><p className="eyebrow">Invite to</p><h2 className="font-display">{menu.title}</h2></div>
-              <button type="button" className="icon-button" onClick={() => setInviteOpen(false)} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
+              <button type="button" className="icon-button" onClick={closeInvitations} disabled={inviteBusy} aria-label="Close invitations"><XCircle size={20} /></button>
             </header>
-            <p className="invite-dialog-copy">Invite a Nights member by email or phone. If the phone number is not registered yet, Nights will save their place and prepare a text message for you to send.</p>
-            <div className="sync-contact-panel"><button type="button" disabled={syncingContacts} onClick={() => {
-              const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsContacts;
-              if (native) { setSyncingContacts(true); native.postMessage({ action: 'sync' }); return; }
-              const picker = (navigator as Navigator & { contacts?: { select: (properties: string[], options: { multiple: boolean }) => Promise<Array<{ name?: string[]; tel?: string[]; email?: string[] }>> } }).contacts;
-              if (!picker) { notify('Contact selection is not supported by this browser. Use the iPhone app or enter an address.'); return; }
-              setSyncingContacts(true);
-              void picker.select(['name', 'tel', 'email'], { multiple: true }).then((items) => window.dispatchEvent(new CustomEvent('nights-native-contacts', { detail: { contacts: items.map((item) => ({ name: item.name?.[0] || '', phones: item.tel || [], emails: item.email || [] })) } }))).catch(() => { setSyncingContacts(false); });
-            }}><BookUser size={16} /> {syncingContacts ? 'Checking contacts…' : 'Sync contacts'}</button>{syncedContacts.length > 0 && <><input type="search" placeholder="Search contacts" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} /><div className="sync-contact-list">{syncedContacts.filter((contact) => `${contact.name} ${contact.emails.join(' ')} ${contact.phones.join(' ')}`.toLowerCase().includes(contactSearch.toLowerCase())).slice(0, 100).map((contact, index) => <div key={`${contact.name}-${index}`}><span><strong>{contact.name || 'Contact'}</strong><small>{contact.status === 'member' ? 'Nights member' : contact.status === 'none' ? 'Needs an invitation link' : contact.status === 'error' ? 'Could not check account' : 'Checking…'}</small></span>{contact.status === 'member' && <button type="button" disabled={inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, contact.match || '', contact.name).finally(() => setInviteBusy(false)); }}>Invite</button>}{contact.status === 'none' && contact.phones.find((phone) => normalizeOptionalPhone(phone)) && <button type="button" disabled={inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, contact.phones.find((phone) => normalizeOptionalPhone(phone)) || '', contact.name).finally(() => setInviteBusy(false)); }}>Text link</button>}{contact.status === 'none' && contact.emails[0] && <a href={`mailto:${encodeURIComponent(contact.emails[0])}?subject=${encodeURIComponent(`Invitation to ${menu.title}`)}&body=${encodeURIComponent(manualInvitationMessage(menu, contact.name))}`}>Email link</a>}</div>)}</div></>}</div>
+            <button type="button" className="invite-share-link" onClick={() => { const url = guestEventUrl(menu.id, menu.publicPath); const nativeShare = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsShare; if (nativeShare) nativeShare.postMessage({ title: menu.title, url }); else if (navigator.share) { void navigator.share({ title: menu.title, text: `You’re invited to ${menu.title}`, url }).catch(() => undefined); } else { void navigator.clipboard.writeText(url).then(() => notify('Invite link copied.')).catch(() => notify('Could not copy the invite link.')); } }}><Send size={16} /> Share invite link</button>
+            <p className="invite-dialog-copy">Share the link or invite Nights members from your contacts.</p>
             <button type="button" className="invite-diagnostics-button" onClick={() => { const logs = localStorage.getItem('nights-invitation-diagnostics') || '[]'; void navigator.clipboard.writeText(logs).then(() => notify('Invitation diagnostics copied.')).catch(() => notify('Could not copy diagnostics on this device.')); }}>Copy invitation diagnostics</button>
-            <div className="invite-entry-row">
-              <div className="invite-entry-fields">
-                <label>
-                  <span>Email or phone number</span>
-                  <input
-                    value={inviteIdentifier}
-                    onChange={(event) => setInviteIdentifier(event.target.value)}
-                    placeholder="guest@example.com or 555-555-5555"
-                    autoComplete="off"
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' || !inviteIdentifier.trim() || inviteBusy) return;
-                      event.preventDefault();
-                      setInviteBusy(true);
-                      void inviteGuest(menu, inviteIdentifier, inviteName).then((sent) => {
-                        if (sent) { setInviteIdentifier(''); setInviteName(''); }
-                      }).finally(() => setInviteBusy(false));
-                    }}
-                  />
-                </label>
-                <label>
-                  <span>Guest name (optional)</span>
-                  <input
-                    value={inviteName}
-                    onChange={(event) => setInviteName(event.target.value)}
-                    placeholder="Alex"
-                    autoComplete="off"
-                    maxLength={80}
-                  />
-                </label>
-              </div>
-              <button type="button" className="primary-button" disabled={inviteBusy || !inviteIdentifier.trim()} onClick={() => {
-                setInviteBusy(true);
-                void inviteGuest(menu, inviteIdentifier, inviteName).then((sent) => {
-                  if (sent) { setInviteIdentifier(''); setInviteName(''); }
-                }).finally(() => setInviteBusy(false));
-              }}><Send size={16} /> {inviteBusy ? 'Sending…' : 'Send invite'}</button>
-            </div>
             <section className="host-invitation-list">
               <div className="host-contact-list-heading"><Send size={17} /><div><strong>Invited guests</strong><span>Revoke an invitation and remove that guest’s event access</span></div></div>
               {eventInvitations.length ? (
@@ -10720,34 +10743,26 @@ function HostWorkspace({
                 </div>
               ) : <p className="host-contact-empty">No active invitations for this event.</p>}
             </section>
-            <section className="host-contact-list">
-              <div className="host-contact-list-heading"><BookUser size={17} /><div><strong>Contacts</strong><span>People you have invited before</span></div></div>
-              {contacts.length ? (
-                <div className="host-contact-list-scroll">
-                  {contacts.map((contact) => {
-                    const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
-                    const identifier = contact.email || formatPhone(contact.phone);
-                    const invited = eventInvitations.some((invitation) => invitation.recipientUid === contact.accountUid);
-                    return (
-                      <button
-                        type="button"
-                        key={contact.accountUid}
-                        className={invited ? 'invited' : ''}
-                        disabled={invited || inviteBusy}
-                        onClick={() => {
-                          setInviteBusy(true);
-                          void inviteGuest(menu, identifier, name).finally(() => setInviteBusy(false));
-                        }}
-                      >
-                        <span className="host-contact-avatar">{name.slice(0, 1).toUpperCase()}</span>
-                        <span><strong>{name}</strong><small>{contact.email}</small><small>{formatPhone(contact.phone)}</small></span>
-                        <b>{invited ? <><Check size={13} /> Invited</> : 'Invite'}</b>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : <p className="host-contact-empty">Your contacts will appear here after the first invitation.</p>}
-            </section>
+            {contactPickerOpen && <section className="invite-member-picker" aria-label="Nights contacts">
+              <header><div><strong>Invite Nights contacts</strong><small>Choose a contact to send an invitation.</small></div><button type="button" onClick={() => setContactPickerOpen(false)} aria-label="Close contacts"><XCircle size={20} /></button></header>
+              <input type="search" placeholder="Search contacts" value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
+              <div className="host-contact-list-scroll">
+                {contacts.filter((contact) => !contact.accountUid.startsWith('phone-') && !contact.accountUid.startsWith('email-') && `${contact.firstName} ${contact.lastName} ${contact.email}`.toLowerCase().includes(contactSearch.toLowerCase())).map((contact) => {
+                  const name = `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || contact.email;
+                  const identifier = contact.email || formatPhone(contact.phone);
+                  const invited = eventInvitations.some((invitation) => invitation.recipientUid === contact.accountUid);
+                  return <button type="button" key={contact.accountUid} disabled={invited || inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, identifier, name).finally(() => setInviteBusy(false)); }}><span><strong>{name}</strong><small>{contact.email || formatPhone(contact.phone)}</small></span><b>{invited ? 'Invited' : 'Invite'}</b></button>;
+                })}
+                {syncedContacts.filter((contact) => contact.status === 'member' && contact.match && !contacts.some((saved) => normalizedAccountEmail(saved.email || '') === normalizedAccountEmail(contact.match || '') || (phoneDigits(saved.phone || '') && phoneDigits(saved.phone || '') === phoneDigits(contact.match || ''))) && `${contact.name} ${contact.match}`.toLowerCase().includes(contactSearch.toLowerCase())).map((contact, index) => {
+                  const invited = eventInvitations.some((entry) => normalizedAccountEmail(entry.recipientEmail || '') === normalizedAccountEmail(contact.match || '') || (phoneDigits(entry.recipientPhone || '') && phoneDigits(entry.recipientPhone || '') === phoneDigits(contact.match || '')));
+                  return <button type="button" key={`${contact.match}-${index}`} disabled={invited || inviteBusy} onClick={() => { setInviteBusy(true); void inviteGuest(menu, contact.match || '', contact.name).finally(() => setInviteBusy(false)); }}><span><strong>{contact.name || 'Contact'}</strong><small>{contact.match}</small></span><b>{invited ? 'Invited' : 'Invite'}</b></button>;
+                })}
+              </div>
+              {syncingContacts && <p>Checking contacts…</p>}
+              {!syncingContacts && syncedContacts.some((contact) => contact.status === 'error') && <p>Some contacts could not be checked. Sync again in Settings.</p>}
+              {!syncingContacts && !contacts.some((contact) => !contact.accountUid.startsWith('phone-') && !contact.accountUid.startsWith('email-')) && !syncedContacts.some((contact) => contact.status === 'member') && <p>No Nights contacts found. Sync contacts in Settings.</p>}
+            </section>}
+            <footer className="invite-fixed-actions"><button type="button" className="primary-button" onClick={() => setContactPickerOpen(true)} disabled={inviteBusy}><BookUser size={17} /> Send invite</button></footer>
           </dialog>
         </div>,
         document.body,

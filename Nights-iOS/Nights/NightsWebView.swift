@@ -25,7 +25,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261123-2")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261123-3")!
 
     func reload() {
         isOffline = false
@@ -54,6 +54,7 @@ struct NightsWebView: UIViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "nightsNotification")
         configuration.userContentController.add(context.coordinator, name: "nightsDatePicker")
         configuration.userContentController.add(context.coordinator, name: "nightsContacts")
+        configuration.userContentController.add(context.coordinator, name: "nightsShare")
 
         let webView = NightsChatWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -94,6 +95,7 @@ struct NightsWebView: UIViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsNotification")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsDatePicker")
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsContacts")
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "nightsShare")
         coordinator.endKeyboardTracking()
     }
 
@@ -194,6 +196,16 @@ struct NightsWebView: UIViewRepresentable {
                let field = body["field"] as? String,
                ["start", "end"].contains(field) {
                 showWheelDatePicker(field: field, initialValue: body["value"] as? String)
+                return
+            }
+            if message.name == "nightsShare", message.frameInfo.isMainFrame,
+               isTrustedMessageURL(message.frameInfo.request.url),
+               let body = message.body as? [String: String], let rawURL = body["url"],
+               let url = URL(string: rawURL), isTrustedAppURL(url),
+               let presenter = presentingViewController() {
+                let share = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+                if let popover = share.popoverPresentationController { popover.sourceView = presenter.view; popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.midY, width: 1, height: 1) }
+                presenter.present(share, animated: true)
                 return
             }
             if message.name == "nightsContacts", message.frameInfo.isMainFrame,

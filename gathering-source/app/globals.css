@@ -4010,6 +4010,18 @@ body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summar
   gap: 1rem;
 }
 .invite-dialog > header h2 { margin-top: 0.25rem; font-size: 2.4rem; line-height: 1; }
+.invite-share-link { display: flex; width: 100%; min-height: 46px; align-items: center; justify-content: center; gap: 0.5rem; margin-top: 1rem; border-radius: 0.8rem; background: #176d64; color: white; font-weight: 850; }
+.invite-fixed-actions { position: sticky; bottom: -1.5rem; z-index: 2; margin: 1.2rem -1.5rem -1.5rem; padding: 0.8rem 1.5rem calc(0.8rem + env(safe-area-inset-bottom)); background: #f7f4ed; border-top: 1px solid rgb(18 59 66 / 0.12); }
+.invite-fixed-actions > button { display: flex; width: 100%; min-height: 48px; align-items: center; justify-content: center; gap: 0.5rem; }
+.invite-member-picker { position: fixed; z-index: 125; inset: 50% auto auto 50%; transform: translate(-50%, -50%); width: min(500px, calc(100vw - 2rem)); max-height: min(70dvh, 600px); overflow-y: auto; border-radius: 1.2rem; background: #fffdf8; padding: 1rem; box-shadow: 0 0 0 100vmax rgb(5 15 18 / 0.6), 0 25px 70px rgb(0 0 0 / 0.3); }
+.invite-member-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.invite-member-picker > header > div { display: grid; gap: 0.2rem; }
+.invite-member-picker small, .invite-member-picker p { color: rgb(23 54 59 / 0.6); font-size: 0.72rem; }
+.invite-member-picker > input { width: 100%; min-height: 44px; margin-top: 0.8rem; border: 1px solid #d6e0da; border-radius: 0.7rem; padding: 0.5rem 0.7rem; background: white; color: #17363b; font-size: 16px; }
+.invite-member-picker .host-contact-list-scroll > button { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; }
+.invite-member-picker .host-contact-list-scroll > button > span { display: grid; text-align: left; }
+.settings-contact-sync { min-height: 42px; border-radius: 0.75rem; background: #e4f1ec; padding: 0.5rem 0.7rem; color: #146b66; font-weight: 850; }
+.invite-dialog > header { touch-action: pan-x; }
 .invite-dialog-copy { margin-top: 0.85rem; color: rgb(23 54 59 / 0.62); font-size: 0.8rem; line-height: 1.55; }
 .sync-contact-panel { display: grid; gap: 0.6rem; margin-top: 0.8rem; }
 .sync-contact-panel > button, .sync-contact-list button, .sync-contact-list a { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; border-radius: 0.7rem; background: #e4f1ec; padding: 0.6rem; color: #146b66; font-size: 0.75rem; font-weight: 850; }
@@ -4396,6 +4408,7 @@ body.native-ios-shell .guest-event-filter-popover .guest-filter-accordion-summar
     border-radius: 1.5rem 1.5rem 0 0;
     padding: 1.25rem;
   }
+  .invite-fixed-actions { bottom: -1.25rem; margin: 1.2rem -1.25rem -1.25rem; padding-inline: 1.25rem; }
   .invite-entry-row, .invite-entry-fields { grid-template-columns: 1fr; }
   .invite-entry-row .primary-button { width: 100%; justify-content: center; }
   .host-command-main h2 {
