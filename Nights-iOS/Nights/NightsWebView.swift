@@ -24,7 +24,7 @@ final class NightsBrowserModel: ObservableObject {
     // The app is a native shell around a versioned web release. Keep the
     // release marker in the URL so WKWebView cannot revive a previous HTML
     // shell after an iOS reinstall while its website data is retained.
-    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-4")!
+    fileprivate let startURL = URL(string: "https://gaemaj.tech/nights-guest/?nativeRelease=20261122-5")!
 
     func reload() {
         isOffline = false
