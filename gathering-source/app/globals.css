@@ -2252,10 +2252,13 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filter-popover > header > button { display: grid; width: 32px; height: 32px; flex: none; place-items: center; border-radius: 50%; background: rgb(18 59 66 / 0.07); }
 .guest-event-filters { display: grid; gap: 0.55rem; margin-top: 0.8rem; }
 .guest-filter-accordion { overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.8rem; background: #f4f7f3; }
+.guest-filter-accordion-reveal { display: grid; grid-template-rows: 0fr; overflow: hidden; pointer-events: none; transition: grid-template-rows 420ms cubic-bezier(0.22, 1, 0.36, 1); }
+.guest-filter-accordion-reveal[data-open='true'] { grid-template-rows: 1fr; pointer-events: auto; }
+.guest-filter-accordion-reveal > .guest-filter-accordion-options { min-height: 0; overflow: hidden; }
 .guest-filter-accordion-trigger { display: grid; width: 100%; min-height: 50px; grid-template-columns: minmax(0, 1fr) auto 15px; align-items: center; gap: 0.55rem; padding: 0.38rem 0.48rem 0.38rem 0.7rem; text-align: right; }
 .guest-filter-accordion-trigger > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-transform: uppercase; }
 .guest-filter-accordion-trigger > strong { min-width: 0; overflow: hidden; color: #146b66; font-size: 13px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
-.guest-filter-accordion-trigger > svg { color: #146b66; transition: transform 160ms ease; }
+.guest-filter-accordion-trigger > svg { color: #146b66; transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1); }
 .guest-filter-accordion-trigger[aria-expanded='true'] > svg { transform: rotate(180deg); }
 .guest-filter-accordion-options { display: grid; gap: 0.15rem; border-top: 1px solid rgb(13 52 59 / 0.1); padding: 0.35rem; }
 .guest-filter-accordion-options > button { min-height: 38px; border-radius: 0.55rem; padding: 0.4rem 0.55rem; color: #146b66; font-size: 13px; font-weight: 850; text-align: right; }
@@ -2268,6 +2271,7 @@ button.profile-balance:hover { background: #edf8f4; }
 .guest-event-filters label > span { justify-self: start; color: rgb(19 40 44 / 0.52); font-size: 12px; font-weight: 900; letter-spacing: 0.05em; text-align: left; text-transform: uppercase; }
 .guest-event-filters select { justify-self: end; min-height: 38px; max-width: 190px; border: 0; background: transparent; color: #146b66; font-size: 12px; font-weight: 850; outline: 0; text-align: right; text-align-last: right; }
 .guest-event-filter-date-range { display: grid; width: 100%; min-width: 0; grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr); align-items: center; gap: 8px; }
+.guest-filter-accordion > .guest-event-filter-date-range { border-top: 1px solid rgb(13 52 59 / 0.1); padding: 0.6rem; }
 .guest-event-filter-date-range > span { display: grid; place-items: center; color: rgb(19 40 44 / 0.38); font-size: 1rem; font-weight: 850; }
 .guest-event-filter-date-range > input,
 .guest-event-filter-date-button { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 40px; overflow: hidden; border: 1px solid rgb(13 52 59 / 0.1); border-radius: 0.75rem; background: #f4f7f3; padding: 0.25rem 0.35rem; color: #146b66; font-size: 13px; font-weight: 800; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
