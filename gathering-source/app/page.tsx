@@ -1531,6 +1531,10 @@ export default function Home() {
   const [moneyDetailsOpen, setMoneyDetailsOpen] = useState<'owed' | 'owes' | null>(null);
   const [moneyDetailsReturnTo, setMoneyDetailsReturnTo] = useState<'menu' | 'editor' | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsContactsOpen, setSettingsContactsOpen] = useState(false);
+  const [settingsContactSyncOpen, setSettingsContactSyncOpen] = useState(false);
+  const [settingsContactFilter, setSettingsContactFilter] = useState<'all' | 'member' | 'none'>('all');
+  const [settingsContactSearch, setSettingsContactSearch] = useState('');
   const [syncedContacts, setSyncedContacts] = useState<SyncedContact[]>([]);
   const [syncingContacts, setSyncingContacts] = useState(false);
   const [eventMenuOpen, setEventMenuOpen] = useState(false);
@@ -6852,6 +6856,7 @@ export default function Home() {
             </section>
             <button type="button" className="profile-menu-action" onClick={() => {
               setProfileMenuOpen(false);
+              setSettingsContactsOpen(false);
               setSettingsOpen(true);
             }}><Settings2 size={16} /><span><strong>Settings</strong><small>Notifications and app preferences</small></span></button>
             <button type="button" className="profile-menu-action" onClick={() => void signOutAccount()}>
@@ -6870,6 +6875,15 @@ export default function Home() {
           if (event.target === event.currentTarget && !pushNotificationBusy) setSettingsOpen(false);
         }}>
           <dialog open className="delete-account-dialog settings-dialog" aria-labelledby="settings-title">
+            {settingsContactsOpen ? <>
+              <header className="settings-contacts-header"><button type="button" onClick={() => { setSettingsContactsOpen(false); setSettingsContactSyncOpen(false); }} aria-label="Back to settings"><ArrowLeft size={20} /> <span>Settings</span></button><h2 id="settings-title" className="font-display">Contacts</h2></header>
+              <div className="settings-contacts-toolbar"><button type="button" className="settings-contacts-sync-toggle" aria-expanded={settingsContactSyncOpen} onClick={() => setSettingsContactSyncOpen((open) => !open)}><UsersRound size={18} /> Sync contacts <ChevronDown size={16} /></button>{settingsContactSyncOpen && <div className="settings-contacts-sync-options"><button type="button" disabled={syncingContacts} onClick={() => { setSettingsContactSyncOpen(false); selectAccountContacts(); }}>Select contacts</button><button type="button" disabled={syncingContacts} onClick={() => { setSettingsContactSyncOpen(false); syncAccountContacts(); }}>Sync all</button></div>}</div>
+              <div className="settings-contacts-controls"><input type="search" aria-label="Search contacts" placeholder="Search contacts" value={settingsContactSearch} onChange={(event) => setSettingsContactSearch(event.target.value)} /><label><span>Filter</span><select value={settingsContactFilter} onChange={(event) => setSettingsContactFilter(event.target.value as 'all' | 'member' | 'none')}><option value="all">All contacts</option><option value="member">On Nights</option><option value="none">Not on Nights</option></select></label></div>
+              {syncingContacts && <p className="settings-contacts-status">Checking contacts…</p>}
+              <div className="settings-contacts-list">{syncedContacts.filter((contact) => (settingsContactFilter === 'all' || contact.status === settingsContactFilter) && `${contact.name} ${contact.emails.join(' ')} ${contact.phones.join(' ')}`.toLowerCase().includes(settingsContactSearch.trim().toLowerCase())).map((contact, index) => <div className="settings-contact-row" key={`${contact.name}-${index}`}><span><strong>{contact.name || 'Contact'}</strong><small>{contact.status === 'member' ? 'On Nights' : contact.status === 'none' ? 'Not on Nights' : contact.status === 'checking' ? 'Checking…' : 'Could not check'}</small></span>{contact.status === 'none' && <button type="button" onClick={() => { const url = new URL(guestHomeRoute(), window.location.origin).toString(); const native = (window as NightsNativeWindow).webkit?.messageHandlers?.nightsShare; if (native) native.postMessage({ title: 'Join Nights', url }); else if (navigator.share) void navigator.share({ title: 'Join Nights', text: 'Join me on Nights!', url }).catch(() => undefined); else void navigator.clipboard.writeText(url).then(() => notify('Sign-up link copied.')).catch(() => notify('Could not copy sign-up link.')); }}>Invite to Nights</button>}</div>)}</div>
+              {!syncingContacts && syncedContacts.length === 0 && <p className="settings-contacts-status">Sync contacts to see who is on Nights.</p>}
+              {!syncingContacts && syncedContacts.length > 0 && !syncedContacts.some((contact) => (settingsContactFilter === 'all' || contact.status === settingsContactFilter) && `${contact.name} ${contact.emails.join(' ')} ${contact.phones.join(' ')}`.toLowerCase().includes(settingsContactSearch.trim().toLowerCase())) && <p className="settings-contacts-status">No contacts match this filter.</p>}
+            </> : <>
             <span className="settings-dialog-icon"><Settings2 size={24} /></span>
             <p className="eyebrow">Account preferences</p>
             <h2 id="settings-title" className="font-display">Settings</h2>
@@ -6897,10 +6911,11 @@ export default function Home() {
                 </button>
               </section>
             )}
-            <section className="settings-notification-row"><div><strong>Contacts</strong><small>Select contacts or sync all. With access allowed, contacts refresh automatically on this device.</small></div><div className="settings-contact-actions"><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={selectAccountContacts}>Select contacts</button><button type="button" className="settings-contact-sync" disabled={syncingContacts} onClick={syncAccountContacts}>{syncingContacts ? 'Checking…' : 'Sync all'}</button></div></section>
+            <button type="button" className="settings-contacts-entry" onClick={() => setSettingsContactsOpen(true)}><BookUser size={20} /><span><strong>Contacts</strong><small>Sync and manage your contacts</small></span><ChevronRight size={18} /></button>
             <div className="delete-account-actions single-action">
               <button type="button" onClick={() => setSettingsOpen(false)} disabled={pushNotificationBusy}>Done</button>
             </div>
+            </>}
           </dialog>
         </div>,
         document.body,

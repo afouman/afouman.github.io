@@ -2185,6 +2185,29 @@ button.profile-balance:hover { background: #edf8f4; }
 .settings-notification-row > div { display: grid; gap: 0.3rem; }
 .settings-notification-row strong { font-size: 0.8rem; }
 .settings-notification-row small { max-width: 330px; color: rgb(23 54 59 / 0.58); font-size: 0.67rem; line-height: 1.45; }
+.settings-contacts-entry { display: flex; width: 100%; align-items: center; gap: 0.75rem; margin-top: 0.85rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 1.1rem; background: #fffdf8; padding: 1rem; color: #176d64; text-align: left; }
+.settings-contacts-entry > span { display: grid; flex: 1; gap: 0.25rem; }
+.settings-contacts-entry strong { font-size: 0.8rem; }
+.settings-contacts-entry small { color: rgb(23 54 59 / 0.58); font-size: 0.67rem; }
+.settings-contacts-header > button { display: inline-flex; align-items: center; gap: 0.35rem; color: #176d64; font-size: 0.78rem; font-weight: 850; }
+.settings-contacts-header h2 { margin-top: 0.75rem; }
+.settings-contacts-toolbar { margin-top: 1rem; }
+.settings-contacts-sync-toggle { display: flex; width: 100%; min-height: 46px; align-items: center; gap: 0.55rem; border-radius: 0.8rem; background: #176d64; padding: 0.6rem 0.8rem; color: white; font-size: 0.8rem; font-weight: 850; }
+.settings-contacts-sync-toggle > svg:last-child { margin-left: auto; }
+.settings-contacts-sync-options { display: grid; gap: 0.35rem; padding: 0.45rem; border: 1px solid rgb(18 59 66 / 0.1); border-radius: 0 0 0.8rem 0.8rem; background: #fffdf8; }
+.settings-contacts-sync-options > button { min-height: 40px; border-radius: 0.6rem; background: #eaf5f0; color: #146b66; font-size: 0.75rem; font-weight: 850; }
+.settings-contacts-sync-options > button:disabled { opacity: 0.5; }
+.settings-contacts-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+.settings-contacts-controls input, .settings-contacts-controls select { min-width: 0; min-height: 42px; border: 1px solid rgb(18 59 66 / 0.14); border-radius: 0.7rem; background: #fffdf8; padding: 0.5rem 0.65rem; color: #17363b; font-size: 16px; }
+.settings-contacts-controls input { flex: 1 1 150px; }
+.settings-contacts-controls label { display: flex; align-items: center; gap: 0.35rem; color: #526360; font-size: 0.7rem; font-weight: 850; }
+.settings-contacts-list { display: grid; gap: 0.45rem; margin-top: 0.8rem; }
+.settings-contact-row { display: flex; align-items: center; gap: 0.6rem; border: 1px solid rgb(18 59 66 / 0.09); border-radius: 0.8rem; background: #fffdf8; padding: 0.65rem; }
+.settings-contact-row > span { display: grid; min-width: 0; flex: 1; gap: 0.2rem; }
+.settings-contact-row strong { overflow-wrap: anywhere; color: #17363b; font-size: 0.8rem; }
+.settings-contact-row small, .settings-contacts-status { color: rgb(23 54 59 / 0.6); font-size: 0.7rem; }
+.settings-contact-row > button { flex: none; min-height: 38px; border-radius: 0.65rem; background: #e4f1ec; padding: 0.45rem 0.6rem; color: #146b66; font-size: 0.72rem; font-weight: 850; }
+.settings-contacts-status { margin-top: 0.8rem; }
 .settings-notification-row > button.settings-notification-switch { display: flex; min-width: 92px; align-items: center; justify-content: flex-end; gap: 0.55rem; border: 0; background: transparent; padding: 0.35rem; color: #526360; font-size: 0.7rem; font-weight: 900; }
 .native-notification-status > span { flex: none; border-radius: 999px; background: #e5eeeb; padding: 0.5rem 0.7rem; color: #526360; font-size: 0.65rem; font-weight: 850; }
 .settings-notification-row > button.settings-notification-switch.enabled { background: transparent; color: #176d64; }
